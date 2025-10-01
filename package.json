@@ -1,0 +1,47 @@
+{
+    "name": "taipei-accessible-backend",
+    "version": "1.0.0",
+    "description": "Backend server for Taipei Accessible project",
+    "main": "dist/server.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/server.js",
+        "dev": " dotenvx run -- nodemon",
+        "clean": "rimraf dist",
+        "prebuild": "npm run clean",
+        "postinstall": "npm run build"
+    },
+    "keywords": [
+        "express",
+        "typescript",
+        "backend",
+        "taipei",
+        "accessible"
+    ],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "@dotenvx/dotenvx": "^1.50.1",
+        "bcryptjs": "^3.0.2",
+        "cookie-parser": "^1.4.7",
+        "cors": "^2.8.5",
+        "dotenv": "^16.3.1",
+        "express": "^4.18.2",
+        "helmet": "^7.0.0",
+        "jsonwebtoken": "^9.0.2",
+        "mongoose": "^8.18.1",
+        "morgan": "^1.10.0"
+    },
+    "devDependencies": {
+        "@types/cookie-parser": "^1.4.9",
+        "@types/cors": "^2.8.13",
+        "@types/express": "^4.17.17",
+        "@types/jsonwebtoken": "^9.0.10",
+        "@types/morgan": "^1.9.4",
+        "@types/node": "^20.5.0",
+        "nodemon": "^3.0.1",
+        "rimraf": "^5.0.1",
+        "ts-node": "^10.9.1",
+        "typescript": "^5.1.6"
+    }
+}
