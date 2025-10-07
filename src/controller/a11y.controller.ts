@@ -34,7 +34,7 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
     //   }
     // });
 
-    const NearbyA11y = await A11y.find({
+    const nearbyMetroA11y = await A11y.find({
       location: {
         $near: {
           $geometry: {
@@ -45,9 +45,16 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
         },
       },
     });
-    console.log(NearbyA11y);
+    console.log(nearbyMetroA11y);
 
-    return sendResponse(res, true, "success", 200, "OK", NearbyA11y ?? void 0);
+    return sendResponse(
+      res,
+      true,
+      "success",
+      200,
+      "OK",
+      nearbyMetroA11y ?? void 0
+    );
   } catch (error) {
     return sendResponse(
       res,
