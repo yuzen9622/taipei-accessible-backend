@@ -137,6 +137,7 @@ async function refresh(
 
     const verify = verifyRefreshToken(refreshToken);
     if (!verify.success || !verify.decoded) {
+      res.cookie("refreshToken", "", { maxAge: 0 });
       throw new Error("Invalid refresh token");
     }
     console.log(verify);

@@ -6,6 +6,8 @@ import type { ApiResponse } from "./types/response";
 import { ResponseCode } from "./types/code";
 import middleware from "./middleware/middleware";
 import userRoute from "./routes/user.route";
+import airRoute from "./routes/air.route";
+import a11yRoute from "./routes/a11y.route";
 import cookieParser from "cookie-parser";
 const app: Express = express();
 
@@ -34,9 +36,11 @@ app.get("/health", (req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
   });
 });
-
+//Restful API 路由
 app.use("/api/user", middleware, userRoute);
-
+app.use("/api/air", airRoute);
+app.use("/api/a11y", a11yRoute);
+//404 handler
 app.use("*", (req: Request, res: Response<ApiResponse<null>>) => {
   res.status(404).json({
     ok: false,
