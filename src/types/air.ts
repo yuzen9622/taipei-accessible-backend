@@ -40,3 +40,14 @@ export interface STAApiResponse {
   "@odata.count": number;
   value: STADatastream[];
 }
+
+export interface AIResponse {
+  description: string;
+  quality:
+    | "GOOD"
+    | "MODERATE"
+    | "UNHEALTHY_SENSITIVE"
+    | "UNHEALTHY"
+    | "VERY_UNHEALTHY"
+    | "HAZARDOUS";
+}
