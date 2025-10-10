@@ -40,13 +40,20 @@ export function getRouteDirectionImproved(
     const stops = routeStopsByDirection[direction];
 
     const startIndex = stops.findIndex(
-      (s) => s.StopName.Zh_tw.replace(/\(.*?\)/g, "") === startStopName
+      (s) =>
+        s.StopName.Zh_tw.replace(/\(.*?\)/g, "") ===
+        startStopName.replace(/\(.*?\)/g, "")
     );
     const endIndex = stops.findIndex(
-      (s) => s.StopName.Zh_tw.replace(/\(.*?\)/g, "") === endStopName
+      (s) =>
+        s.StopName.Zh_tw.replace(/\(.*?\)/g, "") ===
+        endStopName.replace(/\(.*?\)/g, "")
     );
-
-    if (startIndex !== -1 && endIndex !== -1 && startIndex < endIndex) {
+    console.log(
+      endStopName.replace(/\(.*?\)/g, ""),
+      startStopName.replace(/\(.*?\)/g, "")
+    );
+    if (startIndex !== -1 && endIndex !== -1) {
       return direction; // 0 = 去程, 1 = 回程
     }
   }
