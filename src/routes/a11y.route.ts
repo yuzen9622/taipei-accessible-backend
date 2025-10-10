@@ -4,4 +4,5 @@ const route = Router();
 
 route.get("/all-places", getA11yData);
 route.get("/nearby-a11y", nearbyA11y);
+
 export default route;
