@@ -30,6 +30,29 @@ export const sendResponse = <T = unknown>(
     accessToken,
   });
 };
+
+function normalizeStopName(name?: string): string {
+  if (!name) return "";
+  return name
+    .normalize("NFKC") // 全半形統一
+    .replace(/[\(（][^）\)]*[\)）]/g, "") // 移除 () 與 （）中的內容
+    .replace(/站/g, "") // 可選：移除「站」字
+    .replace(/\s+/g, "") // 移除所有空白
+    .replace(/臺/g, "台") // 統一臺/台
+    .replace(/[－–—]/g, "-") // 統一破折號
+    .replace("副線", "副")
+    .toLowerCase()
+    .trim();
+}
+
+function equalStopName(a?: string, b?: string): boolean {
+  const na = normalizeStopName(a);
+  const nb = normalizeStopName(b);
+  if (!na || !nb) return false;
+  // 嚴格相等 + 含括（避免資料來源前後綴差異）
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
 export function getRouteDirectionImproved(
   routeStopsByDirection: { [direction: number]: BusRoute["Stops"] },
   startStopName: string,
@@ -38,21 +61,18 @@ export function getRouteDirectionImproved(
   for (const dirStr in routeStopsByDirection) {
     const direction = parseInt(dirStr) as 0 | 1;
     const stops = routeStopsByDirection[direction];
+    const normStart = normalizeStopName(startStopName);
+    const normEnd = normalizeStopName(endStopName);
 
-    const startIndex = stops.findIndex(
-      (s) =>
-        s.StopName.Zh_tw.replace(/\(.*?\)/g, "") ===
-        startStopName.replace(/\(.*?\)/g, "")
+    const startIndex = stops.findIndex((s) =>
+      equalStopName(s?.StopName?.Zh_tw, normStart)
     );
-    const endIndex = stops.findIndex(
-      (s) =>
-        s.StopName.Zh_tw.replace(/\(.*?\)/g, "") ===
-        endStopName.replace(/\(.*?\)/g, "")
+    const endIndex = stops.findIndex((s) =>
+      equalStopName(s?.StopName?.Zh_tw, normEnd)
     );
-    console.log(
-      endStopName.replace(/\(.*?\)/g, ""),
-      startStopName.replace(/\(.*?\)/g, "")
-    );
+
+    console.log(startIndex, endIndex, normStart, normEnd);
+
     if (startIndex !== -1 && endIndex !== -1) {
       return direction; // 0 = 去程, 1 = 回程
     }

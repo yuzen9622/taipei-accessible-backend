@@ -23,7 +23,7 @@ app.use(
 );
 
 // 日誌記錄
-app.use(morgan("combined"));
+app.use(morgan("common"));
 app.use(cookieParser());
 // Body parser 中介軟體
 app.use(express.json({ limit: "10mb" }));
