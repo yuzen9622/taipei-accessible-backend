@@ -5,10 +5,17 @@ export const busUrl = {
     "https://tdx.transportdata.tw/api/basic/v2/Bus/StopOfRoute/City",
   cityRealtimeByFrequencyUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/RealTimeByFrequency/City",
-  cityRealtimeNearStopUrl:
-    "https://tdx.transportdata.tw/api/basic/v2/Bus/RealTimeNearStop/City",
   cityEstimatedTimeOfArrivalUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/EstimatedTimeOfArrival/City",
+  interCityStopOfRouteUrl:
+    "https://tdx.transportdata.tw/api/basic/v2/Bus/StopOfRoute/InterCity/",
   interCityEstimatedTimeOfArrivalUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/EstimatedTimeOfArrival/Streaming/InterCity",
+  interCityRealTimeByFrequencyUrl:
+    "https://tdx.transportdata.tw/api/basic/v2/Bus/RealTimeByFrequency/Streaming/InterCity",
+};
+
+export const metroURL = {
+  metroLiveBoardUrl:
+    "https://tdx.transportdata.tw/api/basic/v2/Rail/Metro/LiveBoard/TRTC",
 };
