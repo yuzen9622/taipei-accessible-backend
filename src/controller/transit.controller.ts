@@ -39,11 +39,12 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
     ) {
       return sendResponse(res, false, "error", 400, "缺少必要參數");
     }
-    const url = `${busUrl.stopOfRouteUrl}/${city}/${route_name}?$format=JSON&$filter=RouteName/Zh_tw eq '${route_name}' or `;
+    const url = `${busUrl.stopOfRouteUrl}/${city}/${route_name}?$format=JSON&$filter=RouteName/Zh_tw eq '${route_name}'`;
 
     const busStopInfo = await tdxFetch(url);
 
     if (!busStopInfo.ok) {
+      console.log(await busStopInfo.json(), busStopInfo.status);
       return sendResponse(res, false, "error", 400, "TDX Too Many Requests");
     }
 
