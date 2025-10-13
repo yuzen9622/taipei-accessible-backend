@@ -2,6 +2,7 @@ import { ResponseCode } from "../types/code";
 import { Response } from "express";
 import type { ApiResponse } from "../types/response";
 import { BusRealtimeNearbyStop, BusRoute } from "../types/transit";
+import route from "../routes/user.route";
 
 export const sendResponse = <T = unknown>(
   res: Response<ApiResponse<T>>,
@@ -114,6 +115,14 @@ export function getBusFrontOfArrivalStop(
   return closestBus;
 }
 
+function formatRouteName(routeName: string): string {
+  return (
+    routeName
+      .replace(/[\(（][^）\)]*[\)）]/g, "") // 去掉括號內容
+      .match(/[A-Za-z0-9\u4e00-\u9fa5]+(?:延)?/)?.[0] || ""
+  );
+}
+
 /**
  * 自動偵測要查詢的公車 API 類型（市區 or 公路）
  * @param fullName 例如 "1619B經中港路不經竹科"、"綠1"、"307"
@@ -140,6 +149,6 @@ export function detectBusApiType(fullName: string): {
   } else {
     type = "City";
   }
-
-  return { type, routeId };
+  const formatRouteId = formatRouteName(routeId);
+  return { type, routeId: formatRouteId };
 }

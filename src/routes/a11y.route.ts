@@ -1,8 +1,13 @@
 import { Router } from "express";
-import { getA11yData, nearbyA11y } from "../controller/a11y.controller";
+import {
+  getA11yData,
+  nearbyA11y,
+  getBathroomData,
+} from "../controller/a11y.controller";
 const route = Router();
 
 route.get("/all-places", getA11yData);
+route.get("/all-bathrooms", getBathroomData);
 route.get("/nearby-a11y", nearbyA11y);
 
 export default route;

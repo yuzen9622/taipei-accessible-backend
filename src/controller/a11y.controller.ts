@@ -3,10 +3,26 @@ import { IA11y } from "../types";
 import A11y from "../model/a11y.model";
 import { sendResponse } from "../config/lib";
 import { ApiResponse } from "../types/response";
+import BathroomModel from "../model/bathroom.model";
 
 async function getA11yData(req: Request, res: Response<ApiResponse<IA11y[]>>) {
   const a11y = await A11y.find();
   return sendResponse(res, true, "success", 200, "OK", a11y);
+}
+
+async function getBathroomData(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const bathroom = await BathroomModel.find({ type: "無障礙廁所" });
+    return sendResponse(res, true, "success", 200, "OK", bathroom);
+  } catch (error) {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      500,
+      (error as string) || "Internal Server Error"
+    );
+  }
 }
 
 async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
@@ -45,16 +61,23 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
         },
       },
     });
-    console.log(nearbyMetroA11y);
+    const nearbyBathroom = await BathroomModel.find({
+      type: "無障礙廁所",
+      location: {
+        $near: {
+          $geometry: {
+            type: "Point",
+            coordinates: [Number(lng as string), Number(lat as string)],
+          },
+          $maxDistance: 150,
+        },
+      },
+    });
 
-    return sendResponse(
-      res,
-      true,
-      "success",
-      200,
-      "OK",
-      nearbyMetroA11y ?? void 0
-    );
+    return sendResponse(res, true, "success", 200, "OK", [
+      ...nearbyBathroom,
+      ...nearbyMetroA11y,
+    ]);
   } catch (error) {
     return sendResponse(
       res,
@@ -66,4 +89,4 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
   }
 }
 
-export { getA11yData, nearbyA11y };
+export { getA11yData, nearbyA11y, getBathroomData };

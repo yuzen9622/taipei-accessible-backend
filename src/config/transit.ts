@@ -15,7 +15,6 @@ export const busUrl = {
     "https://tdx.transportdata.tw/api/basic/v2/Bus/RealTimeByFrequency/Streaming/InterCity",
 };
 
-export const metroURL = {
-  metroLiveBoardUrl:
-    "https://tdx.transportdata.tw/api/basic/v2/Rail/Metro/LiveBoard/TRTC",
+export const trainUrl = {
+  liveBoardUrl: "https://tdx.transportdata.tw/api/basic/v2/Rail/TRA/LiveBoard",
 };

@@ -16,3 +16,21 @@ export interface IA11y {
   緯度: number;
   location: { type: "Point"; coordinates: [number, number] };
 }
+
+export interface IBathroom {
+  _id: string;
+  contury: string;
+  areacode: string;
+  village: string;
+  number: string;
+  name: string;
+  address: string;
+  administration: string;
+  latitude: number;
+  longitude: number;
+  grade: string;
+  type2: string;
+  type: string;
+  exec: string;
+  diaper: string;
+}

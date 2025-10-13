@@ -49,17 +49,20 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
       console.error("TDX fetch error:", busStopInfo.status, busInfoJson);
       return sendResponse(res, false, "error", 400, "TDX Error");
     }
-    console.log(busInfoJson);
+
     const direction = getRouteDirectionImproved(
       { 0: busInfoJson[0].Stops, 1: busInfoJson[1].Stops },
       departure_stop as string,
       arrival_stop as string
     );
     console.log("direction", direction);
+    if (direction === -1) {
+      return sendResponse(res, false, "error", 400, "無法辨識此路線方向");
+    }
     const estimatedTimeArrivalUrl =
       formatRouteName.type === "City"
-        ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${formatRouteName.routeId}?$format=JSON&$filter=Direction eq ${direction} and StopName/Zh_tw eq '${departure_stop}' and RouteName/Zh_tw eq '${formatRouteName.routeId}'`
-        : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${formatRouteName.routeId}?$format=JSON&$filter=Direction eq ${direction} and StopName/Zh_tw eq '${departure_stop}' and RouteName/Zh_tw eq '${formatRouteName.routeId}'`;
+        ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${formatRouteName.routeId}?$format=JSON&$filter=Direction eq ${direction} and contains(StopName/Zh_tw,'${departure_stop}') and RouteName/Zh_tw eq '${formatRouteName.routeId}'`
+        : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${formatRouteName.routeId}?$format=JSON&$filter=Direction eq ${direction} and contains(StopName/Zh_tw,'${departure_stop}') and contains(SubRouteName/Zh_tw,'${formatRouteName.routeId}')`;
     const realtimeBusInfo = await tdxFetch(estimatedTimeArrivalUrl);
 
     const realtimeClosestBusInfoJson = (await realtimeBusInfo.json()) as any;
@@ -72,7 +75,7 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
         realtimeClosestBusInfoJson.message
       );
     }
-
+    console.log(realtimeClosestBusInfoJson);
     return sendResponse(
       res,
       true,
@@ -85,8 +88,6 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
     return sendResponse(res, false, "error", 500, error.message);
   }
 }
-
-async function getMetroData(req: Request, res: Response<ApiResponse<any>>) {}
 
 async function getRealtimeBusPosition(
   req: Request,
@@ -113,7 +114,7 @@ async function getRealtimeBusPosition(
 }
 
 async function getTrainData(req: Request, res: Response<ApiResponse<null>>) {
-  const { arrival_stop, departure_stop, routeName } = req.query;
+  const { arrival_stop, departure_stop, train_no } = req.query;
 }
 async function getHighSpeedTrainData(
   req: Request,
