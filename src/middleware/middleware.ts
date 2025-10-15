@@ -5,7 +5,7 @@ import { verifyAccessToken } from "../config/jwt";
 const middleware = (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.split(" ")[1];
-  const validRoute = ["/login", "/token", "/refresh"];
+  const validRoute = ["/login", "/token", "/refresh", "/logout"];
 
   const verify = verifyAccessToken(token ?? "");
 
@@ -15,6 +15,7 @@ const middleware = (req: Request, res: Response, next: NextFunction) => {
   }
 
   if (verify.expired) {
+    console.log("Token expired", verify, token);
     return sendResponse(res, false, "error", 401, ResponseMessage.UNAUTHORIZED);
   }
 

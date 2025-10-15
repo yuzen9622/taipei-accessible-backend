@@ -3,13 +3,14 @@ import { ApiResponse } from "../types/response";
 import { ResponseCode, ResponseMessage } from "../types/code";
 import { sendResponse } from "../config/lib";
 import User from "../model/user.model";
-import { IUser } from "../types";
+import { IConfig, IUser } from "../types";
 import {
   createAccessToken,
   createRefreshToken,
   verifyAccessToken,
   verifyRefreshToken,
 } from "../config/jwt";
+import Config from "../model/config.model";
 
 async function login(
   req: Request,
@@ -27,21 +28,23 @@ async function login(
       );
     }
     let user = await User.findOne({ client_id });
+    let config = await Config.findOne({ user_id: user?._id });
     if (!user) {
       user = new User({ name, email, avatar, client_id });
-      await user.save();
+      config = new Config({ user_id: user._id });
+      await Promise.all([config.save(), user.save()]);
     }
 
     const accessToken = createAccessToken(user);
     const refreshToken = createRefreshToken(user);
-    console.log(refreshToken);
+
     return sendResponse(
       res,
       true,
       "success",
       ResponseCode.OK,
       ResponseMessage.OK,
-      { user },
+      { user, config },
       accessToken,
       refreshToken
     );
@@ -68,6 +71,7 @@ async function info(req: Request, res: Response<ApiResponse<{ user: IUser }>>) {
       const user = await User.findOne({
         client_id: verify.decoded.user.client_id,
       });
+      const config = await Config.findOne({ user_id: user?._id });
       console.log(verify.decoded, verify.success);
       return sendResponse(
         res,
@@ -75,10 +79,98 @@ async function info(req: Request, res: Response<ApiResponse<{ user: IUser }>>) {
         "success",
         ResponseCode.OK,
         ResponseMessage.OK,
-        { user: user! }
+        { user: user!, config }
       );
     }
     throw new Error("Invalid token");
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ResponseMessage.INTERNAL_ERROR
+    );
+  }
+}
+
+async function updateConfig(req: Request, res: Response<ApiResponse<IConfig>>) {
+  try {
+    const { user_id, ...rest } = req.body;
+    if (!user_id) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.INVALID_INPUT,
+        ResponseMessage.INVALID_INPUT
+      );
+    }
+    const updateFields: Record<string, any> = {};
+    for (const [key, value] of Object.entries(rest)) {
+      if (value !== undefined) updateFields[key] = value;
+    }
+
+    const config = await Config.findOneAndUpdate(
+      { user_id },
+      { $set: updateFields },
+      { new: true }
+    );
+
+    if (!config) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.INVALID_INPUT,
+        ResponseMessage.INVALID_INPUT
+      );
+    }
+    await config.save();
+
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      ResponseMessage.OK,
+      config
+    );
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ResponseMessage.INTERNAL_ERROR
+    );
+  }
+}
+
+async function config(req: Request, res: Response) {
+  try {
+    const { user_id } = req.body;
+    if (!user_id) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.INVALID_INPUT,
+        ResponseMessage.INVALID_INPUT
+      );
+    }
+    const userConfig = await Config.findOne({ user_id });
+
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      ResponseMessage.OK,
+      userConfig
+    );
   } catch (error) {
     console.error(error);
     return sendResponse(
@@ -164,4 +256,13 @@ async function refresh(
     );
   }
 }
-export { login, token, refresh, info };
+
+async function logout(req: Request, res: Response) {
+  try {
+    res.cookie("refreshToken", "", { maxAge: 0 });
+    return sendResponse(res, true, "success", 200, "Logout successful");
+  } catch (error) {
+    return sendResponse(res, false, "error", 500, "Logout failed");
+  }
+}
+export { login, token, refresh, info, config, updateConfig, logout };

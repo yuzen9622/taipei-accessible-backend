@@ -8,6 +8,15 @@ export interface IUser {
   updatedAt: string;
 }
 
+export interface IConfig {
+  language: string;
+  darkMode: "light" | "dark" | "system";
+  themeColor: string;
+  fontSize: string;
+  notifications: boolean;
+  user_id: Schema.Types.ObjectId;
+}
+
 export interface IA11y {
   _id: string;
   項次: string;

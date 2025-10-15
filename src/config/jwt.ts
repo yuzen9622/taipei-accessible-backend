@@ -6,7 +6,7 @@ import jwt, {
 import { IUser } from "../types/index";
 const createAccessToken = (user: IUser): string => {
   return jwt.sign({ user }, process.env.JWT_ACCESS_SECRET ?? "", {
-    expiresIn: "5s",
+    expiresIn: "60m",
   });
 };
 
