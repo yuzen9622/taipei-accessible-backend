@@ -43,3 +43,16 @@ export interface IBathroom {
   exec: string;
   diaper: string;
 }
+
+export interface RankRequest {
+  start: google.maps.LatLngLiteral;
+  end: google.maps.LatLngLiteral;
+  instructions: string;
+  duration: number;
+  a11y: [];
+}
+
+export interface AIRankResponse {
+  route_description: string;
+  route_total_score: number;
+}

@@ -4,6 +4,9 @@ import A11y from "../model/a11y.model";
 import { sendResponse } from "../config/lib";
 import { ApiResponse } from "../types/response";
 import BathroomModel from "../model/bathroom.model";
+import { config, contents, googleGenAi, model } from "../config/ai";
+import route from "../routes/user.route";
+import { ResponseMessage } from "../types/code";
 
 async function getA11yData(req: Request, res: Response<ApiResponse<IA11y[]>>) {
   const a11y = await A11y.find();
@@ -25,30 +28,55 @@ async function getBathroomData(req: Request, res: Response<ApiResponse<any>>) {
   }
 }
 
+async function a11yRouteRank(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const routes = req.body;
+    console.log(routes);
+    const aiResponse = await googleGenAi.models.generateContent({
+      model,
+
+      contents: [
+        ...contents,
+
+        {
+          role: "user",
+          parts: [
+            {
+              text: JSON.stringify({ routes_data: routes }),
+            },
+          ],
+        },
+      ],
+      config,
+    });
+
+    return sendResponse(
+      res,
+      true,
+      "success",
+      200,
+      "OK",
+      JSON.parse(
+        aiResponse?.candidates?.[0].content?.parts?.[0].text ??
+          '{"route_description":"無法評估此路段","route_total_score":0}'
+      )
+    );
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      500,
+      ResponseMessage.INTERNAL_ERROR,
+      JSON.parse('{"route_description":"無法評估此路段","route_total_score":0}')
+    );
+  }
+}
+
 async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
   try {
     const { lat, lng } = req.query;
-    // const client = new Client({});
-    // const response = await client.directions({
-    //   params: {
-    //     origin: origin as string,
-    //     destination: destination as string,
-    //     mode: TravelMode.transit,
-    //     key: process.env.GOOGLE_MAPS_API_KEY!,
-    //   },
-    // });
-    // let prevStep = response.data.routes[0].legs[0].steps[0];
-    // const walkingSteps = response.data.routes[0].legs[0].steps.map((step) => {
-    //   if (
-    //     step.travel_mode === ("WALKING" as string) &&
-    //     prevStep.travel_mode === ("TRANSIT" as string)
-    //   ) {
-    //     prevStep = step;
-    //     return step.start_location;
-    //   } else {
-    //     return step.end_location;
-    //   }
-    // });
 
     const nearbyMetroA11y = await A11y.find({
       location: {
@@ -74,10 +102,10 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
       },
     });
 
-    return sendResponse(res, true, "success", 200, "OK", [
-      ...nearbyBathroom,
-      ...nearbyMetroA11y,
-    ]);
+    return sendResponse(res, true, "success", 200, "OK", {
+      nearbyBathroom,
+      nearbyMetroA11y,
+    });
   } catch (error) {
     return sendResponse(
       res,
@@ -89,4 +117,4 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
   }
 }
 
-export { getA11yData, nearbyA11y, getBathroomData };
+export { getA11yData, nearbyA11y, getBathroomData, a11yRouteRank };
