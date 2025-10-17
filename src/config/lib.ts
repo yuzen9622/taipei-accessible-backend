@@ -18,6 +18,7 @@ export const sendResponse = <T = unknown>(
       httpOnly: true,
       secure: process.env.SECURE_COOKIE === "true",
       maxAge: 24 * 60 * 60 * 1000 * 7,
+      sameSite: "none",
     });
   }
 
