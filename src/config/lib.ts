@@ -2,7 +2,6 @@ import { ResponseCode } from "../types/code";
 import { Response } from "express";
 import type { ApiResponse } from "../types/response";
 import { BusRealtimeNearbyStop, BusRoute } from "../types/transit";
-import route from "../routes/user.route";
 
 export const sendResponse = <T = unknown>(
   res: Response<ApiResponse<T>>,
@@ -17,7 +16,7 @@ export const sendResponse = <T = unknown>(
   if (refreshToken) {
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      secure: false,
+      secure: process.env.NODE_ENV === "production",
       maxAge: 24 * 60 * 60 * 1000 * 7,
     });
   }
