@@ -16,7 +16,7 @@ export const sendResponse = <T = unknown>(
   if (refreshToken) {
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: process.env.SECURE_COOKIE === "true",
       maxAge: 24 * 60 * 60 * 1000 * 7,
     });
   }
