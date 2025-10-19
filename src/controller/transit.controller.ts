@@ -20,6 +20,7 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
       route_name,
       arrival_lat,
       arrival_lng,
+      language
     } = req.body;
 
     if (
@@ -40,8 +41,8 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
     console.log(formatRouteName);
     const url =
       formatRouteName.type === "City"
-        ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${formatRouteName.routeId}'`
-        : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=SubRouteName/Zh_tw eq '${formatRouteName.routeId}'`;
+        ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=SubRouteName/${language} eq '${formatRouteName.routeId}'`
+        : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=SubRouteName/${language} eq '${formatRouteName.routeId}'`;
     const busStopInfo = await tdxFetch(url);
 
     const busInfoJson = (await busStopInfo.json()) as BusRoute[];
@@ -53,16 +54,18 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
     const direction = getRouteDirectionImproved(
       { 0: busInfoJson[0].Stops, 1: busInfoJson[1].Stops },
       departure_stop as string,
-      arrival_stop as string
+      arrival_stop as string,
+      language
     );
+    
     console.log("direction", direction);
     if (direction === -1) {
       return sendResponse(res, false, "error", 400, "無法辨識此路線方向");
     }
     const estimatedTimeArrivalUrl =
       formatRouteName.type === "City"
-        ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${formatRouteName.routeId}?$format=JSON&$filter=Direction eq ${direction} and contains(StopName/Zh_tw,'${departure_stop}') and RouteName/Zh_tw eq '${formatRouteName.routeId}'`
-        : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${formatRouteName.routeId}?$format=JSON&$filter=Direction eq ${direction} and contains(StopName/Zh_tw,'${departure_stop}') and contains(SubRouteName/Zh_tw,'${formatRouteName.routeId}')`;
+        ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${formatRouteName.routeId}?$format=JSON&$filter=Direction eq ${direction} and contains(StopName/${language},'${departure_stop}') and RouteName/${language} eq '${formatRouteName.routeId}'`
+        : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${formatRouteName.routeId}?$format=JSON&$filter=Direction eq ${direction} and contains(StopName/${language},'${departure_stop}') and contains(SubRouteName/${language},'${formatRouteName.routeId}')`;
     const realtimeBusInfo = await tdxFetch(estimatedTimeArrivalUrl);
 
     const realtimeClosestBusInfoJson = (await realtimeBusInfo.json()) as any;

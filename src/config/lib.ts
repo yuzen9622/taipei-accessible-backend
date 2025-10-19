@@ -40,8 +40,10 @@ function normalizeStopName(name?: string): string {
     .replace(/站/g, "") // 可選：移除「站」字
     .replace(/\s+/g, "") // 移除所有空白
     .replace(/臺/g, "台") // 統一臺/台
-    .replace(/[－–—]/g, "-") // 統一破折號
+    .replace(/[－–—-]/g, "") // 統一破折號
     .replace("副線", "副")
+    .replace("."  , "")
+    .replace("Rd","")
     .toLowerCase()
     .trim();
 }
@@ -49,7 +51,9 @@ function normalizeStopName(name?: string): string {
 function equalStopName(a?: string, b?: string): boolean {
   const na = normalizeStopName(a);
   const nb = normalizeStopName(b);
+  console.log("comparing:", na, nb);
   if (!na || !nb) return false;
+  
   // 嚴格相等 + 含括（避免資料來源前後綴差異）
   return na === nb || na.includes(nb) || nb.includes(na);
 }
@@ -57,7 +61,8 @@ function equalStopName(a?: string, b?: string): boolean {
 export function getRouteDirectionImproved(
   routeStopsByDirection: { [direction: number]: BusRoute["Stops"] },
   startStopName: string,
-  endStopName: string
+  endStopName: string,
+  language: "Zh_tw" | "En"
 ): number {
   for (const dirStr in routeStopsByDirection) {
     const direction = parseInt(dirStr) as 0 | 1;
@@ -66,10 +71,10 @@ export function getRouteDirectionImproved(
     const normEnd = normalizeStopName(endStopName);
 
     const startIndex = stops.findIndex((s) =>
-      equalStopName(s?.StopName?.Zh_tw, normStart)
+      equalStopName(s?.StopName?.[language], normStart)
     );
     const endIndex = stops.findIndex((s) =>
-      equalStopName(s?.StopName?.Zh_tw, normEnd)
+      equalStopName(s?.StopName?.[language], normEnd)
     );
 
     console.log(startIndex, endIndex, normStart, normEnd);
@@ -149,6 +154,6 @@ export function detectBusApiType(fullName: string): {
   } else {
     type = "City";
   }
-  const formatRouteId = formatRouteName(routeId);
+  const formatRouteId = formatRouteName(fullName);
   return { type, routeId: formatRouteId };
 }

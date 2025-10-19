@@ -55,7 +55,7 @@ export const rankContents = [
 - duration: 預計時間（秒）
 - a11y: 無障礙設施列表（type: elevator | ramp | toilet | obstacle）
 - line: 交通工具(可選)
-
+- language: 指令語言(可選)(zh-TW / en)
 固定評分規則（每個 Step 都要先算分，最後取平均）：
 1) 安全性 Safety（權重 0.4，0~5 分）
    - 以 obstacle 數量計分：
@@ -95,7 +95,9 @@ route_description 生成規則（精簡客觀）：
 - 摘要無障礙特徵與風險，例如是否常見 elevator/ramp、是否多 obstacle、是否出現樓梯、整體耗時感受。
 - 不新增不存在的設施或資訊，不進行臆測。
 - 避免情緒化形容詞，保持專業、客觀。
-
+- 簡短扼要，約 20~40 字。
+- 依照輸入指令語言生成（zh-TW / en）。
+        
 四捨五入規則：
 - roundTo1(x) = 四捨五入到小數點後 1 位。
 
