@@ -4,8 +4,15 @@ import A11y from "../model/a11y.model";
 import { sendResponse } from "../config/lib";
 import { ApiResponse } from "../types/response";
 import BathroomModel from "../model/bathroom.model";
-import { config, contents, googleGenAi, model } from "../config/ai";
-import route from "../routes/user.route";
+import {
+  rankConfig,
+  rankContents,
+  googleGenAi,
+  model,
+  routeConfig,
+  routeContents,
+} from "../config/ai";
+
 import { ResponseMessage } from "../types/code";
 
 async function getA11yData(req: Request, res: Response<ApiResponse<IA11y[]>>) {
@@ -36,7 +43,7 @@ async function a11yRouteRank(req: Request, res: Response<ApiResponse<any>>) {
       model,
 
       contents: [
-        ...contents,
+        ...rankContents,
 
         {
           role: "user",
@@ -47,9 +54,51 @@ async function a11yRouteRank(req: Request, res: Response<ApiResponse<any>>) {
           ],
         },
       ],
-      config,
+      config: rankConfig,
     });
 
+    return sendResponse(
+      res,
+      true,
+      "success",
+      200,
+      "OK",
+      JSON.parse(
+        aiResponse?.candidates?.[0].content?.parts?.[0].text ??
+          '{"route_description":"無法評估此路段","route_total_score":0}'
+      )
+    );
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      500,
+      ResponseMessage.INTERNAL_ERROR,
+      JSON.parse('{"route_description":"無法評估此路段","route_total_score":0}')
+    );
+  }
+}
+
+async function a11yRouteSelect(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const request = req.body;
+    const aiResponse = await googleGenAi.models.generateContent({
+      model,
+      contents: [
+        ...routeContents,
+        {
+          role: "user",
+          parts: [
+            {
+              text: JSON.stringify({ routes: request.routes }),
+            },
+          ],
+        },
+      ],
+      config: routeConfig,
+    });
     return sendResponse(
       res,
       true,
@@ -117,4 +166,10 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
   }
 }
 
-export { getA11yData, nearbyA11y, getBathroomData, a11yRouteRank };
+export {
+  getA11yData,
+  nearbyA11y,
+  getBathroomData,
+  a11yRouteRank,
+  a11yRouteSelect,
+};

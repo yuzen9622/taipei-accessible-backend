@@ -3,7 +3,7 @@ import { sendResponse } from "../config/lib";
 import { AIResponse, STAApiResponse } from "../types/air";
 import { ApiResponse } from "../types/response";
 import { Request, Response } from "express";
-import { model, contents, config } from "../config/ai";
+import { model, rankConfig, rankContents } from "../config/ai";
 export async function getAirQualityInfo(
   req: Request,
   res: Response<ApiResponse<AIResponse>>
@@ -44,7 +44,7 @@ export async function getAirQualityInfo(
     const aiResponse = await googleGenAi.models.generateContent({
       model,
       contents: [
-        ...contents,
+        ...rankContents,
         {
           role: "user",
           parts: [
@@ -56,7 +56,7 @@ export async function getAirQualityInfo(
           ],
         },
       ],
-      config,
+      config: rankConfig,
     });
 
     sendResponse(
