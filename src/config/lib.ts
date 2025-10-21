@@ -42,8 +42,8 @@ function normalizeStopName(name?: string): string {
     .replace(/臺/g, "台") // 統一臺/台
     .replace(/[－–—-]/g, "") // 統一破折號
     .replace("副線", "副")
-    .replace("."  , "")
-    .replace("Rd","")
+    .replace(".", "")
+    .replace("Rd", "")
     .toLowerCase()
     .trim();
 }
@@ -53,7 +53,7 @@ function equalStopName(a?: string, b?: string): boolean {
   const nb = normalizeStopName(b);
   console.log("comparing:", na, nb);
   if (!na || !nb) return false;
-  
+
   // 嚴格相等 + 含括（避免資料來源前後綴差異）
   return na === nb || na.includes(nb) || nb.includes(na);
 }
@@ -120,12 +120,53 @@ export function getBusFrontOfArrivalStop(
   return closestBus;
 }
 
+/**
+ * 格式化路線名稱，只保留英文字母、數字和特定中文字
+ * @param routeName 原始路線名稱 (例如: "307經中港路", "紅50延", "藍1區間車")
+ * @returns 格式化後的路線名稱 (例如: "307", "紅50延", "藍1區間")
+ */
 function formatRouteName(routeName: string): string {
-  return (
-    routeName
-      .replace(/[\(（][^）\)]*[\)）]/g, "") // 去掉括號內容
-      .match(/[A-Za-z0-9\u4e00-\u9fa5]+(?:延)?/)?.[0] || ""
-  );
+  // 要保留的中文字 (顏色和類型)
+  const keepChars = [
+    // 顏色
+    "紅",
+    "藍",
+    "綠",
+    "黃",
+    "橘",
+    "橙",
+    "棕",
+    "粉",
+    "灰",
+    "白",
+
+    "延",
+    "副",
+    "區",
+    "間",
+    "幹",
+    "快",
+    "直",
+    "環",
+  ];
+
+  // 先去掉括號內容
+  const withoutBrackets = routeName.replace(/[\(（][^）\)]*[\)）]/g, "");
+
+  // 逐字過濾，只保留英文、數字和特定中文字
+  return withoutBrackets
+    .split("")
+    .filter((char) => {
+      // 保留英文字母和數字
+      if (/[A-Za-z0-9]/.test(char)) return true;
+
+      // 保留指定的中文字符
+      if (keepChars.includes(char)) return true;
+
+      // 過濾其他中文字符
+      return false;
+    })
+    .join("");
 }
 
 /**

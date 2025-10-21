@@ -56,3 +56,18 @@ export interface AIRankResponse {
   route_description: string;
   route_total_score: number;
 }
+
+export interface AgentResponse {
+  action:
+    | "findNearbyA11y"
+    | "transportInfo"
+    | "locationAccessibility"
+    | "googleSearch";
+  type?: string;
+  range?: number;
+  location?: { lat: number; lng: number };
+  routeId?: string;
+  origin?: object | string;
+  destination?: object | string;
+  query?: string;
+}
