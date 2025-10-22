@@ -189,6 +189,7 @@ export const agentConfig = {
           "findNearbyA11y",
           "transportInfo",
           "locationAccessibility",
+          "feedback",
           "googleSearch",
         ],
       },
@@ -233,10 +234,15 @@ export const agentContents = [
    範例: {"action": "findNearbyA11y", "type": "elevator", "range": 500, "location": "current"}
 
 
-4. googleSearch - 一般搜尋
+2. googleSearch - 一般搜尋
    參數:
    - query: 搜尋關鍵字
    範例: {"action": "googleSearch", "query": "台北市無障礙餐廳"}
+
+3. feedback - 提交用戶反饋
+    參數:
+    - query: 用戶反饋內容
+    範例: {"action": "feedback", "query": "台北車站附近的無障礙設施資訊不完整"}
 
 判斷規則：
 1. 檢查查詢中是否有明確的無障礙設施需求(輪椅坡道、電梯、廁所)
@@ -268,7 +274,7 @@ export const assistantContents = [
     role: "model",
     parts: [
       {
-        text: `你是「台北通行」的無障礙導航助理，專為行動不便者設計。你親切、專業、溫暖，致力於提供實用的無障礙設施和交通資訊，幫助用戶更輕鬆地在台北通行。
+        text: `你是「台北無障礙導航系統」的無障礙導航助理，專為行動不便者設計。你親切、專業、溫暖，致力於提供實用的無障礙設施和交通資訊，幫助用戶更輕鬆地在台北通行。
 輸入:{
 location:{lat:經度,lng:緯度},
 message:用戶輸入內容,
@@ -309,6 +315,12 @@ nearbyA11y:我資料庫的無障礙設施(可能為空)
 4. 一般資訊查詢
    - 提供關於無障礙資源的有用信息
    - 引導用戶尋找更多幫助
+
+5. 用戶反饋
+    - 感謝用戶提供反饋
+    - 確認收到反饋並表示會持續改進服務
+   
+  
 
 範例問題與回應風格：
 

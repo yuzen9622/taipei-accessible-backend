@@ -131,7 +131,7 @@ async function a11yRouteSelect(req: Request, res: Response<ApiResponse<any>>) {
 
 async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
   try {
-    const { lat, lng, message } = req.body;
+    const { lat, lng, message, history } = req.body;
 
     // Fetch nearby a11y data and process with AI
     const AiAgent = await googleGenAi.models.generateContent({
@@ -196,15 +196,12 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
 
         contents: [
           ...assistantContents,
+          ...history,
           {
             role: "user",
             parts: [
               {
-                text: JSON.stringify({
-                  location: [Number(location?.lng), Number(location?.lat)],
-                  nearbyA11y: { nearbyBathroom, nearbyMetroA11y },
-                  message,
-                }),
+                text: JSON.stringify({ location: { lat, lng }, message }),
               },
             ],
           },
@@ -222,14 +219,12 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
 
         contents: [
           ...assistantContents,
+          ...history,
           {
             role: "user",
             parts: [
               {
-                text: JSON.stringify({
-                  location: { lat, lng },
-                  message: agentType.query || message,
-                }),
+                text: JSON.stringify({ location: { lat, lng }, message }),
               },
             ],
           },
@@ -240,6 +235,27 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
         message: AiChat?.candidates?.[0].content?.parts?.[0].text ?? "",
       });
     } else if (agentType.action == "transportInfo") {
+      const AiChat = await googleGenAi.models.generateContent({
+        model,
+
+        contents: [
+          ...assistantContents,
+          ...history,
+          {
+            role: "user",
+            parts: [
+              {
+                text: JSON.stringify({ location: { lat, lng }, message }),
+              },
+            ],
+          },
+        ],
+        config: assistantConfig,
+      });
+      return sendResponse(res, true, "success", 200, "OK", {
+        message: AiChat?.candidates?.[0].content?.parts?.[0].text ?? "",
+      });
+    } else if (agentType.action === "feedback") {
       const AiChat = await googleGenAi.models.generateContent({
         model,
 

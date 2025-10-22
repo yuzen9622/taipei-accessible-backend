@@ -62,7 +62,8 @@ export interface AgentResponse {
     | "findNearbyA11y"
     | "transportInfo"
     | "locationAccessibility"
-    | "googleSearch";
+    | "googleSearch"
+    | "feedback";
   type?: string;
   range?: number;
   location?: { lat: number; lng: number };
