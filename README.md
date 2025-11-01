@@ -33,9 +33,18 @@ copy .env.example .env
 修改 `.env` 檔案中的設定：
 
 ```env
-PORT=3000
+PORT=5000
 NODE_ENV=development
 CORS_ORIGIN=http://localhost:3000
+GOOGLE_MAPS_API_KEY=Your google map api key
+GEMINI_API_KEY=Your gemini api key
+# jWT Secret
+JWT_ACCESS_SECRET=Your access secret
+JWT_REFRESH_SECRET=Your refresh secret
+# Mongodb Database
+DATABASE_URL=Your mongoDB uri
+TDX_CLIENT_ID=Your TDX client id
+TDX_CLIENT_SECRET=Your TDX client secret
 ```
 
 ### 開發模式
@@ -62,7 +71,6 @@ npm start
 
 - `GET /` - 歡迎頁面
 - `GET /health` - 健康檢查
-- `GET /api/test` - API 測試端點
 
 ### 健康檢查
 
@@ -105,22 +113,6 @@ taipei-accessible-backend/
 | `npm start`     | 生產模式啟動                  |
 | `npm run clean` | 清理 dist 資料夾              |
 
-## 環境變數
-
-| 變數名稱      | 預設值      | 說明            |
-| ------------- | ----------- | --------------- |
-| `PORT`        | 3000        | 伺服器埠號      |
-| `NODE_ENV`    | development | 執行環境        |
-| `CORS_ORIGIN` | \*          | CORS 允許的來源 |
-
-## 貢獻
-
-1. Fork 此專案
-2. 建立功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交變更 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 開啟 Pull Request
-
 ## 授權
 
-此專案採用 ISC 授權條款。
+此專案採用 MIT 授權條款。
