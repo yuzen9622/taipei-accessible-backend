@@ -131,7 +131,7 @@ async function a11yRouteSelect(req: Request, res: Response<ApiResponse<any>>) {
 
 async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
   try {
-    const { lat, lng, message, history } = req.body;
+    const { lat, lng, message, history, lang } = req.body;
 
     // Fetch nearby a11y data and process with AI
     const AiAgent = await googleGenAi.models.generateContent({
@@ -142,7 +142,7 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
           role: "user",
           parts: [
             {
-              text: JSON.stringify({ location: { lat, lng }, message }),
+              text: JSON.stringify({ location: { lat, lng }, message, lang }),
             },
           ],
         },
@@ -201,7 +201,7 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
             role: "user",
             parts: [
               {
-                text: JSON.stringify({ location: { lat, lng }, message }),
+                text: JSON.stringify({ location: { lat, lng }, message, lang }),
               },
             ],
           },
@@ -224,7 +224,7 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
             role: "user",
             parts: [
               {
-                text: JSON.stringify({ location: { lat, lng }, message }),
+                text: JSON.stringify({ location: { lat, lng }, message, lang }),
               },
             ],
           },
@@ -245,7 +245,7 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
             role: "user",
             parts: [
               {
-                text: JSON.stringify({ location: { lat, lng }, message }),
+                text: JSON.stringify({ location: { lat, lng }, message, lang }),
               },
             ],
           },
@@ -265,7 +265,7 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
             role: "user",
             parts: [
               {
-                text: JSON.stringify({ location: { lat, lng }, message }),
+                text: JSON.stringify({ location: { lat, lng }, message, lang }),
               },
             ],
           },

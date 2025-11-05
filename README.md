@@ -1,18 +1,18 @@
 # Taipei Accessible Backend
 
-這是台北無障礙後端 API 服務，使用 TypeScript 和 Express.js 建構。
+台北無障礙導航系統後端 API 服務，使用 TypeScript 和 Express.js 建構。
 
 ## 功能特色
 
-- ✅ TypeScript 支援
-- ✅ Express.js 框架
-- ✅ CORS 跨域支援
-- ✅ Helmet 安全性中介軟體
-- ✅ Morgan 日誌記錄
-- ✅ 環境變數管理
-- ✅ 開發熱重載 (nodemon)
-- ✅ 健康檢查端點
-- ✅ 錯誤處理機制
+- TypeScript 支援
+- Express.js 框架
+- CORS 跨域支援
+- Helmet 安全性中介軟體
+- Morgan 日誌記錄
+- 環境變數管理
+- 開發熱重載 (nodemon)
+- 健康檢查端點
+- 錯誤處理機制
 
 ## 快速開始
 
