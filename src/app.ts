@@ -15,9 +15,12 @@ const app: Express = express();
 app.use(helmet());
 
 // CORS 設定
+const corsOrigins = process.env.CORS_ORIGINS?.split(",")
+  .map((o) => o.trim())
+  .filter(Boolean) ?? ["*"];
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "*",
+    origin: corsOrigins,
     credentials: true,
   })
 );
