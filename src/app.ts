@@ -17,7 +17,7 @@ app.use(helmet());
 // CORS 設定
 const corsOrigins = process.env.CORS_ORIGINS?.split(",")
   .map((o) => o.trim())
-  .filter(Boolean) ?? ["*"];
+  .filter(Boolean) ?? ["http://localhost:3000"];
 app.use(
   cors({
     origin: corsOrigins,

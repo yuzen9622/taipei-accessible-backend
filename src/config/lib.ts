@@ -2,7 +2,7 @@ import { ResponseCode } from "../types/code";
 import { Response } from "express";
 import type { ApiResponse } from "../types/response";
 import { BusRealtimeNearbyStop, BusRoute } from "../types/transit";
-
+import axios from "axios";
 export const sendResponse = <T = unknown>(
   res: Response<ApiResponse<T>>,
   ok: boolean,
@@ -197,4 +197,28 @@ export function detectBusApiType(fullName: string): {
   }
   const formatRouteId = formatRouteName(fullName);
   return { type, routeId: formatRouteId };
+}
+// 放在您的 controller 或 utility 檔案中
+export async function getCoordinates(query: string) {
+  if (!process.env.GOOGLE_MAPS_API_KEY) return null;
+
+  // 使用 Text Search API 找地點座標 (比 Geocoding API 對模糊搜尋更友善)
+  const url = "https://places.googleapis.com/v1/places:searchText";
+  const headers = {
+    "Content-Type": "application/json",
+    "X-Goog-Api-Key": process.env.GOOGLE_MAPS_API_KEY,
+    "X-Goog-FieldMask": "places.location", // 我們只需要座標
+  };
+  const body = { textQuery: query, maxResultCount: 1 };
+
+  try {
+    const response = await axios.post(url, body, { headers });
+    if (response.data.places && response.data.places.length > 0) {
+      return response.data.places[0].location; // { latitude: 123, longitude: 456 }
+    }
+    return null;
+  } catch (error) {
+    console.error("Geocoding error:", error);
+    return null;
+  }
 }

@@ -3,7 +3,9 @@ import { sendResponse } from "../config/lib";
 import { AIResponse, STAApiResponse } from "../types/air";
 import { ApiResponse } from "../types/response";
 import { Request, Response } from "express";
-import { model, rankConfig, rankContents } from "../config/ai";
+import { model } from "../config/ai";
+import { rankConfig } from "../config/ai/config";
+import { rankContents } from "../config/ai/contents";
 export async function getAirQualityInfo(
   req: Request,
   res: Response<ApiResponse<AIResponse>>

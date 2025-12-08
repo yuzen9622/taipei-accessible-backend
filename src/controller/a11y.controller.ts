@@ -1,25 +1,19 @@
 import type { Request, Response } from "express";
-import { AgentResponse, IA11y } from "../types";
+import { IA11y } from "../types";
 import A11y from "../model/a11y.model";
 import { sendResponse } from "../config/lib";
 import { ApiResponse } from "../types/response";
 import BathroomModel from "../model/bathroom.model";
+import { googleGenAi, model } from "../config/ai";
+import { agentConfig, routeConfig, rankConfig } from "../config/ai/config";
 import {
-  rankConfig,
-  rankContents,
-  googleGenAi,
-  model,
-  routeConfig,
-  routeContents,
-  agentConfig,
   agentContents,
-  assistantConfig,
   assistantContents,
-} from "../config/ai";
-
+  rankContents,
+  routeContents,
+} from "../config/ai/contents";
 import { ResponseMessage } from "../types/code";
-import { send } from "process";
-import { LocationType } from "@googlemaps/google-maps-services-js";
+import { findA11yPlaces, findGooglePlaces } from "./ai.controller";
 
 async function getA11yData(req: Request, res: Response<ApiResponse<IA11y[]>>) {
   const a11y = await A11y.find();
@@ -132,24 +126,22 @@ async function a11yRouteSelect(req: Request, res: Response<ApiResponse<any>>) {
 async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
   try {
     const { lat, lng, message, history, lang } = req.body;
-
-    // Fetch nearby a11y data and process with AI
-    const AiAgent = await googleGenAi.models.generateContent({
-      model,
-      contents: [
-        ...agentContents,
+    const userContentPart = {
+      role: "user",
+      parts: [
         {
-          role: "user",
-          parts: [
-            {
-              text: JSON.stringify({ location: { lat, lng }, message, lang }),
-            },
-          ],
+          text: JSON.stringify({ location: { lat, lng }, message, lang }),
         },
       ],
+    };
+
+    const AiAgent = await googleGenAi.models.generateContent({
+      model,
+      contents: [...agentContents, userContentPart],
       config: agentConfig,
     });
-    if (!AiAgent?.candidates?.[0].content?.parts?.[0].text) {
+
+    if (!AiAgent?.candidates?.[0].content?.parts) {
       return sendResponse(
         res,
         false,
@@ -159,121 +151,102 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
         null
       );
     }
-    console.log(AiAgent?.candidates?.[0].content?.parts?.[0].text);
-    const agentType: AgentResponse = JSON.parse(
-      AiAgent?.candidates?.[0].content?.parts?.[0].text
-    );
-    console.log(agentType);
+    console.log(AiAgent?.candidates?.[0].content?.parts);
+    const functionCalls = AiAgent.functionCalls;
 
-    if (agentType.action === "findNearbyA11y") {
-      const { location, range } = agentType;
+    if (functionCalls && functionCalls.length > 0) {
+      const functionCall = functionCalls[0];
+      const functionName = functionCall.name;
+      const args = functionCall.args;
+      console.log("Function Call Detected:", functionName, args);
+      // 處理 Google Maps 查詢工具
+      if (functionName === "findGooglePlaces") {
+        const { query, latitude, longitude } = args as any;
 
-      const nearbyMetroA11y = await A11y.find({
-        location: {
-          $near: {
-            $geometry: {
-              type: "Point",
-              coordinates: [Number(location?.lng), Number(location?.lat)],
+        // 🌟 執行外部的 Google Maps 查詢函式
+        const toolResult = await findGooglePlaces(
+          query as string,
+          latitude as number,
+          longitude as number
+        );
+        console.log("Tool Result:", toolResult);
+        // 第二次呼叫：將工具結果回傳給模型，生成最終回覆
+        const secondResponse = await googleGenAi.models.generateContent({
+          model,
+          contents: [
+            ...assistantContents,
+            userContentPart,
+            {
+              role: "model",
+              parts: AiAgent.candidates[0].content.parts, // 模型的 Tool Call 要求
             },
-            $maxDistance: range || 300,
-          },
-        },
-      });
-      const nearbyBathroom = await BathroomModel.find({
-        type: "無障礙廁所",
-        location: {
-          $near: {
-            $geometry: {
-              type: "Point",
-              coordinates: [Number(location?.lng), Number(location?.lat)],
+            {
+              role: "tool",
+              parts: [
+                {
+                  functionResponse: {
+                    name: "findGooglePlaces",
+                    response: { result: toolResult },
+                  },
+                },
+              ],
             },
-            $maxDistance: 150,
-          },
-        },
-      });
-      const AiChat = await googleGenAi.models.generateContent({
-        model,
+          ],
+          config: agentConfig,
+        });
 
-        contents: [
-          ...assistantContents,
-          ...history,
-          {
-            role: "user",
-            parts: [
-              {
-                text: JSON.stringify({ location: { lat, lng }, message, lang }),
-              },
-            ],
-          },
-        ],
-        config: assistantConfig,
-      });
-      return sendResponse(res, true, "success", 200, "OK", {
-        nearbyBathroom,
-        nearbyMetroA11y,
-        message: AiChat?.candidates?.[0].content?.parts?.[0].text ?? "",
-      });
-    } else if (agentType.action == "googleSearch") {
-      const AiChat = await googleGenAi.models.generateContent({
-        model,
+        // 將 Place ID 提取出來回傳給前端（如果需要的話）
+        const parsedResult = JSON.parse(toolResult);
+        console.log(secondResponse);
+        return sendResponse(res, true, "success", 200, "OK", {
+          message:
+            secondResponse?.candidates?.[0].content?.parts?.[0].text ?? "",
+          googlePlacesResults: parsedResult.places || [], // 回傳 Place ID 列表
+        });
+      } else if (functionName === "findA11yPlaces") {
+        const { latitude, longitude, range, query } = args as any;
+        const toolResult = await findA11yPlaces({
+          query,
+          latitude,
+          longitude,
+          range,
+        });
+        const secondResponse = await googleGenAi.models.generateContent({
+          model,
+          contents: [
+            ...assistantContents,
+            userContentPart,
+            {
+              role: "model",
+              parts: AiAgent.candidates[0].content.parts, // 模型的 Tool Call 要求
+            },
+            {
+              role: "tool",
+              parts: [
+                {
+                  functionResponse: {
+                    name: "findGooglePlaces",
+                    response: { result: toolResult },
+                  },
+                },
+              ],
+            },
+          ],
+          config: agentConfig,
+        });
 
-        contents: [
-          ...assistantContents,
-          ...history,
-          {
-            role: "user",
-            parts: [
-              {
-                text: JSON.stringify({ location: { lat, lng }, message, lang }),
-              },
-            ],
-          },
-        ],
-        config: assistantConfig,
-      });
-      return sendResponse(res, true, "success", 200, "OK", {
-        message: AiChat?.candidates?.[0].content?.parts?.[0].text ?? "",
-      });
-    } else if (agentType.action == "transportInfo") {
-      const AiChat = await googleGenAi.models.generateContent({
-        model,
+        // 將 Place ID 提取出來回傳給前端（如果需要的話）
+        const parsedResult = JSON.parse(toolResult);
 
-        contents: [
-          ...assistantContents,
-          ...history,
-          {
-            role: "user",
-            parts: [
-              {
-                text: JSON.stringify({ location: { lat, lng }, message, lang }),
-              },
-            ],
-          },
-        ],
-        config: assistantConfig,
-      });
+        return sendResponse(res, true, "success", 200, "OK", {
+          message:
+            secondResponse?.candidates?.[0].content?.parts?.[0].text ?? "",
+          a11yPlacesResults: parsedResult.places || [],
+        });
+      }
+    } else {
       return sendResponse(res, true, "success", 200, "OK", {
-        message: AiChat?.candidates?.[0].content?.parts?.[0].text ?? "",
-      });
-    } else if (agentType.action === "feedback") {
-      const AiChat = await googleGenAi.models.generateContent({
-        model,
-
-        contents: [
-          ...assistantContents,
-          {
-            role: "user",
-            parts: [
-              {
-                text: JSON.stringify({ location: { lat, lng }, message, lang }),
-              },
-            ],
-          },
-        ],
-        config: assistantConfig,
-      });
-      return sendResponse(res, true, "success", 200, "OK", {
-        message: AiChat?.candidates?.[0].content?.parts?.[0].text ?? "",
+        message: AiAgent?.candidates?.[0].content?.parts?.[0].text ?? "",
       });
     }
   } catch (error) {
