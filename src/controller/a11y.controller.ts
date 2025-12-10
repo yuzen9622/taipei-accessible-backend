@@ -13,7 +13,7 @@ import {
   routeContents,
 } from "../config/ai/contents";
 import { ResponseMessage } from "../types/code";
-import { findA11yPlaces, findGooglePlaces } from "./ai.controller";
+import { findA11yPlaces, findGooglePlaces, planRoute } from "./ai.controller";
 
 async function getA11yData(req: Request, res: Response<ApiResponse<IA11y[]>>) {
   const a11y = await A11y.find();
@@ -125,7 +125,7 @@ async function a11yRouteSelect(req: Request, res: Response<ApiResponse<any>>) {
 
 async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
   try {
-    const { lat, lng, message, history, lang } = req.body;
+    const { lat, lng, message, lang } = req.body;
     const userContentPart = {
       role: "user",
       parts: [
@@ -242,6 +242,49 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
           message:
             secondResponse?.candidates?.[0].content?.parts?.[0].text ?? "",
           a11yPlacesResults: parsedResult.places || [],
+        });
+      } else if (functionName === "planRoute") {
+        let { origin, destination, travelMode } = args as any;
+
+        // 1. 處理「目前位置」
+        if (origin === "current_location") {
+          origin = { latitude: lat, longitude: lng };
+        }
+        const toolResult = await planRoute(origin, destination);
+        const secondResponse = await googleGenAi.models.generateContent({
+          model,
+          contents: [
+            ...assistantContents,
+            userContentPart,
+            {
+              role: "model",
+              parts: AiAgent.candidates[0].content.parts, // 模型的 Tool Call 要求
+            },
+            {
+              role: "tool",
+              parts: [
+                {
+                  functionResponse: {
+                    name: "planRoute",
+                    response: { result: toolResult },
+                  },
+                },
+              ],
+            },
+          ],
+          config: agentConfig,
+        });
+
+        // 將 Place ID 提取出來回傳給前端（如果需要的話）
+        const parsedResult = JSON.parse(toolResult);
+        return sendResponse(res, true, "success", 200, "OK", {
+          message:
+            secondResponse?.candidates?.[0].content?.parts?.[0].text ?? "",
+          planRouteResult: {
+            origin: parsedResult.origin,
+            destination: parsedResult.destination,
+            travelMode,
+          },
         });
       }
     } else {

@@ -199,7 +199,9 @@ export function detectBusApiType(fullName: string): {
   return { type, routeId: formatRouteId };
 }
 // 放在您的 controller 或 utility 檔案中
-export async function getCoordinates(query: string) {
+export async function getCoordinates(
+  query: string
+): Promise<{ latitude: number; longitude: number } | null> {
   if (!process.env.GOOGLE_MAPS_API_KEY) return null;
 
   // 使用 Text Search API 找地點座標 (比 Geocoding API 對模糊搜尋更友善)

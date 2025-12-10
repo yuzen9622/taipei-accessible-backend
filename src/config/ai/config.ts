@@ -1,10 +1,19 @@
-import { findA11yPlacesDeclaration, findGooglePlacesDeclaration } from "./tool";
-const agentConfig = {
+import {
+  findA11yPlacesDeclaration,
+  findGooglePlacesDeclaration,
+  planRouteDeclaration,
+} from "./tool";
+import {
+  GenerateContentConfig,
+  FunctionCallingConfigMode,
+} from "@google/genai";
+const agentConfig: GenerateContentConfig = {
   tools: [
     {
       functionDeclarations: [
         findA11yPlacesDeclaration,
         findGooglePlacesDeclaration,
+        planRouteDeclaration,
       ],
     },
   ],
@@ -12,9 +21,15 @@ const agentConfig = {
   topP: 0.95,
   topK: 40,
   candidateCount: 1,
+  maxOutputTokens: 1000,
+  toolConfig: {
+    functionCallingConfig: {
+      mode: FunctionCallingConfigMode.AUTO,
+    },
+  },
 };
 
-const rankConfig = {
+const rankConfig: GenerateContentConfig = {
   responseMimeType: "application/json",
   responseJsonSchema: {
     type: "object",
@@ -30,7 +45,7 @@ const rankConfig = {
   topK: 1,
 };
 
-const routeConfig = {
+const routeConfig: GenerateContentConfig = {
   responseMimeType: "application/json",
   responseJsonSchema: {
     type: "object",

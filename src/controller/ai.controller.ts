@@ -21,16 +21,8 @@ async function findGooglePlaces(
     return JSON.stringify({ error: "Google Places API Key is not set." });
   }
 
-  // 1. 新版 API Endpoint
   const url = "https://places.googleapis.com/v1/places:searchText";
 
-  // 2. 準備 Headers
-  // 🌟 重要：必須指定 FieldMask，否則會收不到資料或被收取最高費率
-  // - places.id: 地點 ID
-  // - places.displayName: 地點名稱 (物件)
-  // - places.formattedAddress: 格式化地址
-  // - places.rating: 評分
-  // - places.location: 經緯度
   const headers = {
     "Content-Type": "application/json",
     "X-Goog-Api-Key": MAPS_API_KEY,
@@ -158,4 +150,35 @@ async function findA11yPlaces(args: {
   }
 }
 
-export { findGooglePlaces, findA11yPlaces };
+async function planRoute(
+  origin:
+    | string
+    | {
+        latitude: number;
+        longitude: number;
+      },
+  destination: string,
+  travelMode?: string
+) {
+  try {
+    let origin_location =
+      origin && typeof origin === "object"
+        ? origin
+        : await getCoordinates(origin);
+
+    const destination_location = await getCoordinates(destination);
+    console.log(origin_location, destination_location);
+    if (!origin_location || !destination_location) {
+      return JSON.stringify({ error: "Origin or destination is not found." });
+    }
+    return JSON.stringify({
+      origin: origin_location,
+      destination: destination_location,
+    });
+  } catch (error) {
+    console.error(error);
+    return JSON.stringify({ error: "Plan route error." });
+  }
+}
+
+export { findGooglePlaces, findA11yPlaces, planRoute };

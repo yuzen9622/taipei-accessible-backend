@@ -47,4 +47,36 @@ const findA11yPlacesDeclaration: FunctionDeclaration = {
     required: ["query"],
   },
 };
-export { findGooglePlacesDeclaration, findA11yPlacesDeclaration };
+
+const planRouteDeclaration: FunctionDeclaration = {
+  name: "planRoute",
+  description:
+    "【導航專用】規劃從起點(Origin)到終點(Destination)的交通路線。當用戶的語句結構為「從 A 到 B」、「A 去 B 怎麼走」或包含「導航」、「路線規劃」時，**必須**使用此工具。",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      origin: {
+        type: Type.STRING,
+        description:
+          "起點。若用戶說「台中車站到...」，則起點為「台中車站」。若說「從這裡」、「目前位置」，填入 'current_location'。",
+      },
+      destination: {
+        type: Type.STRING,
+        description:
+          "終點。若用戶說「...到台中高鐵站」，則終點為「台中高鐵站」。",
+      },
+      travelMode: {
+        type: Type.STRING,
+        enum: ["TRANSIT", "WALKING"],
+        description: "交通方式。預設 'TRANSIT'。",
+      },
+    },
+    required: ["origin", "destination"],
+  },
+};
+
+export {
+  findGooglePlacesDeclaration,
+  findA11yPlacesDeclaration,
+  planRouteDeclaration,
+};
