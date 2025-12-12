@@ -34,6 +34,15 @@ async function findGooglePlaces(
   const body: any = {
     textQuery: query,
     languageCode: "zh-TW",
+    locationBias: {
+      circle: {
+        center: {
+          latitude: latitude,
+          longitude: longitude,
+        },
+        radius: 1000.0,
+      },
+    },
     maxResultCount: 3, // 新版 API 可以直接指定回傳數量 (最多 20)
   };
 
@@ -84,21 +93,26 @@ async function findA11yPlaces(args: {
   latitude?: number;
   longitude?: number;
   range?: number;
+  center: { latitude: number; longitude: number };
 }) {
   let searchLat = args.latitude;
   let searchLng = args.longitude;
   const searchRange = args.range || 300;
 
   // 🌟 關鍵邏輯：如果沒有座標，但有地名，先去偷查座標
-  if ((!searchLat || !searchLng) && args.query) {
+  if (args.query) {
     console.log(`正在將地名轉為座標: ${args.query}`);
-    const coords = await getCoordinates(args.query);
+    const coords = await getCoordinates(
+      args.query,
+      args.center.latitude,
+      args.center.longitude
+    );
     if (coords) {
       searchLat = coords.latitude;
       searchLng = coords.longitude;
     } else {
       return JSON.stringify({
-        status: "ZERO_RESULTS",
+        ok: false,
         message: `找不到地點「${args.query}」的座標，無法查詢無障礙設施。`,
       });
     }
@@ -107,6 +121,7 @@ async function findA11yPlaces(args: {
   // 如果還是沒有座標 (也沒 query 或轉座標失敗)
   if (!searchLat || !searchLng) {
     return JSON.stringify({
+      ok: false,
       error: "Missing location data (query or lat/lng required).",
     });
   }
@@ -139,8 +154,7 @@ async function findA11yPlaces(args: {
     });
 
     return JSON.stringify({
-      status: "OK",
-      // 為了讓 AI 知道它是在哪裡找到的，建議回傳中心點資訊
+      ok: true,
       searchLocation: { lat: searchLat, lng: searchLng, query: args.query },
       places: { nearbyMetroA11y, nearbyBathroom },
     });
@@ -166,18 +180,26 @@ async function planRoute(
         ? origin
         : await getCoordinates(origin);
 
-    const destination_location = await getCoordinates(destination);
+    const destination_location = await getCoordinates(
+      destination,
+      origin_location?.latitude,
+      origin_location?.longitude
+    );
     console.log(origin_location, destination_location);
     if (!origin_location || !destination_location) {
-      return JSON.stringify({ error: "Origin or destination is not found." });
+      return JSON.stringify({
+        ok: false,
+        error: "Origin or destination is not found.",
+      });
     }
     return JSON.stringify({
+      ok: true,
       origin: origin_location,
       destination: destination_location,
     });
   } catch (error) {
     console.error(error);
-    return JSON.stringify({ error: "Plan route error." });
+    return JSON.stringify({ ok: false, error: "Plan route error." });
   }
 }
 

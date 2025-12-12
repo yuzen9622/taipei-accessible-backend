@@ -130,7 +130,7 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
       role: "user",
       parts: [
         {
-          text: JSON.stringify({ location: { lat, lng }, message, lang }),
+          text: JSON.stringify({ userLocation: { lat, lng }, message, lang }),
         },
       ],
     };
@@ -163,7 +163,6 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
       if (functionName === "findGooglePlaces") {
         const { query, latitude, longitude } = args as any;
 
-        // 🌟 執行外部的 Google Maps 查詢函式
         const toolResult = await findGooglePlaces(
           query as string,
           latitude as number,
@@ -210,6 +209,7 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
           latitude,
           longitude,
           range,
+          center: { latitude: lat, longitude: lng },
         });
         const secondResponse = await googleGenAi.models.generateContent({
           model,
@@ -280,11 +280,13 @@ async function a11yAISuggestion(req: Request, res: Response<ApiResponse<any>>) {
         return sendResponse(res, true, "success", 200, "OK", {
           message:
             secondResponse?.candidates?.[0].content?.parts?.[0].text ?? "",
-          planRouteResult: {
-            origin: parsedResult.origin,
-            destination: parsedResult.destination,
-            travelMode,
-          },
+          planRouteResult: parsedResult.ok
+            ? {
+                origin: parsedResult.origin,
+                destination: parsedResult.destination,
+                travelMode,
+              }
+            : undefined,
         });
       }
     } else {

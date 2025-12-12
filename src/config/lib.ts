@@ -200,7 +200,9 @@ export function detectBusApiType(fullName: string): {
 }
 // 放在您的 controller 或 utility 檔案中
 export async function getCoordinates(
-  query: string
+  query: string,
+  latitude?: number,
+  longitude?: number
 ): Promise<{ latitude: number; longitude: number } | null> {
   if (!process.env.GOOGLE_MAPS_API_KEY) return null;
 
@@ -211,8 +213,16 @@ export async function getCoordinates(
     "X-Goog-Api-Key": process.env.GOOGLE_MAPS_API_KEY,
     "X-Goog-FieldMask": "places.location", // 我們只需要座標
   };
-  const body = { textQuery: query, maxResultCount: 1 };
-
+  const body = {
+    textQuery: query,
+    maxResultCount: 1,
+    locationBias:
+      latitude && longitude
+        ? { circle: { center: { latitude, longitude }, radius: 50000.0 } }
+        : undefined,
+    regionCode: "TW",
+  };
+  console.log("Geocoding request body:", body);
   try {
     const response = await axios.post(url, body, { headers });
     if (response.data.places && response.data.places.length > 0) {

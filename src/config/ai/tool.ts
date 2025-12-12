@@ -35,7 +35,7 @@ const findA11yPlacesDeclaration: FunctionDeclaration = {
       // 🌟 新增這個參數：讓 AI 可以傳 "台北車站" 進來
       query: {
         type: Type.STRING,
-        description: "地點名稱或關鍵字，例如：'台北車站'、'附近的廁所'。",
+        description: "地點名稱，例如：'台北車站'、'淡水捷運站'。",
       },
       latitude: { type: Type.NUMBER, description: "如果有經緯度則填入" },
       longitude: { type: Type.NUMBER, description: "如果有經緯度則填入" },
