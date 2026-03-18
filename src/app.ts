@@ -22,7 +22,7 @@ app.use(
   cors({
     origin: corsOrigins,
     credentials: true,
-  })
+  }),
 );
 
 // 日誌記錄
