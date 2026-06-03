@@ -17,15 +17,127 @@ export const NearbyA11yQuerySchema = z
   })
   .strict();
 
+// ── Domain schemas ──────────────────────────────────────────────────────────
+
+const GeoPointSchema = z
+  .object({
+    type: z.literal("Point").openapi({ example: "Point" }),
+    coordinates: z
+      .tuple([z.number(), z.number()])
+      .openapi({ example: [121.5654, 25.033] }),
+  })
+  .openapi("GeoPoint");
+
+export const A11ySchema = z
+  .object({
+    _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0a1" }),
+    項次: z.string().openapi({ example: "1" }),
+    "出入口電梯/無障礙坡道名稱": z
+      .string()
+      .openapi({ example: "台北車站 M8 出口電梯" }),
+    經度: z.number().openapi({ example: 121.5170 }),
+    緯度: z.number().openapi({ example: 25.0478 }),
+    location: GeoPointSchema,
+  })
+  .openapi("A11y");
+
+export const BathroomSchema = z
+  .object({
+    _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0b2" }),
+    contury: z.string().openapi({ example: "臺北市" }),
+    areacode: z.string().openapi({ example: "100" }),
+    village: z.string().openapi({ example: "黎明里" }),
+    number: z.string().openapi({ example: "A001" }),
+    name: z.string().openapi({ example: "台北車站無障礙廁所" }),
+    address: z.string().openapi({ example: "臺北市中正區忠孝西路一段49號" }),
+    administration: z.string().openapi({ example: "臺北市政府" }),
+    latitude: z.number().openapi({ example: 25.0478 }),
+    longitude: z.number().openapi({ example: 121.5170 }),
+    grade: z.string().openapi({ example: "特優級" }),
+    type2: z.string().openapi({ example: "公共場所" }),
+    type: z.string().openapi({ example: "無障礙廁所" }),
+    exec: z.string().openapi({ example: "臺北市政府環境保護局" }),
+    diaper: z.string().openapi({ example: "有" }),
+  })
+  .openapi("Bathroom");
+
+export const OsmA11ySchema = z
+  .object({
+    osmId: z.string().openapi({ example: "node/1234567890" }),
+    name: z.string().optional().openapi({ example: "無障礙坡道" }),
+    category: z
+      .enum(["wheelchair_accessible", "kerb_cut", "ramp", "elevator", "toilet"])
+      .openapi({ example: "ramp" }),
+    wheelchair: z
+      .enum(["yes", "limited", "no"])
+      .optional()
+      .openapi({ example: "yes" }),
+    tags: z
+      .record(z.string(), z.string())
+      .openapi({ example: { wheelchair: "yes", highway: "elevator" } }),
+    location: GeoPointSchema,
+    importedAt: z
+      .string()
+      .openapi({ example: "2026-06-01T00:00:00.000Z" }),
+  })
+  .openapi("OsmA11y");
+
+// ── Response envelope helper ─────────────────────────────────────────────────
+
+const ApiResponseSchema = <T extends z.ZodTypeAny>(
+  data: T,
+  refName: string
+) =>
+  z
+    .object({
+      ok: z.boolean().openapi({ example: true }),
+      status: z.enum(["success", "error"]).openapi({ example: "success" }),
+      code: z.number().openapi({ example: 200 }),
+      message: z.string().openapi({ example: "OK" }),
+      data: data.optional(),
+      accessToken: z.string().optional(),
+    })
+    .openapi(refName);
+
+// ── Response schemas ─────────────────────────────────────────────────────────
+
+export const AllPlacesResponseSchema = ApiResponseSchema(
+  z.array(A11ySchema),
+  "AllPlacesResponse"
+);
+
+export const AllBathroomsResponseSchema = ApiResponseSchema(
+  z.array(BathroomSchema),
+  "AllBathroomsResponse"
+);
+
+export const NearbyA11yDataSchema = z
+  .object({
+    nearbyMetroA11y: z.array(A11ySchema),
+    nearbyBathroom: z.array(BathroomSchema),
+    nearbyOsm: z.array(OsmA11ySchema),
+  })
+  .openapi("NearbyA11yData");
+
+export const NearbyA11yResponseSchema = ApiResponseSchema(
+  NearbyA11yDataSchema,
+  "NearbyA11yResponse"
+);
+
 // ── OpenAPI path registrations ──────────────────────────────────────────────
 
 registry.registerPath({
   method: "get",
   path: "/a11y/all-places",
   tags: ["Accessibility"],
-  summary: "Get all accessibility places (MRT elevators / ramps)",
+  summary: "List all A11y places",
+  description: "Returns every MRT elevator and ramp entry stored in the database (no pagination). Useful for bulk client-side filtering or map rendering.",
   responses: {
-    200: { description: "List of all A11y places" },
+    200: {
+      description: "List of A11y places",
+      content: { "application/json": { schema: AllPlacesResponseSchema } },
+    },
+    500: { description: "Server error" },
   },
 });
 
@@ -33,9 +145,14 @@ registry.registerPath({
   method: "get",
   path: "/a11y/all-bathrooms",
   tags: ["Accessibility"],
-  summary: "Get all accessible bathrooms",
+  summary: "List all accessible bathrooms",
+  description: "Returns every accessible bathroom entry stored in the database (no pagination).",
   responses: {
-    200: { description: "List of accessible bathrooms" },
+    200: {
+      description: "List of accessible bathrooms",
+      content: { "application/json": { schema: AllBathroomsResponseSchema } },
+    },
+    500: { description: "Server error" },
   },
 });
 
@@ -43,12 +160,17 @@ registry.registerPath({
   method: "get",
   path: "/a11y/nearby-a11y",
   tags: ["Accessibility"],
-  summary: "Find accessibility facilities within 150 m",
+  summary: "Nearby accessibility facilities",
+  description: "Returns MRT A11y exits, accessible bathrooms, and OSM wheelchair nodes within 150 m of the supplied coordinates.",
   request: {
     query: NearbyA11yQuerySchema,
   },
   responses: {
-    200: { description: "Nearby MRT A11y, bathrooms, and OSM data" },
+    200: {
+      description: "Nearby MRT A11y, bathrooms, and OSM data",
+      content: { "application/json": { schema: NearbyA11yResponseSchema } },
+    },
     400: { description: "Missing or invalid lat/lng" },
+    500: { description: "Server error" },
   },
 });
