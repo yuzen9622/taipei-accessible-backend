@@ -32,7 +32,7 @@ export const sendResponse = <T = unknown>(
   });
 };
 
-function normalizeStopName(name?: string): string {
+export function normalizeStopName(name?: string): string {
   if (!name) return "";
   return name
     .normalize("NFKC") // 全半形統一
@@ -48,7 +48,7 @@ function normalizeStopName(name?: string): string {
     .trim();
 }
 
-function equalStopName(a?: string, b?: string): boolean {
+export function equalStopName(a?: string, b?: string): boolean {
   const na = normalizeStopName(a);
   const nb = normalizeStopName(b);
   console.log("comparing:", na, nb);
@@ -125,7 +125,7 @@ export function getBusFrontOfArrivalStop(
  * @param routeName 原始路線名稱 (例如: "307經中港路", "紅50延", "藍1區間車")
  * @returns 格式化後的路線名稱 (例如: "307", "紅50延", "藍1區間")
  */
-function formatRouteName(routeName: string): string {
+export function formatRouteName(routeName: string): string {
   // 要保留的中文字 (顏色和類型)
   const keepChars = [
     // 顏色

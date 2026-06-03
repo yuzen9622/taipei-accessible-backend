@@ -57,6 +57,25 @@ export interface AIRankResponse {
   route_total_score: number;
 }
 
+export interface ITdxBusStop {
+  stopUid: string;
+  stopName: { Zh_tw: string; En?: string };
+  city: string;
+  subRouteIds: string[];
+  location: { type: "Point"; coordinates: [number, number] };
+  importedAt: Date;
+}
+
+export interface IOsmA11y {
+  osmId: string;
+  name?: string;
+  category: "wheelchair_accessible" | "kerb_cut" | "ramp" | "elevator" | "toilet";
+  wheelchair?: "yes" | "limited" | "no";
+  tags: Record<string, string>;
+  location: { type: "Point"; coordinates: [number, number] };
+  importedAt: Date;
+}
+
 export interface AgentResponse {
   action:
     | "findNearbyA11y"

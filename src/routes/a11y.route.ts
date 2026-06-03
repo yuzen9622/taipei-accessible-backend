@@ -7,6 +7,8 @@ import {
   a11yRouteSelect,
   a11yAISuggestion,
 } from "../controller/a11y.controller";
+import { accessibleRoute } from "../controller/accessible-route.controller";
+
 const route = Router();
 
 route.get("/all-places", getA11yData);
@@ -15,4 +17,6 @@ route.get("/nearby-a11y", nearbyA11y);
 route.post("/route-rank", a11yRouteRank);
 route.post("/route-select", a11yRouteSelect);
 route.post("/chatbot", a11yAISuggestion);
+route.post("/accessible-route", accessibleRoute);
+
 export default route;

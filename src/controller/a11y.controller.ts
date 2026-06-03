@@ -4,6 +4,7 @@ import A11y from "../model/a11y.model";
 import { sendResponse } from "../config/lib";
 import { ApiResponse } from "../types/response";
 import BathroomModel from "../model/bathroom.model";
+import OsmA11y from "../model/osm-a11y.model";
 import { googleGenAi, model } from "../config/ai";
 import { agentConfig, routeConfig, rankConfig } from "../config/ai/config";
 import {
@@ -311,33 +312,24 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
   try {
     const { lat, lng } = req.query;
 
-    const nearbyMetroA11y = await A11y.find({
-      location: {
-        $near: {
-          $geometry: {
-            type: "Point",
-            coordinates: [Number(lng as string), Number(lat as string)],
-          },
-          $maxDistance: 150,
-        },
+    const coords = [Number(lng as string), Number(lat as string)];
+    const geoQuery = {
+      $near: {
+        $geometry: { type: "Point", coordinates: coords },
+        $maxDistance: 150,
       },
-    });
-    const nearbyBathroom = await BathroomModel.find({
-      type: "無障礙廁所",
-      location: {
-        $near: {
-          $geometry: {
-            type: "Point",
-            coordinates: [Number(lng as string), Number(lat as string)],
-          },
-          $maxDistance: 150,
-        },
-      },
-    });
+    };
+
+    const [nearbyMetroA11y, nearbyBathroom, nearbyOsm] = await Promise.all([
+      A11y.find({ location: geoQuery }),
+      BathroomModel.find({ type: "無障礙廁所", location: geoQuery }),
+      OsmA11y.find({ location: geoQuery }),
+    ]);
 
     return sendResponse(res, true, "success", 200, "OK", {
       nearbyBathroom,
       nearbyMetroA11y,
+      nearbyOsm,
     });
   } catch (error) {
     return sendResponse(

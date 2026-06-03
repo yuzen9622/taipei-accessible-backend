@@ -9,7 +9,9 @@
         "dev": " dotenvx run -- nodemon",
         "clean": "rimraf dist",
         "prebuild": "npm run clean",
-        "postinstall": "npm run build"
+        "postinstall": "npm run build",
+        "import:osm": "npx dotenvx run -- ts-node src/scripts/import-osm-a11y.ts",
+        "import:tdx-stops": "npx dotenvx run -- ts-node src/scripts/import-tdx-stops.ts"
     },
     "keywords": [
         "express",
