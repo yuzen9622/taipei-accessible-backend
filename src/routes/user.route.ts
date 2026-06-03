@@ -7,7 +7,7 @@ import {
   config,
   updateConfig,
   logout,
-} from "../controller/user.controller";
+} from "../modules/user/user.controller";
 
 const route = express.Router();
 

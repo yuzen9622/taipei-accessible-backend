@@ -1,5 +1,5 @@
 import express from "express";
-import { getAirQualityInfo } from "../controller/air.controller";
+import { getAirQualityInfo } from "../modules/air/air.controller";
 const route = express.Router();
 
 route.get("/air-quality", getAirQualityInfo);

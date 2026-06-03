@@ -2,48 +2,73 @@ import express, { Express, Request, Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import cookieParser from "cookie-parser";
+import { apiReference } from "@scalar/express-api-reference";
 import type { ApiResponse } from "./types/response";
 import { ResponseCode } from "./types/code";
 import middleware from "./middleware/middleware";
-import userRoute from "./routes/user.route";
-import transitRoute from "./routes/transit.route";
-import a11yRoute from "./routes/a11y.route";
-import cookieParser from "cookie-parser";
+import { createA11yRouter } from "./modules/a11y";
+import { createChatbotRouter } from "./modules/chatbot";
+import { createAccessibleRouteRouter } from "./modules/accessible-route";
+import { createTransitRouter } from "./modules/transit";
+import { createUserRouter } from "./modules/user";
+import { createAirRouter } from "./modules/air";
+import { generateOpenAPIDocument } from "./openapi/document";
+
 const app: Express = express();
 
-// 安全性中介軟體
-app.use(helmet());
-
-// CORS 設定
-const corsOrigins = process.env.CORS_ORIGINS?.split(",")
-  .map((o) => o.trim())
-  .filter(Boolean) ?? ["http://localhost:3000"];
+// Security middleware
 app.use(
-  cors({
-    origin: corsOrigins,
-    credentials: true,
+  helmet({
+    // Allow Scalar UI to load its CDN assets
+    contentSecurityPolicy: false,
   }),
 );
 
-// 日誌記錄
+// CORS
+const corsOrigins = process.env.CORS_ORIGINS?.split(",")
+  .map((o) => o.trim())
+  .filter(Boolean) ?? ["http://localhost:3000"];
+app.use(cors({ origin: corsOrigins, credentials: true }));
+
 app.use(morgan("common"));
 app.use(cookieParser());
-// Body parser 中介軟體
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-app.get("/health", (req: Request, res: Response) => {
+// Health check
+app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     status: "OK",
     message: "Server is running",
     timestamp: new Date().toISOString(),
   });
 });
-//Restful API 路由
-app.use("/api/user", middleware, userRoute);
-app.use("/api/transit", transitRoute);
-app.use("/api/a11y", a11yRoute);
-//404 handler
+
+// OpenAPI spec
+app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
+  res.setHeader("Content-Type", "application/json");
+  res.send(generateOpenAPIDocument());
+});
+
+// Scalar API docs UI
+app.use(
+  "/docs",
+  apiReference({
+    url: "/api/v1/openapi.json",
+    theme: "default",
+  }),
+);
+
+// Routes
+app.use("/api/v1/user", middleware, createUserRouter());
+app.use("/api/v1/transit", createTransitRouter());
+app.use("/api/v1/a11y", createA11yRouter());
+app.use("/api/v1/a11y", createChatbotRouter());
+app.use("/api/v1/a11y", createAccessibleRouteRouter());
+app.use("/api/v1/air", createAirRouter());
+
+// 404 handler
 app.use("*", (req: Request, res: Response<ApiResponse<null>>) => {
   res.status(404).json({
     ok: false,

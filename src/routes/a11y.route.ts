@@ -3,11 +3,13 @@ import {
   getA11yData,
   nearbyA11y,
   getBathroomData,
+} from "../modules/a11y/a11y.controller";
+import {
   a11yRouteRank,
   a11yRouteSelect,
   a11yAISuggestion,
-} from "../controller/a11y.controller";
-import { accessibleRoute } from "../controller/accessible-route.controller";
+} from "../modules/chatbot/chatbot.controller";
+import { accessibleRoute } from "../modules/accessible-route/accessible-route.controller";
 
 const route = Router();
 

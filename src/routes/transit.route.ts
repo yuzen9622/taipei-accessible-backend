@@ -2,7 +2,7 @@ import { Router } from "express";
 import {
   getBusData,
   getRealtimeBusPosition,
-} from "../controller/transit.controller";
+} from "../modules/transit/transit.controller";
 const route = Router();
 
 route.post("/bus", getBusData);
