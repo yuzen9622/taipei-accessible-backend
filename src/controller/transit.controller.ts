@@ -20,7 +20,7 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
       route_name,
       arrival_lat,
       arrival_lng,
-      language
+      language,
     } = req.body;
 
     if (
@@ -34,7 +34,7 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
     }
     const city = (await getCity(
       Number(arrival_lat),
-      Number(arrival_lng)
+      Number(arrival_lng),
     )) as TaiwanCityEn;
     console.log(city);
     const formatRouteName = detectBusApiType(route_name as string);
@@ -55,9 +55,9 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
       { 0: busInfoJson[0].Stops, 1: busInfoJson[1].Stops },
       departure_stop as string,
       arrival_stop as string,
-      language
+      language,
     );
-    
+
     console.log("direction", direction);
     if (direction === -1) {
       return sendResponse(res, false, "error", 400, "無法辨識此路線方向");
@@ -75,7 +75,7 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
         false,
         "error",
         500,
-        realtimeClosestBusInfoJson.message
+        realtimeClosestBusInfoJson.message,
       );
     }
     console.log(realtimeClosestBusInfoJson);
@@ -85,7 +85,7 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
       "success",
       200,
       "OK",
-      realtimeClosestBusInfoJson
+      realtimeClosestBusInfoJson,
     );
   } catch (error: any) {
     return sendResponse(res, false, "error", 500, error.message);
@@ -94,24 +94,45 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
 
 async function getRealtimeBusPosition(
   req: Request,
-  res: Response<ApiResponse<any>>
+  res: Response<ApiResponse<any>>,
 ) {
   try {
     const { plate_number, arrival_lat, arrival_lng, route_name } = req.query;
+
+    if (!plate_number || !arrival_lat || !arrival_lng || !route_name) {
+      return sendResponse(res, false, "error", 400, "缺少必要參數");
+    }
+
+    if (
+      typeof plate_number !== "string" ||
+      !/^[\w-]{1,15}$/.test(plate_number)
+    ) {
+      return sendResponse(res, false, "error", 400, "無效的車牌號碼");
+    }
+
     const city = (await getCity(
       Number(arrival_lat),
-      Number(arrival_lng)
+      Number(arrival_lng),
     )) as TaiwanCityEn;
+
     const formatRouteName = detectBusApiType(route_name as string);
     const url =
       formatRouteName.type === "City"
         ? `${busUrl.cityRealtimeByFrequencyUrl}/${city}?$format=JSON&$filter=PlateNumb eq '${plate_number}'`
         : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=PlateNumb eq '${plate_number}'`;
+
     const busStopInfo = await tdxFetch(url);
     const busInfoJson = await busStopInfo.json();
+
+    if (!busStopInfo.ok) {
+      console.error("TDX fetch error:", busStopInfo.status, busInfoJson);
+      return sendResponse(res, false, "error", 400, "TDX Error");
+    }
+
     console.log(busInfoJson);
     return sendResponse(res, true, "success", 200, "OK", busInfoJson);
   } catch (error) {
+    console.error("Error fetching realtime bus position:", error);
     return sendResponse(res, false, "error", 500, "Internal Server Error");
   }
 }
@@ -121,7 +142,7 @@ async function getTrainData(req: Request, res: Response<ApiResponse<null>>) {
 }
 async function getHighSpeedTrainData(
   req: Request,
-  res: Response<ApiResponse<null>>
+  res: Response<ApiResponse<null>>,
 ) {
   const { type, detail } = req.query;
 }

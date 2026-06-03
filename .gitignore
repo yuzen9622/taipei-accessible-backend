@@ -112,3 +112,5 @@ Thumbs.db
 # Logs
 logs
 *.log
+
+graphify-out/

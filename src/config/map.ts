@@ -5,6 +5,10 @@ export const getCity = async (lat: number, lng: number) => {
   );
   const data = (await geocode.json()) as any;
 
+  if (!data.results || data.results.length === 0) {
+    throw new Error(`Geocoding failed: ${data.status ?? "NO_RESULTS"}`);
+  }
+
   return data.results[0].address_components
     .find((component: any) =>
       component.types.includes("administrative_area_level_1")
