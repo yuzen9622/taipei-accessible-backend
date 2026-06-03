@@ -3,14 +3,14 @@ import {
   getBusFrontOfArrivalStop,
   getRouteDirectionImproved,
   sendResponse,
-} from "../config/lib";
-import { busUrl } from "../config/transit";
-import { getCity } from "../config/map";
-import { ApiResponse } from "../types/response";
+} from "../../config/lib";
+import { busUrl } from "../../config/transit";
+import { getCity } from "../../config/map";
+import { ApiResponse } from "../../types/response";
 import type { Response, Request } from "express";
-import { BusRoute, TaiwanCityEn } from "../types/transit";
+import { BusRoute, TaiwanCityEn } from "../../types/transit";
 
-import { tdxFetch } from "../config/fetch";
+import { tdxFetch } from "../../config/fetch";
 
 async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
   try {

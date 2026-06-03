@@ -1,16 +1,16 @@
 import { Request, Response } from "express";
-import { ApiResponse } from "../types/response";
-import { ResponseCode, ResponseMessage } from "../types/code";
-import { sendResponse } from "../config/lib";
-import User from "../model/user.model";
-import { IConfig, IUser } from "../types";
+import { ApiResponse } from "../../types/response";
+import { ResponseCode, ResponseMessage } from "../../types/code";
+import { sendResponse } from "../../config/lib";
+import User from "../../model/user.model";
+import { IConfig, IUser } from "../../types";
 import {
   createAccessToken,
   createRefreshToken,
   verifyAccessToken,
   verifyRefreshToken,
-} from "../config/jwt";
-import Config from "../model/config.model";
+} from "../../config/jwt";
+import Config from "../../model/config.model";
 
 async function login(
   req: Request,
