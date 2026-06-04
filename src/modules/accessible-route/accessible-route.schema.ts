@@ -76,13 +76,34 @@ const WalkLegSchema = z
   })
   .openapi("WalkLeg");
 
+const WaitInfoSchema = z
+  .object({
+    minutes: z.number().nullable().openapi({ example: 6, description: "null = no service today" }),
+    source: z
+      .enum(["realtime", "schedule", "unavailable"])
+      .openapi({ example: "realtime", description: "realtime = TDX ETA, schedule = timetable lookup, unavailable = no data" }),
+  })
+  .openapi("WaitInfo");
+
+const NearestBusSchema = z
+  .object({
+    plateNumb: z.string().openapi({ example: "ABC-1234" }),
+    position: z
+      .tuple([z.number(), z.number()])
+      .openapi({ example: [121.567, 25.041], description: "[lng, lat]" }),
+    speed: z.number().optional().openapi({ example: 25, description: "km/h" }),
+    stopsAway: z.number().optional().openapi({ example: 2, description: "stops before departure stop" }),
+  })
+  .openapi("NearestBus");
+
 const BusLegSchema = z
   .object({
     type: z.literal("BUS").openapi({ example: "BUS" }),
     routeName: z.string().openapi({ example: "信義幹線" }),
     departureStop: z.string().openapi({ example: "市政府站" }),
     arrivalStop: z.string().openapi({ example: "台北101" }),
-    estimatedWaitMinutes: z.number().openapi({ example: 6 }),
+    waitInfo: WaitInfoSchema,
+    estimatedWaitMinutes: z.number().openapi({ example: 6, description: "waitInfo.minutes ?? 0, kept for backwards compatibility" }),
     direction: z
       .union([z.literal(0), z.literal(1)])
       .openapi({ example: 0, description: "0 = outbound, 1 = inbound" }),
@@ -91,6 +112,7 @@ const BusLegSchema = z
       .openapi({ example: [[121.567, 25.041], [121.564, 25.034]] }),
     departureStopA11y: z.array(OsmA11ySchema),
     arrivalStopA11y: z.array(OsmA11ySchema),
+    nearestBus: NearestBusSchema.optional(),
   })
   .openapi("BusLeg");
 

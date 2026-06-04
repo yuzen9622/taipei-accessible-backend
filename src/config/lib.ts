@@ -51,7 +51,6 @@ export function normalizeStopName(name?: string): string {
 export function equalStopName(a?: string, b?: string): boolean {
   const na = normalizeStopName(a);
   const nb = normalizeStopName(b);
-  console.log("comparing:", na, nb);
   if (!na || !nb) return false;
 
   // 嚴格相等 + 含括（避免資料來源前後綴差異）
@@ -76,8 +75,6 @@ export function getRouteDirectionImproved(
     const endIndex = stops.findIndex((s) =>
       equalStopName(s?.StopName?.[language], normEnd)
     );
-
-    console.log(startIndex, endIndex, normStart, normEnd);
 
     if (startIndex !== -1 && endIndex !== -1) {
       return direction; // 0 = 去程, 1 = 回程
@@ -222,7 +219,6 @@ export async function getCoordinates(
         : undefined,
     regionCode: "TW",
   };
-  console.log("Geocoding request body:", body);
   try {
     const response = await axios.post(url, body, { headers });
     if (response.data.places && response.data.places.length > 0) {

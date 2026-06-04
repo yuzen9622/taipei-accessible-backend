@@ -69,6 +69,19 @@ export type BusRoute = {
   Stops: BusStop[];
 };
 
+export type BusRealTimeByFrequency = {
+  PlateNumb: string;
+  Direction: 0 | 1;
+  BusPosition: {
+    PositionLon: number;
+    PositionLat: number;
+  };
+  Speed?: number;
+  DutyStatus: number;
+  BusStatus: number;
+  GPSTime?: string;
+};
+
 export type BusRealtimeNearbyStop = {
   PlateNumb: string;
   OperatorID: string;
