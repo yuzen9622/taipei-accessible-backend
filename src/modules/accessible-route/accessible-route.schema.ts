@@ -176,6 +176,29 @@ const MetroLegSchema = z
   })
   .openapi("MetroLeg");
 
+const ScoreComponentsSchema = z
+  .object({
+    facilityScore: z
+      .number()
+      .openapi({
+        example: 72,
+        description: "0–100: weighted quality of OSM accessibility facilities at all stops",
+      }),
+    timeScore: z
+      .number()
+      .openapi({
+        example: 85,
+        description: "0–100: normalized travel time (100 = fastest candidate)",
+      }),
+    criticalFeatureScore: z
+      .number()
+      .openapi({
+        example: 65,
+        description: "0–100: presence of Tier 1 critical features (elevator, flush kerb, ramp)",
+      }),
+  })
+  .openapi("ScoreComponents");
+
 const AccessibleRouteSchema = z
   .object({
     routeId: z.string().openapi({ example: "route-001" }),
@@ -193,6 +216,26 @@ const AccessibleRouteSchema = z
     accessibilityHighlights: z
       .array(z.string())
       .openapi({ example: ["全程低地板公車", "出入口設有電梯"] }),
+    accessibilityScore: z
+      .number()
+      .optional()
+      .openapi({
+        example: 74,
+        description:
+          "0–100 evidence-based route accessibility score. " +
+          "65% accessibility (facility quality + critical features) + 35% travel time. " +
+          "≥80 Excellent, 60–79 Good, 40–59 Fair, 20–39 Poor, <20 Critical.",
+      }),
+    accessibilityLabel: z
+      .enum(["excellent", "good", "fair", "poor", "critical"])
+      .optional()
+      .openapi({
+        example: "good",
+        description: "Human-readable label for accessibilityScore",
+      }),
+    scoreComponents: ScoreComponentsSchema.optional().openapi({
+      description: "Breakdown of the accessibilityScore into sub-components",
+    }),
   })
   .openapi("AccessibleRoute");
 

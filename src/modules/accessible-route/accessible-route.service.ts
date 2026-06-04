@@ -2,6 +2,7 @@ import { tdxFetch } from "../../config/fetch";
 import { busUrl, metroUrl, CITY_METRO_SYSTEMS } from "../../config/transit";
 import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
 import { orsWalkingRoute } from "../../config/ors";
+import { scoreRoute } from "../../config/a11y-scoring";
 import BusStopModel from "../../model/bus-stop.model";
 import MetroStationModel from "../../model/metro-station.model";
 import OsmA11y from "../../model/osm-a11y.model";
@@ -80,6 +81,16 @@ export interface AccessibleRoute {
   totalMinutes: number;
   legs: (WalkLeg | BusLeg | MetroLeg)[];
   accessibilityHighlights: string[];
+  /** 0–100 evidence-based accessibility score. Set by scoreAndRank(). */
+  accessibilityScore?: number;
+  /** Semantic label for the score. Set by scoreAndRank(). */
+  accessibilityLabel?: "excellent" | "good" | "fair" | "poor" | "critical";
+  /** Score sub-components for debugging. Set by scoreAndRank(). */
+  scoreComponents?: {
+    facilityScore: number;
+    timeScore: number;
+    criticalFeatureScore: number;
+  };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -680,35 +691,7 @@ async function buildMetroCandidate(
   };
 }
 
-// ─── OSM tag-based accessibility scoring ─────────────────────────────────────
-
-const OSM_A11Y_WEIGHTS: Record<string, Record<string, number>> = {
-  wheelchair:                  { yes: 10, limited: 4, designated: 8, no: -8 },
-  "toilets:wheelchair":        { yes: 8, limited: 3 },
-  elevator:                    { yes: 8 },
-  highway:                     { elevator: 8, dropped_kerb: 4 },
-  "ramp:wheelchair":           { yes: 6 },
-  automatic_door:              { yes: 2 },
-  kerb:                        { flush: 3, lowered: 3, raised: -3 },
-  tactile_paving:              { yes: 2 },
-  "traffic_signals:sound":     { yes: 2 },
-  "traffic_signals:vibration": { yes: 1 },
-  shelter:                     { yes: 1 },
-  bench:                       { yes: 1 },
-};
-
-const OSM_SCORE_CAP = 40;
-
-function scoreOsmFacilities(facilities: IOsmA11y[]): number {
-  let total = 0;
-  for (const f of facilities) {
-    for (const [tagKey, valueMap] of Object.entries(OSM_A11Y_WEIGHTS)) {
-      const val = f.tags?.[tagKey];
-      if (val !== undefined) total += valueMap[val] ?? 0;
-    }
-  }
-  return Math.max(0, Math.min(1, total / OSM_SCORE_CAP));
-}
+// ─── Route facility collector ─────────────────────────────────────────────────
 
 function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
   return r.legs.flatMap((leg) => {
@@ -720,15 +703,37 @@ function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
 }
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
+//
+// Uses the evidence-based scoring engine from src/config/a11y-scoring.ts.
+// See that module for full citation list and weight rationale.
+//
+// Summary of key design choices:
+//   • Accessibility / time split: 65% / 35%
+//     Rationale: wheelchair users accept 14–74% longer routes to avoid barriers
+//     (Karimi 2016; Shanghai transit study 2025). Time matters but is secondary.
+//   • Facility scoring uses scoreFacilitySet() which applies tier-weighted tag
+//     contributions + category-level bonuses from Huang et al. 2025.
+//   • Critical feature bonuses (elevator, flush kerb, ramp) apply independently
+//     of continuous tag scores to ensure Tier 1 barriers are never diluted.
+//   • Time normalization: linear across candidates — fastest = 100, slowest = 0.
 
 function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
   const maxTime = Math.max(...routes.map((r) => r.totalMinutes), 1);
+
   return routes
     .map((r) => {
-      const timeScore = 1 - r.totalMinutes / maxTime;
-      const tagScore  = scoreOsmFacilities(collectRouteFacilities(r));
-      const a11yScore = Math.min(1, tagScore + Math.min(0.2, r.accessibilityHighlights.length * 0.05));
-      return { route: r, score: a11yScore * 0.6 + timeScore * 0.4 };
+      const facilities = collectRouteFacilities(r);
+      const result = scoreRoute(
+        facilities,
+        r.totalMinutes,
+        maxTime,
+        r.accessibilityHighlights.length
+      );
+      // Attach score metadata to route for client consumption.
+      r.accessibilityScore = result.totalScore;
+      r.accessibilityLabel = result.label;
+      r.scoreComponents = result.components;
+      return { route: r, score: result.totalScore };
     })
     .sort((a, b) => b.score - a.score)
     .map((s) => s.route);
