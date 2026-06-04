@@ -1,3 +1,5 @@
+import { TaiwanCityEn } from "../types/transit";
+
 export const TDX_API_KEY = process.env.TDX_API_KEY || "";
 
 export const busUrl = {
@@ -21,4 +23,22 @@ export const busUrl = {
 
 export const trainUrl = {
   liveBoardUrl: "https://tdx.transportdata.tw/api/basic/v2/Rail/TRA/LiveBoard",
+};
+
+const METRO_BASE = "https://tdx.transportdata.tw/api/basic/v2/Rail/Metro";
+
+export const metroUrl = {
+  stationUrl:         (s: string) => `${METRO_BASE}/Station/${s}`,
+  stationOfLineUrl:   (s: string) => `${METRO_BASE}/StationOfLine/${s}`,
+  s2sTravelTimeUrl:   (s: string) => `${METRO_BASE}/S2STravelTime/${s}`,
+  frequencyUrl:       (s: string) => `${METRO_BASE}/Frequency/${s}`,
+  stationFacilityUrl: (s: string) => `${METRO_BASE}/StationFacility/${s}`,
+};
+
+export const CITY_METRO_SYSTEMS: Partial<Record<TaiwanCityEn, string[]>> = {
+  [TaiwanCityEn.Taipei]:    ["TRTC"],
+  [TaiwanCityEn.NewTaipei]: ["NTMC", "KLRT"],
+  [TaiwanCityEn.Taoyuan]:   ["TYMC"],
+  [TaiwanCityEn.Taichung]:  ["TMRT"],
+  [TaiwanCityEn.Kaohsiung]: ["KRTC"],
 };

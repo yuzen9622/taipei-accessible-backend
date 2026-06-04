@@ -76,6 +76,15 @@ export interface IOsmA11y {
   importedAt: Date;
 }
 
+export interface ITdxMetroStation {
+  stationUid: string;
+  stationName: { Zh_tw: string; En?: string };
+  railSystem: string;
+  lineIds: string[];
+  location: { type: "Point"; coordinates: [number, number] };
+  importedAt: Date;
+}
+
 export interface AgentResponse {
   action:
     | "findNearbyA11y"

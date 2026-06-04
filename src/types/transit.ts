@@ -119,3 +119,57 @@ export type BusRealtimeNearbyStop = {
   SrcUpdateTime: string;
   UpdateTime: string;
 };
+
+// ─── Metro TDX response shapes ────────────────────────────────────────────────
+// Note: TDX Metro APIs use bare IDs (e.g. "G0") not prefixed UIDs ("TMRT-G0").
+// The import script and service construct full UIDs by prepending the railSystem.
+
+export type TdxMetroStation = {
+  StationUID: string;        // prefixed, e.g. "TMRT-G0"
+  StationID: string;         // bare, e.g. "G0"
+  StationName: { Zh_tw: string; En: string };
+  StationPosition: { PositionLon: number; PositionLat: number };
+};
+
+export type TdxMetroStationOfLine = {
+  LineID: string;            // bare, e.g. "G" (no system prefix, no Direction field)
+  Stations: Array<{
+    Sequence: number;
+    StationID: string;       // bare, e.g. "G0"
+    StationName: { Zh_tw: string; En: string };
+    CumulativeDistance?: number;
+  }>;
+};
+
+export type TdxMetroS2STravelTimeRecord = {
+  LineID: string;
+  RouteID?: string;
+  TravelTimes: Array<{
+    Sequence: number;
+    FromStationID: string;   // bare, e.g. "G0"
+    ToStationID: string;
+    RunTime: number;         // SECONDS
+    StopTime: number;
+  }>;
+};
+
+export type TdxMetroFrequencyRecord = {
+  LineID: string;
+  RouteID?: string;
+  Headways: Array<{
+    StartTime?: string;      // "HH:mm"
+    EndTime?: string;
+    MinHeadwayMins: number;
+    MaxHeadwayMins: number;
+  }>;
+  OperationTime?: { StartTime: string; EndTime: string };
+};
+
+export type TdxMetroStationFacility = {
+  StationUID: string;
+  Facilities: Array<{
+    FacilityType: number;
+    FacilityName?: { Zh_tw: string };
+    Quantity?: number;
+  }>;
+};

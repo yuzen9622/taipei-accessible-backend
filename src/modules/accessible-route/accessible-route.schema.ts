@@ -14,7 +14,7 @@ export const AccessibleRouteBodySchema = z
     origin: z
       .union([
         z.string().openapi({ description: "Place name to geocode" }),
-        CoordSchema.extend({
+        z.object({
           latitude: z.number(),
           longitude: z.number(),
         }).openapi({ description: "Explicit coordinates" }),
@@ -23,7 +23,7 @@ export const AccessibleRouteBodySchema = z
     destination: z
       .union([
         z.string().openapi({ description: "Place name to geocode" }),
-        CoordSchema.extend({
+        z.object({
           latitude: z.number(),
           longitude: z.number(),
         }).openapi({ description: "Explicit coordinates" }),
@@ -116,14 +116,42 @@ const BusLegSchema = z
   })
   .openapi("BusLeg");
 
+const MetroLegSchema = z
+  .object({
+    type: z.literal("METRO").openapi({ example: "METRO" }),
+    railSystem: z.string().openapi({ example: "TRTC" }),
+    lineName: z.string().openapi({ example: "TRTC-R" }),
+    lineUid: z.string().openapi({ example: "TRTC-R" }),
+    departureStation: z.string().openapi({ example: "市政府站" }),
+    arrivalStation: z.string().openapi({ example: "台北車站" }),
+    departureStationUid: z.string().openapi({ example: "TRTC-R10" }),
+    arrivalStationUid: z.string().openapi({ example: "TRTC-R02" }),
+    direction: z
+      .union([z.literal(0), z.literal(1)])
+      .openapi({ example: 0 }),
+    stopsCount: z.number().openapi({ example: 5 }),
+    rideMinutes: z.number().openapi({ example: 10 }),
+    waitInfo: WaitInfoSchema,
+    estimatedWaitMinutes: z.number().openapi({ example: 3 }),
+    polyline: z
+      .array(z.tuple([z.number(), z.number()]))
+      .openapi({ example: [[121.567, 25.041], [121.555, 25.047]] }),
+    departureStationA11y: z.array(OsmA11ySchema),
+    arrivalStationA11y: z.array(OsmA11ySchema),
+    facilityHighlights: z
+      .array(z.string())
+      .openapi({ example: ["乘車站有電梯", "下車站有無障礙廁所"] }),
+  })
+  .openapi("MetroLeg");
+
 const AccessibleRouteSchema = z
   .object({
     routeId: z.string().openapi({ example: "route-001" }),
     routeName: z.string().openapi({ example: "信義幹線" }),
     totalMinutes: z.number().openapi({ example: 18 }),
     legs: z
-      .array(z.discriminatedUnion("type", [WalkLegSchema, BusLegSchema]))
-      .openapi({ description: "Ordered legs: walk → bus → walk" }),
+      .array(z.discriminatedUnion("type", [WalkLegSchema, BusLegSchema, MetroLegSchema]))
+      .openapi({ description: "Ordered legs: walk → transit → walk" }),
     accessibilityHighlights: z
       .array(z.string())
       .openapi({ example: ["全程低地板公車", "出入口設有電梯"] }),

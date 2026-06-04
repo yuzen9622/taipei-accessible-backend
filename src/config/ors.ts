@@ -31,7 +31,7 @@ function haversineCoords(a: [number, number], b: [number, number]): number {
 
 function straightLineRoute(
   from: [number, number],
-  to: [number, number]
+  to: [number, number],
 ): WalkingRoute {
   const distanceM = haversineCoords(from, to);
   return {
@@ -44,7 +44,7 @@ function straightLineRoute(
 export async function orsWalkingRoute(
   from: [number, number], // [lng, lat]
   to: [number, number],
-  wheelchair = true
+  wheelchair = true,
 ): Promise<WalkingRoute> {
   const apiKey = process.env.ORS_API_KEY;
 

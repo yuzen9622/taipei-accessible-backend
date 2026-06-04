@@ -1,11 +1,20 @@
 import { tdxFetch } from "../../config/fetch";
-import { busUrl } from "../../config/transit";
+import { busUrl, metroUrl, CITY_METRO_SYSTEMS } from "../../config/transit";
 import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
 import { orsWalkingRoute } from "../../config/ors";
 import BusStopModel from "../../model/bus-stop.model";
+import MetroStationModel from "../../model/metro-station.model";
 import OsmA11y from "../../model/osm-a11y.model";
-import { IOsmA11y, ITdxBusStop } from "../../types";
-import { BusRoute, BusRealTimeByFrequency } from "../../types/transit";
+import { IOsmA11y, ITdxBusStop, ITdxMetroStation } from "../../types";
+import {
+  BusRoute,
+  BusRealTimeByFrequency,
+  TdxMetroStationOfLine,
+  TdxMetroS2STravelTimeRecord,
+  TdxMetroFrequencyRecord,
+  TdxMetroStationFacility,
+} from "../../types/transit";
+import { TaiwanCityEn } from "../../types/transit";
 
 // ─── Response types ──────────────────────────────────────────────────────────
 
@@ -45,11 +54,31 @@ export interface BusLeg {
   nearestBus?: NearestBus;
 }
 
+export interface MetroLeg {
+  type: "METRO";
+  railSystem: string;
+  lineName: string;
+  lineUid: string;
+  departureStation: string;
+  arrivalStation: string;
+  departureStationUid: string;
+  arrivalStationUid: string;
+  direction: 0 | 1;
+  stopsCount: number;
+  rideMinutes: number;
+  waitInfo: WaitInfo;
+  estimatedWaitMinutes: number;
+  polyline: [number, number][];
+  departureStationA11y: IOsmA11y[];
+  arrivalStationA11y: IOsmA11y[];
+  facilityHighlights: string[];
+}
+
 export interface AccessibleRoute {
   routeId: string;
   routeName: string;
   totalMinutes: number;
-  legs: (WalkLeg | BusLeg)[];
+  legs: (WalkLeg | BusLeg | MetroLeg)[];
   accessibilityHighlights: string[];
 }
 
@@ -362,6 +391,269 @@ async function buildCandidate(
   };
 }
 
+// ─── Metro helpers ───────────────────────────────────────────────────────────
+
+const FACILITY_LABELS: Record<number, string> = {
+  1: "有電梯",
+  2: "有電扶梯",
+  3: "有無障礙廁所",
+  4: "有無障礙停車位",
+  5: "有導盲磚",
+};
+
+async function fetchMetroStationOfLine(
+  railSystem: string
+): Promise<TdxMetroStationOfLine[]> {
+  const resp = await tdxFetch(`${metroUrl.stationOfLineUrl(railSystem)}?$format=JSON`);
+  if (!resp.ok) return [];
+  return (await resp.json()) as TdxMetroStationOfLine[];
+}
+
+async function fetchMetroTravelTimes(
+  railSystem: string
+): Promise<Map<string, number>> {
+  const travelMap = new Map<string, number>();
+  try {
+    const resp = await tdxFetch(`${metroUrl.s2sTravelTimeUrl(railSystem)}?$format=JSON`);
+    if (!resp.ok) return travelMap;
+    const records = (await resp.json()) as TdxMetroS2STravelTimeRecord[];
+    // TDX nests travel times under TravelTimes[] with bare StationIDs and RunTime in seconds
+    for (const record of records) {
+      for (const tt of record.TravelTimes ?? []) {
+        const fromUid = `${railSystem}-${tt.FromStationID}`;
+        const toUid   = `${railSystem}-${tt.ToStationID}`;
+        travelMap.set(`${fromUid}|${toUid}`, Math.round(tt.RunTime / 60));
+      }
+    }
+  } catch { /* return empty map */ }
+  return travelMap;
+}
+
+async function fetchMetroHeadway(
+  railSystem: string,
+  lineUid: string
+): Promise<number> {
+  try {
+    // lineUid is e.g. "TMRT-G"; TDX filters by bare LineID e.g. "G"
+    const lineId = lineUid.startsWith(`${railSystem}-`) ? lineUid.slice(railSystem.length + 1) : lineUid;
+    const resp = await tdxFetch(
+      `${metroUrl.frequencyUrl(railSystem)}?$format=JSON&$filter=LineID eq '${lineId}'`
+    );
+    if (!resp.ok) return 6;
+    const records = (await resp.json()) as TdxMetroFrequencyRecord[];
+    if (!Array.isArray(records) || !records.length) return 6;
+
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+
+    // Collect all headway entries across records, find current time window
+    const allHeadways = records.flatMap((r) => r.Headways ?? []);
+    const hw =
+      allHeadways.find((h) => {
+        if (!h.StartTime || !h.EndTime) return false;
+        const [sh, sm] = h.StartTime.split(":").map(Number);
+        const [eh, em] = h.EndTime.split(":").map(Number);
+        return nowMins >= sh * 60 + sm && nowMins <= eh * 60 + em;
+      }) ?? allHeadways[0];
+
+    const min: number = hw?.MinHeadwayMins ?? 6;
+    const max: number = hw?.MaxHeadwayMins ?? 6;
+    return Math.round((min + max) / 2);
+  } catch {
+    return 6;
+  }
+}
+
+async function fetchMetroFacilities(
+  railSystem: string,
+  stationUid: string
+): Promise<TdxMetroStationFacility | null> {
+  try {
+    const resp = await tdxFetch(
+      `${metroUrl.stationFacilityUrl(railSystem)}?$format=JSON&$filter=StationUID eq '${stationUid}'`
+    );
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as TdxMetroStationFacility[];
+    return data[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Metro candidate builder ──────────────────────────────────────────────────
+
+async function buildMetroCandidate(
+  railSystem: string,
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number }
+): Promise<AccessibleRoute | null> {
+  const originCoords: [number, number] = [origin.lng, origin.lat];
+  const destCoords: [number, number] = [destination.lng, destination.lat];
+
+  const [originStations, destStations] = await Promise.all([
+    MetroStationModel.find({
+      ...nearQuery(originCoords, 800),
+      railSystem,
+    }).limit(5).lean<ITdxMetroStation[]>(),
+    MetroStationModel.find({
+      ...nearQuery(destCoords, 800),
+      railSystem,
+    }).limit(5).lean<ITdxMetroStation[]>(),
+  ]);
+  if (!originStations.length || !destStations.length) return null;
+
+  const originLineIds = new Set(originStations.flatMap((s) => s.lineIds));
+  const destLineIds = new Set(destStations.flatMap((s) => s.lineIds));
+  const commonLines = [...originLineIds].filter((id) => destLineIds.has(id));
+  if (!commonLines.length) return null;
+
+  const [stationOfLines, travelMap] = await Promise.all([
+    fetchMetroStationOfLine(railSystem),
+    fetchMetroTravelTimes(railSystem),
+  ]);
+
+  // Find direction where boardStation appears before alightStation
+  let direction: 0 | 1 | null = null;
+  let orderedSeq: TdxMetroStationOfLine["Stations"] = [];
+  let lineUid = "";
+  let boardStation: ITdxMetroStation | null = null;
+  let alightStation: ITdxMetroStation | null = null;
+
+  // TDX StationOfLine uses bare StationID (e.g. "G0"); stationUid is prefixed ("TMRT-G0").
+  // lineUid stored in MongoDB is "TMRT-G"; TDX LineID is "G".
+  outer: for (const lid of commonLines) {
+    const bareLineId = lid.startsWith(`${railSystem}-`) ? lid.slice(railSystem.length + 1) : lid;
+    for (const sol of stationOfLines) {
+      if (sol.LineID !== bareLineId) continue;
+      for (const os of originStations.filter((s) => s.lineIds.includes(lid))) {
+        for (const ds of destStations.filter((s) => s.lineIds.includes(lid))) {
+          const bareBoard  = os.stationUid.startsWith(`${railSystem}-`) ? os.stationUid.slice(railSystem.length + 1) : os.stationUid;
+          const bareAlight = ds.stationUid.startsWith(`${railSystem}-`) ? ds.stationUid.slice(railSystem.length + 1) : ds.stationUid;
+          const seqBoard  = sol.Stations.findIndex((s) => s.StationID === bareBoard);
+          const seqAlight = sol.Stations.findIndex((s) => s.StationID === bareAlight);
+          if (seqBoard !== -1 && seqAlight !== -1 && seqBoard < seqAlight) {
+            direction = 0; // TDX TMRT StationOfLine has no Direction field; 0 = forward along sequence
+            orderedSeq = sol.Stations.slice(seqBoard, seqAlight + 1);
+            lineUid = lid;
+            boardStation = os;
+            alightStation = ds;
+            break outer;
+          }
+        }
+      }
+    }
+  }
+  if (direction === null || !boardStation || !alightStation) return null;
+
+  // Travel time: direct OD pair first, else sum consecutive segments
+  let rideMinutes = travelMap.get(`${boardStation.stationUid}|${alightStation.stationUid}`) ?? null;
+  if (rideMinutes === null) {
+    let sum = 0;
+    for (let i = 0; i < orderedSeq.length - 1; i++) {
+      const fromUid = `${railSystem}-${orderedSeq[i].StationID}`;
+      const toUid   = `${railSystem}-${orderedSeq[i + 1].StationID}`;
+      sum += travelMap.get(`${fromUid}|${toUid}`) ?? 2;
+    }
+    rideMinutes = sum;
+  }
+
+  const avgHeadway = await fetchMetroHeadway(railSystem, lineUid);
+  const waitMinutes = Math.round(avgHeadway / 2);
+  const waitInfo: WaitInfo = { minutes: waitMinutes, source: "schedule" };
+
+  const boardCoords  = boardStation.location.coordinates  as [number, number];
+  const alightCoords = alightStation.location.coordinates as [number, number];
+
+  const [walkTo, walkFrom, boardFacility, alightFacility, boardA11y, alightA11y] =
+    await Promise.all([
+      orsWalkingRoute(originCoords, boardCoords),
+      orsWalkingRoute(alightCoords, destCoords),
+      fetchMetroFacilities(railSystem, boardStation.stationUid),
+      fetchMetroFacilities(railSystem, alightStation.stationUid),
+      OsmA11y.find(nearQuery(boardCoords, 200)).limit(5).lean(),
+      OsmA11y.find(nearQuery(alightCoords, 200)).limit(5).lean(),
+    ]);
+
+  const facilityHighlights: string[] = [];
+  for (const [facility, prefix] of [
+    [boardFacility,  "乘車站"],
+    [alightFacility, "下車站"],
+  ] as [TdxMetroStationFacility | null, string][]) {
+    if (!facility) continue;
+    for (const f of facility.Facilities) {
+      const label = FACILITY_LABELS[f.FacilityType];
+      if (label) facilityHighlights.push(`${prefix}${label}`);
+    }
+  }
+
+  const highlights: string[] = [...facilityHighlights];
+  if ((boardA11y as any[]).some((f: any) => f.category === "elevator"))
+    highlights.push("乘車站附近有電梯");
+  if ((alightA11y as any[]).some((f: any) => f.category === "elevator"))
+    highlights.push("下車站附近有電梯");
+
+  const metroPolyline: [number, number][] = orderedSeq
+    .map((s) => {
+      const doc = [...originStations, ...destStations].find(
+        (d) => d.stationUid === `${railSystem}-${s.StationID}`
+      );
+      return doc?.location.coordinates as [number, number] | undefined;
+    })
+    .filter((c): c is [number, number] => !!c);
+
+  const totalMinutes = Math.round(
+    walkTo.durationSec / 60 + waitMinutes + rideMinutes + walkFrom.durationSec / 60
+  );
+
+  const metroLeg: MetroLeg = {
+    type: "METRO",
+    railSystem,
+    lineName: lineUid,
+    lineUid,
+    departureStation: boardStation.stationName.Zh_tw,
+    arrivalStation: alightStation.stationName.Zh_tw,
+    departureStationUid: boardStation.stationUid,
+    arrivalStationUid: alightStation.stationUid,
+    direction,
+    stopsCount: orderedSeq.length - 1,
+    rideMinutes,
+    waitInfo,
+    estimatedWaitMinutes: waitMinutes,
+    polyline: metroPolyline,
+    departureStationA11y: boardA11y as IOsmA11y[],
+    arrivalStationA11y: alightA11y as IOsmA11y[],
+    facilityHighlights,
+  };
+
+  return {
+    routeId: `METRO-${boardStation.stationUid}-${alightStation.stationUid}`,
+    routeName: `${railSystem} ${boardStation.stationName.Zh_tw} → ${alightStation.stationName.Zh_tw}`,
+    totalMinutes,
+    legs: [
+      {
+        type: "WALK",
+        from: "出發地",
+        to: boardStation.stationName.Zh_tw,
+        distanceM: Math.round(walkTo.distanceM),
+        minutesEst: Math.round(walkTo.durationSec / 60),
+        polyline: walkTo.polyline,
+        a11yFacilities: boardA11y as IOsmA11y[],
+      },
+      metroLeg,
+      {
+        type: "WALK",
+        from: alightStation.stationName.Zh_tw,
+        to: "目的地",
+        distanceM: Math.round(walkFrom.distanceM),
+        minutesEst: Math.round(walkFrom.durationSec / 60),
+        polyline: walkFrom.polyline,
+        a11yFacilities: alightA11y as IOsmA11y[],
+      },
+    ],
+    accessibilityHighlights: highlights,
+  };
+}
+
 // ─── Scoring ─────────────────────────────────────────────────────────────────
 
 function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
@@ -369,7 +661,7 @@ function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
   return routes
     .map((r) => {
       const timeScore = 1 - r.totalMinutes / maxTime;
-      const a11yScore = r.accessibilityHighlights.length / 4; // max 4 highlights
+      const a11yScore = Math.min(1, r.accessibilityHighlights.length / 4);
       return { route: r, score: a11yScore * 0.6 + timeScore * 0.4 };
     })
     .sort((a, b) => b.score - a.score)
@@ -380,10 +672,20 @@ function deduplicateRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
   const seen = new Set<string>();
   return routes.filter((r) => {
     const busLeg = r.legs.find((l): l is BusLeg => l.type === "BUS");
-    if (!busLeg) return true;
-    const key = `${busLeg.departureStop}|${busLeg.arrivalStop}|${busLeg.direction}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
+    if (busLeg) {
+      const key = `${busLeg.departureStop}|${busLeg.arrivalStop}|${busLeg.direction}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }
+    const metroLeg = r.legs.find((l): l is MetroLeg => l.type === "METRO");
+    if (metroLeg) {
+      const key = `${metroLeg.departureStationUid}|${metroLeg.arrivalStationUid}|${metroLeg.railSystem}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }
+    // No transit leg to dedupe on — keep the route.
     return true;
   });
 }
@@ -393,37 +695,45 @@ function deduplicateRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
 export async function findAccessibleRoutes(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
-  city: string
+  city: TaiwanCityEn
 ): Promise<AccessibleRoute[]> {
-  // Step 1: Find nearby stops in MongoDB
   const geoQuery = (coord: { lat: number; lng: number }, dist: number) =>
     nearQuery([coord.lng, coord.lat], dist);
 
-  const [originStops, destStops] = await Promise.all([
-    BusStopModel.find(geoQuery(origin, 400)).limit(20).lean<ITdxBusStop[]>(),
-    BusStopModel.find(geoQuery(destination, 400)).limit(20).lean<ITdxBusStop[]>(),
-  ]);
+  // Bus search
+  const busSearchPromise = (async (): Promise<AccessibleRoute[]> => {
+    const [originStops, destStops] = await Promise.all([
+      BusStopModel.find(geoQuery(origin, 400)).limit(20).lean<ITdxBusStop[]>(),
+      BusStopModel.find(geoQuery(destination, 400)).limit(20).lean<ITdxBusStop[]>(),
+    ]);
+    if (!originStops.length || !destStops.length) return [];
 
-  if (!originStops.length || !destStops.length) return [];
+    const originRouteIds = new Set(originStops.flatMap((s) => s.subRouteIds));
+    const destRouteIds   = new Set(destStops.flatMap((s) => s.subRouteIds));
+    const connecting     = [...originRouteIds].filter((id) => destRouteIds.has(id));
+    if (!connecting.length) return [];
 
-  // Step 2: Find routes serving stops near both ends
-  const originRouteIds = new Set(originStops.flatMap((s) => s.subRouteIds));
-  const destRouteIds = new Set(destStops.flatMap((s) => s.subRouteIds));
-  const connecting = [...originRouteIds].filter((id) => destRouteIds.has(id));
+    const candidates = await Promise.all(
+      connecting.slice(0, 5).map((routeId) => {
+        const originStop = originStops.find((s) => s.subRouteIds.includes(routeId)) ?? null;
+        const destStop   = destStops.find((s) => s.subRouteIds.includes(routeId)) ?? null;
+        return buildCandidate(routeId, city, origin, destination, originStop, destStop);
+      })
+    );
+    return candidates.filter(Boolean) as AccessibleRoute[];
+  })();
 
-  if (!connecting.length) return [];
-
-  // Step 3: For each connecting route, pick the closest stops and build candidate
-  const candidates = await Promise.all(
-    connecting.slice(0, 5).map((routeId) => {
-      const originStop =
-        originStops.find((s) => s.subRouteIds.includes(routeId)) ?? null;
-      const destStop =
-        destStops.find((s) => s.subRouteIds.includes(routeId)) ?? null;
-      return buildCandidate(routeId, city, origin, destination, originStop, destStop);
-    })
+  // Metro search — one promise per rail system serving this city
+  const systems = CITY_METRO_SYSTEMS[city] ?? [];
+  const metroPromises = systems.map((railSystem) =>
+    buildMetroCandidate(railSystem, origin, destination)
+      .then((r): AccessibleRoute[] => (r ? [r] : []))
+      .catch((): AccessibleRoute[] => [])
   );
 
-  const valid = candidates.filter(Boolean) as AccessibleRoute[];
-  return scoreAndRank(deduplicateRoutes(valid)).slice(0, 3);
+  const [busRoutes, ...metroArrays] = await Promise.all([busSearchPromise, ...metroPromises]);
+  const combined = [...busRoutes, ...metroArrays.flat()];
+  if (!combined.length) return [];
+
+  return scoreAndRank(deduplicateRoutes(combined)).slice(0, 3);
 }

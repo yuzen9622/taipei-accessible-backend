@@ -47,7 +47,7 @@ export async function accessibleRoute(
         false,
         "error",
         404,
-        "找不到連通的公車路線，請嘗試擴大搜尋範圍或確認出發地/目的地"
+        "找不到連通的公車或捷運路線，請嘗試擴大搜尋範圍或確認出發地/目的地"
       );
     }
 
