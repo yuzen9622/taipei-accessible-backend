@@ -338,15 +338,28 @@ async function buildCandidate(
   );
 
   // 7. Accessibility highlights
+  const tagVal = (nodes: IOsmA11y[], key: string, val: string) =>
+    nodes.some((f) => f.tags?.[key] === val);
+
   const highlights: string[] = [];
-  if (originA11y.some((f) => f.category === "elevator"))
+  if (originA11y.some((f) => f.category === "elevator") || tagVal(originA11y, "elevator", "yes"))
     highlights.push("上車站附近有電梯");
-  if (destA11y.some((f) => f.category === "elevator"))
+  if (destA11y.some((f) => f.category === "elevator") || tagVal(destA11y, "elevator", "yes"))
     highlights.push("下車站附近有電梯");
   if (originA11y.some((f) => f.category === "kerb_cut" || f.category === "ramp"))
     highlights.push("上車站附近有無障礙坡道");
   if (destA11y.some((f) => f.category === "kerb_cut" || f.category === "ramp"))
     highlights.push("下車站附近有無障礙坡道");
+  if (tagVal(originA11y, "toilets:wheelchair", "yes") || tagVal(destA11y, "toilets:wheelchair", "yes"))
+    highlights.push("站點附近有無障礙廁所");
+  if (tagVal(originA11y, "tactile_paving", "yes") || tagVal(destA11y, "tactile_paving", "yes"))
+    highlights.push("附近有導盲磚");
+  if (tagVal(originA11y, "traffic_signals:sound", "yes") || tagVal(destA11y, "traffic_signals:sound", "yes"))
+    highlights.push("附近有音響號誌");
+  if (tagVal(originA11y, "wheelchair", "yes"))
+    highlights.push("上車站設施完善");
+  if (tagVal(destA11y, "wheelchair", "yes"))
+    highlights.push("下車站設施完善");
 
   const busLeg: BusLeg = {
     type: "BUS",
@@ -586,11 +599,24 @@ async function buildMetroCandidate(
     }
   }
 
+  const osmTagVal = (nodes: IOsmA11y[], key: string, val: string) =>
+    nodes.some((f) => f.tags?.[key] === val);
+
   const highlights: string[] = [...facilityHighlights];
-  if ((boardA11y as any[]).some((f: any) => f.category === "elevator"))
+  if (boardA11y.some((f: any) => f.category === "elevator") || osmTagVal(boardA11y as IOsmA11y[], "elevator", "yes"))
     highlights.push("乘車站附近有電梯");
-  if ((alightA11y as any[]).some((f: any) => f.category === "elevator"))
+  if (alightA11y.some((f: any) => f.category === "elevator") || osmTagVal(alightA11y as IOsmA11y[], "elevator", "yes"))
     highlights.push("下車站附近有電梯");
+  if (osmTagVal(boardA11y as IOsmA11y[], "toilets:wheelchair", "yes") || osmTagVal(alightA11y as IOsmA11y[], "toilets:wheelchair", "yes"))
+    highlights.push("站點附近有無障礙廁所");
+  if (osmTagVal(boardA11y as IOsmA11y[], "tactile_paving", "yes") || osmTagVal(alightA11y as IOsmA11y[], "tactile_paving", "yes"))
+    highlights.push("附近有導盲磚");
+  if (osmTagVal(boardA11y as IOsmA11y[], "traffic_signals:sound", "yes") || osmTagVal(alightA11y as IOsmA11y[], "traffic_signals:sound", "yes"))
+    highlights.push("附近有音響號誌");
+  if (osmTagVal(boardA11y as IOsmA11y[], "wheelchair", "yes"))
+    highlights.push("乘車站設施完善");
+  if (osmTagVal(alightA11y as IOsmA11y[], "wheelchair", "yes"))
+    highlights.push("下車站設施完善");
 
   const metroPolyline: [number, number][] = orderedSeq
     .map((s) => {
@@ -654,6 +680,45 @@ async function buildMetroCandidate(
   };
 }
 
+// ─── OSM tag-based accessibility scoring ─────────────────────────────────────
+
+const OSM_A11Y_WEIGHTS: Record<string, Record<string, number>> = {
+  wheelchair:                  { yes: 10, limited: 4, designated: 8, no: -8 },
+  "toilets:wheelchair":        { yes: 8, limited: 3 },
+  elevator:                    { yes: 8 },
+  highway:                     { elevator: 8, dropped_kerb: 4 },
+  "ramp:wheelchair":           { yes: 6 },
+  automatic_door:              { yes: 2 },
+  kerb:                        { flush: 3, lowered: 3, raised: -3 },
+  tactile_paving:              { yes: 2 },
+  "traffic_signals:sound":     { yes: 2 },
+  "traffic_signals:vibration": { yes: 1 },
+  shelter:                     { yes: 1 },
+  bench:                       { yes: 1 },
+};
+
+const OSM_SCORE_CAP = 40;
+
+function scoreOsmFacilities(facilities: IOsmA11y[]): number {
+  let total = 0;
+  for (const f of facilities) {
+    for (const [tagKey, valueMap] of Object.entries(OSM_A11Y_WEIGHTS)) {
+      const val = f.tags?.[tagKey];
+      if (val !== undefined) total += valueMap[val] ?? 0;
+    }
+  }
+  return Math.max(0, Math.min(1, total / OSM_SCORE_CAP));
+}
+
+function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
+  return r.legs.flatMap((leg) => {
+    if (leg.type === "WALK") return leg.a11yFacilities;
+    if (leg.type === "BUS") return [...leg.departureStopA11y, ...leg.arrivalStopA11y];
+    if (leg.type === "METRO") return [...leg.departureStationA11y, ...leg.arrivalStationA11y];
+    return [];
+  });
+}
+
 // ─── Scoring ─────────────────────────────────────────────────────────────────
 
 function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
@@ -661,7 +726,8 @@ function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
   return routes
     .map((r) => {
       const timeScore = 1 - r.totalMinutes / maxTime;
-      const a11yScore = Math.min(1, r.accessibilityHighlights.length / 4);
+      const tagScore  = scoreOsmFacilities(collectRouteFacilities(r));
+      const a11yScore = Math.min(1, tagScore + Math.min(0.2, r.accessibilityHighlights.length * 0.05));
       return { route: r, score: a11yScore * 0.6 + timeScore * 0.4 };
     })
     .sort((a, b) => b.score - a.score)

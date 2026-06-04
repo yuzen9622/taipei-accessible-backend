@@ -16,7 +16,7 @@ import { tdxFetch } from "../config/fetch";
 import { TaiwanCityEn } from "../types/transit";
 import { BusRoute } from "../types/transit";
 
-const DELAY_MS = 2000;
+const DELAY_MS = 60000;
 const TOP = 10000;
 
 const ALL_CITIES = Object.values(TaiwanCityEn);
@@ -114,7 +114,9 @@ async function main() {
   console.log("Connected to MongoDB\n");
 
   // Allow --city=CityName argument to import a single city
-  const cityArg = process.argv.find((a) => a.startsWith("--city="))?.split("=")[1];
+  const cityArg = process.argv
+    .find((a) => a.startsWith("--city="))
+    ?.split("=")[1];
   const cities = cityArg ? [cityArg] : ALL_CITIES;
 
   let total = 0;

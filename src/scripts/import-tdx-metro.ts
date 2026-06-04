@@ -15,7 +15,7 @@ import { TdxMetroStation, TdxMetroStationOfLine } from "../types/transit";
 // TDX Station API returns StationUID with system prefix (e.g. "TMRT-G0").
 // StationOfLine returns bare StationID (e.g. "G0") — we construct the full UID below.
 
-const DELAY_MS = 2000;
+const DELAY_MS = 60000;
 const CHUNK = 500;
 
 const ALL_SYSTEMS = ["TRTC", "KRTC", "TYMC", "TMRT", "NTMC", "KLRT"];
@@ -25,10 +25,14 @@ function sleep(ms: number) {
 }
 
 async function importSystem(railSystem: string): Promise<number> {
-  const stationResp = await tdxFetch(`${metroUrl.stationUrl(railSystem)}?$format=JSON`);
+  const stationResp = await tdxFetch(
+    `${metroUrl.stationUrl(railSystem)}?$format=JSON`,
+  );
   if (!stationResp.ok) {
     const body = await stationResp.text();
-    console.warn(`  TDX ${stationResp.status} for ${railSystem} stations: ${body.slice(0, 120)}`);
+    console.warn(
+      `  TDX ${stationResp.status} for ${railSystem} stations: ${body.slice(0, 120)}`,
+    );
     return 0;
   }
   const stations = (await stationResp.json()) as TdxMetroStation[];
@@ -37,7 +41,9 @@ async function importSystem(railSystem: string): Promise<number> {
     return 0;
   }
 
-  const lineResp = await tdxFetch(`${metroUrl.stationOfLineUrl(railSystem)}?$format=JSON`);
+  const lineResp = await tdxFetch(
+    `${metroUrl.stationOfLineUrl(railSystem)}?$format=JSON`,
+  );
   const stationOfLines: TdxMetroStationOfLine[] = lineResp.ok
     ? ((await lineResp.json()) as TdxMetroStationOfLine[])
     : [];
@@ -55,19 +61,27 @@ async function importSystem(railSystem: string): Promise<number> {
   }
 
   const ops = stations
-    .filter((s) => s.StationUID && s.StationPosition?.PositionLon && s.StationPosition?.PositionLat)
+    .filter(
+      (s) =>
+        s.StationUID &&
+        s.StationPosition?.PositionLon &&
+        s.StationPosition?.PositionLat,
+    )
     .map((s) => ({
       updateOne: {
         filter: { stationUid: s.StationUID },
         update: {
           $set: {
-            stationUid:  s.StationUID,
+            stationUid: s.StationUID,
             stationName: { Zh_tw: s.StationName.Zh_tw, En: s.StationName.En },
             railSystem,
-            lineIds:     [...(lineMap.get(s.StationUID) ?? [])],
+            lineIds: [...(lineMap.get(s.StationUID) ?? [])],
             location: {
               type: "Point",
-              coordinates: [s.StationPosition.PositionLon, s.StationPosition.PositionLat],
+              coordinates: [
+                s.StationPosition.PositionLon,
+                s.StationPosition.PositionLat,
+              ],
             },
             importedAt: new Date(),
           },
@@ -80,7 +94,9 @@ async function importSystem(railSystem: string): Promise<number> {
 
   let upserted = 0;
   for (let i = 0; i < ops.length; i += CHUNK) {
-    const result = await MetroStationModel.bulkWrite(ops.slice(i, i + CHUNK), { ordered: false });
+    const result = await MetroStationModel.bulkWrite(ops.slice(i, i + CHUNK), {
+      ordered: false,
+    });
     upserted += result.upsertedCount + result.modifiedCount;
   }
   return upserted;
@@ -93,7 +109,9 @@ async function main() {
   await mongoose.connect(dbUrl);
   console.log("Connected to MongoDB\n");
 
-  const systemArg = process.argv.find((a) => a.startsWith("--system="))?.split("=")[1];
+  const systemArg = process.argv
+    .find((a) => a.startsWith("--system="))
+    ?.split("=")[1];
   const systems = systemArg ? [systemArg] : ALL_SYSTEMS;
 
   let total = 0;

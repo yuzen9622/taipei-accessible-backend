@@ -14,21 +14,27 @@ export const AccessibleRouteBodySchema = z
     origin: z
       .union([
         z.string().openapi({ description: "Place name to geocode" }),
-        z.object({
-          latitude: z.number(),
-          longitude: z.number(),
-        }).openapi({ description: "Explicit coordinates" }),
+        z
+          .object({
+            latitude: z.number(),
+            longitude: z.number(),
+          })
+          .openapi({ description: "Explicit coordinates" }),
       ])
       .openapi({ description: "Origin — place name or {latitude, longitude}" }),
     destination: z
       .union([
         z.string().openapi({ description: "Place name to geocode" }),
-        z.object({
-          latitude: z.number(),
-          longitude: z.number(),
-        }).openapi({ description: "Explicit coordinates" }),
+        z
+          .object({
+            latitude: z.number(),
+            longitude: z.number(),
+          })
+          .openapi({ description: "Explicit coordinates" }),
       ])
-      .openapi({ description: "Destination — place name or {latitude, longitude}" }),
+      .openapi({
+        description: "Destination — place name or {latitude, longitude}",
+      }),
   })
   .strict();
 
@@ -58,7 +64,10 @@ const OsmA11ySchema = z
       .openapi({ description: "GeoJSON Point [lng, lat]" }),
     importedAt: z
       .string()
-      .openapi({ example: "2026-05-01T08:30:00.000Z", description: "ISO date" }),
+      .openapi({
+        example: "2026-05-01T08:30:00.000Z",
+        description: "ISO date",
+      }),
   })
   .openapi("OsmA11y");
 
@@ -69,19 +78,29 @@ const WalkLegSchema = z
     to: z.string().openapi({ example: "市政府站" }),
     distanceM: z.number().openapi({ example: 320 }),
     minutesEst: z.number().openapi({ example: 4 }),
-    polyline: z
-      .array(z.tuple([z.number(), z.number()]))
-      .openapi({ example: [[121.567, 25.041], [121.568, 25.042]] }),
+    polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
+      example: [
+        [121.567, 25.041],
+        [121.568, 25.042],
+      ],
+    }),
     a11yFacilities: z.array(OsmA11ySchema),
   })
   .openapi("WalkLeg");
 
 const WaitInfoSchema = z
   .object({
-    minutes: z.number().nullable().openapi({ example: 6, description: "null = no service today" }),
+    minutes: z
+      .number()
+      .nullable()
+      .openapi({ example: 6, description: "null = no service today" }),
     source: z
       .enum(["realtime", "schedule", "unavailable"])
-      .openapi({ example: "realtime", description: "realtime = TDX ETA, schedule = timetable lookup, unavailable = no data" }),
+      .openapi({
+        example: "realtime",
+        description:
+          "realtime = TDX ETA, schedule = timetable lookup, unavailable = no data",
+      }),
   })
   .openapi("WaitInfo");
 
@@ -92,7 +111,10 @@ const NearestBusSchema = z
       .tuple([z.number(), z.number()])
       .openapi({ example: [121.567, 25.041], description: "[lng, lat]" }),
     speed: z.number().optional().openapi({ example: 25, description: "km/h" }),
-    stopsAway: z.number().optional().openapi({ example: 2, description: "stops before departure stop" }),
+    stopsAway: z
+      .number()
+      .optional()
+      .openapi({ example: 2, description: "stops before departure stop" }),
   })
   .openapi("NearestBus");
 
@@ -103,13 +125,21 @@ const BusLegSchema = z
     departureStop: z.string().openapi({ example: "市政府站" }),
     arrivalStop: z.string().openapi({ example: "台北101" }),
     waitInfo: WaitInfoSchema,
-    estimatedWaitMinutes: z.number().openapi({ example: 6, description: "waitInfo.minutes ?? 0, kept for backwards compatibility" }),
+    estimatedWaitMinutes: z
+      .number()
+      .openapi({
+        example: 6,
+        description: "waitInfo.minutes ?? 0, kept for backwards compatibility",
+      }),
     direction: z
       .union([z.literal(0), z.literal(1)])
       .openapi({ example: 0, description: "0 = outbound, 1 = inbound" }),
-    polyline: z
-      .array(z.tuple([z.number(), z.number()]))
-      .openapi({ example: [[121.567, 25.041], [121.564, 25.034]] }),
+    polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
+      example: [
+        [121.567, 25.041],
+        [121.564, 25.034],
+      ],
+    }),
     departureStopA11y: z.array(OsmA11ySchema),
     arrivalStopA11y: z.array(OsmA11ySchema),
     nearestBus: NearestBusSchema.optional(),
@@ -126,20 +156,22 @@ const MetroLegSchema = z
     arrivalStation: z.string().openapi({ example: "台北車站" }),
     departureStationUid: z.string().openapi({ example: "TRTC-R10" }),
     arrivalStationUid: z.string().openapi({ example: "TRTC-R02" }),
-    direction: z
-      .union([z.literal(0), z.literal(1)])
-      .openapi({ example: 0 }),
+    direction: z.union([z.literal(0), z.literal(1)]).openapi({ example: 0 }),
     stopsCount: z.number().openapi({ example: 5 }),
     rideMinutes: z.number().openapi({ example: 10 }),
     waitInfo: WaitInfoSchema,
     estimatedWaitMinutes: z.number().openapi({ example: 3 }),
-    polyline: z
-      .array(z.tuple([z.number(), z.number()]))
-      .openapi({ example: [[121.567, 25.041], [121.555, 25.047]] }),
+    polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
+      example: [
+        [121.567, 25.041],
+        [121.555, 25.047],
+      ],
+    }),
     departureStationA11y: z.array(OsmA11ySchema),
     arrivalStationA11y: z.array(OsmA11ySchema),
     facilityHighlights: z
       .array(z.string())
+
       .openapi({ example: ["乘車站有電梯", "下車站有無障礙廁所"] }),
   })
   .openapi("MetroLeg");
@@ -150,7 +182,13 @@ const AccessibleRouteSchema = z
     routeName: z.string().openapi({ example: "信義幹線" }),
     totalMinutes: z.number().openapi({ example: 18 }),
     legs: z
-      .array(z.discriminatedUnion("type", [WalkLegSchema, BusLegSchema, MetroLegSchema]))
+      .array(
+        z.discriminatedUnion("type", [
+          WalkLegSchema,
+          BusLegSchema,
+          MetroLegSchema,
+        ]),
+      )
       .openapi({ description: "Ordered legs: walk → transit → walk" }),
     accessibilityHighlights: z
       .array(z.string())
@@ -161,7 +199,9 @@ const AccessibleRouteSchema = z
 const AccessibleRouteDataSchema = z
   .object({
     origin: CoordSchema.openapi({ example: { lat: 25.041, lng: 121.567 } }),
-    destination: CoordSchema.openapi({ example: { lat: 25.034, lng: 121.564 } }),
+    destination: CoordSchema.openapi({
+      example: { lat: 25.034, lng: 121.564 },
+    }),
     city: z.string().openapi({ example: "Taipei" }),
     routes: z.array(AccessibleRouteSchema),
   })
@@ -183,7 +223,9 @@ export const ErrorResponseSchema = z
     ok: z.boolean().openapi({ example: false }),
     status: z.enum(["success", "error"]).openapi({ example: "error" }),
     code: z.number().openapi({ example: 400 }),
-    message: z.string().openapi({ example: "Missing params or unresolvable coordinates" }),
+    message: z
+      .string()
+      .openapi({ example: "Missing params or unresolvable coordinates" }),
     data: z.unknown().optional(),
     accessToken: z.string().optional(),
   })
@@ -195,8 +237,9 @@ registry.registerPath({
   method: "post",
   path: "/a11y/accessible-route",
   tags: ["Accessibility"],
-  summary: "Accessible bus route plan",
-  description: "Finds wheelchair-accessible bus routes between an origin and destination. Each point can be a place name (geocoded via Google Maps) or explicit `{latitude, longitude}` coordinates.",
+  summary: "Accessible transit route plan",
+  description:
+    "Finds wheelchair-accessible bus and metro routes between an origin and destination. Each point can be a place name (geocoded via Google Maps) or explicit `{latitude, longitude}` coordinates. Returns up to 3 ranked routes scored by accessibility highlights and travel time.",
   request: {
     body: {
       content: { "application/json": { schema: AccessibleRouteBodySchema } },
@@ -205,15 +248,18 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Accessible route list with bus stops",
-      content: { "application/json": { schema: AccessibleRouteResponseSchema } },
+      description:
+        "Up to 3 accessible routes (bus and/or metro) ranked by accessibility score",
+      content: {
+        "application/json": { schema: AccessibleRouteResponseSchema },
+      },
     },
     400: {
       description: "Missing params or unresolvable coordinates",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
-      description: "No connected bus routes found",
+      description: "No connected bus or metro routes found",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
