@@ -114,3 +114,4 @@ logs
 *.log
 
 graphify-out/
+/docs

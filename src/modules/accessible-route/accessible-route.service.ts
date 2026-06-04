@@ -1,12 +1,13 @@
 import { tdxFetch } from "../../config/fetch";
-import { busUrl, metroUrl, CITY_METRO_SYSTEMS } from "../../config/transit";
+import { busUrl, metroUrl, thsrUrl, traUrl, CITY_METRO_SYSTEMS } from "../../config/transit";
 import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
 import { orsWalkingRoute } from "../../config/ors";
 import { scoreRoute } from "../../config/a11y-scoring";
 import BusStopModel from "../../model/bus-stop.model";
 import MetroStationModel from "../../model/metro-station.model";
+import TrainStationModel from "../../model/train-station.model";
 import OsmA11y from "../../model/osm-a11y.model";
-import { IOsmA11y, ITdxBusStop, ITdxMetroStation } from "../../types";
+import { IOsmA11y, ITdxBusStop, ITdxMetroStation, ITdxTrainStation } from "../../types";
 import {
   BusRoute,
   BusRealTimeByFrequency,
@@ -14,6 +15,8 @@ import {
   TdxMetroS2STravelTimeRecord,
   TdxMetroFrequencyRecord,
   TdxMetroStationFacility,
+  TdxThsrGeneralTimetableItem,
+  TdxTraGeneralTimetableItem,
 } from "../../types/transit";
 import { TaiwanCityEn } from "../../types/transit";
 
@@ -75,11 +78,48 @@ export interface MetroLeg {
   facilityHighlights: string[];
 }
 
+export interface ThsrLeg {
+  type: "THSR";
+  trainNo: string;
+  departureStation: string;
+  arrivalStation: string;
+  departureStationUID: string;
+  arrivalStationUID: string;
+  departureTime: string;        // "HH:mm"
+  arrivalTime: string;          // "HH:mm"
+  rideMinutes: number;
+  waitInfo: WaitInfo;
+  estimatedWaitMinutes: number;
+  polyline: [number, number][];
+  departureStationA11y: IOsmA11y[];
+  arrivalStationA11y: IOsmA11y[];
+  facilityHighlights: string[];
+}
+
+export interface TraLeg {
+  type: "TRA";
+  trainNo: string;
+  trainTypeName: string;        // e.g. "自強", "莒光", "區間車"
+  departureStation: string;
+  arrivalStation: string;
+  departureStationUID: string;
+  arrivalStationUID: string;
+  departureTime: string;        // "HH:mm"
+  arrivalTime: string;          // "HH:mm"
+  rideMinutes: number;
+  waitInfo: WaitInfo;
+  estimatedWaitMinutes: number;
+  polyline: [number, number][];
+  departureStationA11y: IOsmA11y[];
+  arrivalStationA11y: IOsmA11y[];
+  facilityHighlights: string[];
+}
+
 export interface AccessibleRoute {
   routeId: string;
   routeName: string;
   totalMinutes: number;
-  legs: (WalkLeg | BusLeg | MetroLeg)[];
+  legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[];
   accessibilityHighlights: string[];
   /** 0–100 evidence-based accessibility score. Set by scoreAndRank(). */
   accessibilityScore?: number;
@@ -691,6 +731,342 @@ async function buildMetroCandidate(
   };
 }
 
+// ─── Train (THSR / TRA) helpers ──────────────────────────────────────────────
+
+function timeToMins(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+
+const DOW_KEYS = [
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+] as const;
+
+async function findNextThsrTrain(
+  originStationID: string,
+  destStationID: string
+): Promise<{
+  trainNo: string;
+  departureTime: string;
+  arrivalTime: string;
+  rideMinutes: number;
+  waitMinutes: number;
+} | null> {
+  try {
+    const url =
+      `${thsrUrl.generalTimetableUrl}?$format=JSON` +
+      `&$filter=GeneralTimetable/StopTimes/any(s:s/StationID eq '${originStationID}')`;
+    const resp = await tdxFetch(url);
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as TdxThsrGeneralTimetableItem[];
+    if (!Array.isArray(data) || !data.length) return null;
+
+    const now = new Date();
+    const todayKey = DOW_KEYS[now.getDay()];
+    const nowMins  = now.getHours() * 60 + now.getMinutes();
+
+    let best: {
+      trainNo: string; departureTime: string; arrivalTime: string;
+      rideMinutes: number; waitMinutes: number;
+    } | null = null;
+    let bestWait = Infinity;
+
+    for (const item of data) {
+      const gt = item.GeneralTimetable;
+      if (gt.ServiceDay && !gt.ServiceDay[todayKey]) continue;
+
+      const originStop = gt.StopTimes.find((s) => s.StationID === originStationID);
+      const destStop   = gt.StopTimes.find((s) => s.StationID === destStationID);
+      if (!originStop || !destStop) continue;
+      if (originStop.Sequence >= destStop.Sequence) continue;
+
+      const depMins = timeToMins(originStop.DepartureTime);
+      const diff    = depMins - nowMins;
+      // Accept trains departing up to 30 min ago (may still be catchable) and strictly next
+      if (diff < -30 || diff >= bestWait) continue;
+
+      const arrMins = timeToMins(destStop.ArrivalTime);
+      bestWait = diff;
+      best = {
+        trainNo:       gt.GeneralTrainInfo.TrainNo,
+        departureTime: originStop.DepartureTime,
+        arrivalTime:   destStop.ArrivalTime,
+        rideMinutes:   Math.max(1, arrMins - depMins),
+        waitMinutes:   Math.max(0, diff),
+      };
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+async function buildThsrCandidate(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number }
+): Promise<AccessibleRoute | null> {
+  const originCoords: [number, number] = [origin.lng, origin.lat];
+  const destCoords:   [number, number] = [destination.lng, destination.lat];
+
+  const [originStations, destStations] = await Promise.all([
+    TrainStationModel.find({ ...nearQuery(originCoords, 3000), railSystem: "THSR" })
+      .limit(3).lean<ITdxTrainStation[]>(),
+    TrainStationModel.find({ ...nearQuery(destCoords, 3000), railSystem: "THSR" })
+      .limit(3).lean<ITdxTrainStation[]>(),
+  ]);
+  if (!originStations.length || !destStations.length) return null;
+
+  const boardStation  = originStations[0];
+  const alightStation = destStations[0];
+  if (boardStation.stationUID === alightStation.stationUID) return null;
+
+  const trainInfo = await findNextThsrTrain(boardStation.stationID, alightStation.stationID);
+  if (!trainInfo) return null;
+
+  const boardCoords  = boardStation.location.coordinates as [number, number];
+  const alightCoords = alightStation.location.coordinates as [number, number];
+
+  const [walkTo, walkFrom, boardA11y, alightA11y] = await Promise.all([
+    orsWalkingRoute(originCoords, boardCoords),
+    orsWalkingRoute(alightCoords, destCoords),
+    OsmA11y.find(nearQuery(boardCoords, 300)).limit(5).lean(),
+    OsmA11y.find(nearQuery(alightCoords, 300)).limit(5).lean(),
+  ]);
+
+  const waitInfo: WaitInfo = { minutes: trainInfo.waitMinutes, source: "schedule" };
+  const totalMinutes = Math.round(
+    walkTo.durationSec / 60 + trainInfo.waitMinutes + trainInfo.rideMinutes + walkFrom.durationSec / 60
+  );
+
+  const osmTagVal = (nodes: IOsmA11y[], key: string, val: string) =>
+    nodes.some((f) => f.tags?.[key] === val);
+
+  const facilityHighlights: string[] = [
+    "高鐵站設有無障礙設施",
+    "列車備有無障礙座位及輪椅空間",
+  ];
+  if (boardA11y.some((f: any) => f.category === "elevator") || osmTagVal(boardA11y as IOsmA11y[], "elevator", "yes"))
+    facilityHighlights.push("乘車站附近有電梯");
+  if (alightA11y.some((f: any) => f.category === "elevator") || osmTagVal(alightA11y as IOsmA11y[], "elevator", "yes"))
+    facilityHighlights.push("下車站附近有電梯");
+  if (osmTagVal(boardA11y as IOsmA11y[], "toilets:wheelchair", "yes") || osmTagVal(alightA11y as IOsmA11y[], "toilets:wheelchair", "yes"))
+    facilityHighlights.push("站點附近有無障礙廁所");
+  if (osmTagVal(boardA11y as IOsmA11y[], "tactile_paving", "yes") || osmTagVal(alightA11y as IOsmA11y[], "tactile_paving", "yes"))
+    facilityHighlights.push("附近有導盲磚");
+  if (osmTagVal(boardA11y as IOsmA11y[], "wheelchair", "yes"))
+    facilityHighlights.push("乘車站設施完善");
+  if (osmTagVal(alightA11y as IOsmA11y[], "wheelchair", "yes"))
+    facilityHighlights.push("下車站設施完善");
+
+  const thsrLeg: ThsrLeg = {
+    type:                 "THSR",
+    trainNo:              trainInfo.trainNo,
+    departureStation:     boardStation.stationName.Zh_tw,
+    arrivalStation:       alightStation.stationName.Zh_tw,
+    departureStationUID:  boardStation.stationUID,
+    arrivalStationUID:    alightStation.stationUID,
+    departureTime:        trainInfo.departureTime,
+    arrivalTime:          trainInfo.arrivalTime,
+    rideMinutes:          trainInfo.rideMinutes,
+    waitInfo,
+    estimatedWaitMinutes: trainInfo.waitMinutes,
+    polyline:             [boardCoords, alightCoords],
+    departureStationA11y: boardA11y  as IOsmA11y[],
+    arrivalStationA11y:   alightA11y as IOsmA11y[],
+    facilityHighlights,
+  };
+
+  return {
+    routeId:   `THSR-${boardStation.stationUID}-${alightStation.stationUID}`,
+    routeName: `高鐵 ${boardStation.stationName.Zh_tw} → ${alightStation.stationName.Zh_tw}`,
+    totalMinutes,
+    legs: [
+      {
+        type:           "WALK",
+        from:           "出發地",
+        to:             boardStation.stationName.Zh_tw,
+        distanceM:      Math.round(walkTo.distanceM),
+        minutesEst:     Math.round(walkTo.durationSec / 60),
+        polyline:       walkTo.polyline,
+        a11yFacilities: boardA11y as IOsmA11y[],
+      },
+      thsrLeg,
+      {
+        type:           "WALK",
+        from:           alightStation.stationName.Zh_tw,
+        to:             "目的地",
+        distanceM:      Math.round(walkFrom.distanceM),
+        minutesEst:     Math.round(walkFrom.durationSec / 60),
+        polyline:       walkFrom.polyline,
+        a11yFacilities: alightA11y as IOsmA11y[],
+      },
+    ],
+    accessibilityHighlights: facilityHighlights,
+  };
+}
+
+// ─── TRA candidate builder ────────────────────────────────────────────────────
+
+async function findNextTraTrain(
+  originStationID: string,
+  destStationID: string
+): Promise<{
+  trainNo: string;
+  trainTypeName: string;
+  departureTime: string;
+  arrivalTime: string;
+  rideMinutes: number;
+  waitMinutes: number;
+} | null> {
+  try {
+    const url =
+      `${traUrl.generalTimetableUrl}?$format=JSON` +
+      `&$filter=StopTimes/any(s:s/StationID eq '${originStationID}')`;
+    const resp = await tdxFetch(url);
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as TdxTraGeneralTimetableItem[];
+    if (!Array.isArray(data) || !data.length) return null;
+
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+
+    let best: {
+      trainNo: string; trainTypeName: string; departureTime: string;
+      arrivalTime: string; rideMinutes: number; waitMinutes: number;
+    } | null = null;
+    let bestWait = Infinity;
+
+    for (const item of data) {
+      const originStop = item.StopTimes.find((s) => s.StationID === originStationID);
+      const destStop   = item.StopTimes.find((s) => s.StationID === destStationID);
+      if (!originStop || !destStop) continue;
+      if (originStop.Sequence >= destStop.Sequence) continue;
+
+      const depMins = timeToMins(originStop.DepartureTime);
+      const diff    = depMins - nowMins;
+      if (diff < -30 || diff >= bestWait) continue;
+
+      const arrMins = timeToMins(destStop.ArrivalTime);
+      bestWait = diff;
+      best = {
+        trainNo:       item.TrainInfo.TrainNo,
+        trainTypeName: item.TrainInfo.TrainTypeName?.Zh_tw ?? "列車",
+        departureTime: originStop.DepartureTime,
+        arrivalTime:   destStop.ArrivalTime,
+        rideMinutes:   Math.max(1, arrMins - depMins),
+        waitMinutes:   Math.max(0, diff),
+      };
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+async function buildTraCandidate(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number }
+): Promise<AccessibleRoute | null> {
+  const originCoords: [number, number] = [origin.lng, origin.lat];
+  const destCoords:   [number, number] = [destination.lng, destination.lat];
+
+  const [originStations, destStations] = await Promise.all([
+    TrainStationModel.find({ ...nearQuery(originCoords, 1500), railSystem: "TRA" })
+      .limit(3).lean<ITdxTrainStation[]>(),
+    TrainStationModel.find({ ...nearQuery(destCoords, 1500), railSystem: "TRA" })
+      .limit(3).lean<ITdxTrainStation[]>(),
+  ]);
+  if (!originStations.length || !destStations.length) return null;
+
+  const boardStation  = originStations[0];
+  const alightStation = destStations[0];
+  if (boardStation.stationUID === alightStation.stationUID) return null;
+
+  const trainInfo = await findNextTraTrain(boardStation.stationID, alightStation.stationID);
+  if (!trainInfo) return null;
+
+  const boardCoords  = boardStation.location.coordinates as [number, number];
+  const alightCoords = alightStation.location.coordinates as [number, number];
+
+  const [walkTo, walkFrom, boardA11y, alightA11y] = await Promise.all([
+    orsWalkingRoute(originCoords, boardCoords),
+    orsWalkingRoute(alightCoords, destCoords),
+    OsmA11y.find(nearQuery(boardCoords, 300)).limit(5).lean(),
+    OsmA11y.find(nearQuery(alightCoords, 300)).limit(5).lean(),
+  ]);
+
+  const waitInfo: WaitInfo = { minutes: trainInfo.waitMinutes, source: "schedule" };
+  const totalMinutes = Math.round(
+    walkTo.durationSec / 60 + trainInfo.waitMinutes + trainInfo.rideMinutes + walkFrom.durationSec / 60
+  );
+
+  const osmTagVal = (nodes: IOsmA11y[], key: string, val: string) =>
+    nodes.some((f) => f.tags?.[key] === val);
+
+  const facilityHighlights: string[] = [
+    `臺鐵${trainInfo.trainTypeName} 列車`,
+  ];
+  if (boardA11y.some((f: any) => f.category === "elevator") || osmTagVal(boardA11y as IOsmA11y[], "elevator", "yes"))
+    facilityHighlights.push("乘車站附近有電梯");
+  if (alightA11y.some((f: any) => f.category === "elevator") || osmTagVal(alightA11y as IOsmA11y[], "elevator", "yes"))
+    facilityHighlights.push("下車站附近有電梯");
+  if (osmTagVal(boardA11y as IOsmA11y[], "toilets:wheelchair", "yes") || osmTagVal(alightA11y as IOsmA11y[], "toilets:wheelchair", "yes"))
+    facilityHighlights.push("站點附近有無障礙廁所");
+  if (osmTagVal(boardA11y as IOsmA11y[], "tactile_paving", "yes") || osmTagVal(alightA11y as IOsmA11y[], "tactile_paving", "yes"))
+    facilityHighlights.push("附近有導盲磚");
+  if (osmTagVal(boardA11y as IOsmA11y[], "wheelchair", "yes"))
+    facilityHighlights.push("乘車站設施完善");
+  if (osmTagVal(alightA11y as IOsmA11y[], "wheelchair", "yes"))
+    facilityHighlights.push("下車站設施完善");
+
+  const traLeg: TraLeg = {
+    type:                 "TRA",
+    trainNo:              trainInfo.trainNo,
+    trainTypeName:        trainInfo.trainTypeName,
+    departureStation:     boardStation.stationName.Zh_tw,
+    arrivalStation:       alightStation.stationName.Zh_tw,
+    departureStationUID:  boardStation.stationUID,
+    arrivalStationUID:    alightStation.stationUID,
+    departureTime:        trainInfo.departureTime,
+    arrivalTime:          trainInfo.arrivalTime,
+    rideMinutes:          trainInfo.rideMinutes,
+    waitInfo,
+    estimatedWaitMinutes: trainInfo.waitMinutes,
+    polyline:             [boardCoords, alightCoords],
+    departureStationA11y: boardA11y  as IOsmA11y[],
+    arrivalStationA11y:   alightA11y as IOsmA11y[],
+    facilityHighlights,
+  };
+
+  return {
+    routeId:   `TRA-${boardStation.stationUID}-${alightStation.stationUID}`,
+    routeName: `臺鐵${trainInfo.trainTypeName} ${boardStation.stationName.Zh_tw} → ${alightStation.stationName.Zh_tw}`,
+    totalMinutes,
+    legs: [
+      {
+        type:           "WALK",
+        from:           "出發地",
+        to:             boardStation.stationName.Zh_tw,
+        distanceM:      Math.round(walkTo.distanceM),
+        minutesEst:     Math.round(walkTo.durationSec / 60),
+        polyline:       walkTo.polyline,
+        a11yFacilities: boardA11y as IOsmA11y[],
+      },
+      traLeg,
+      {
+        type:           "WALK",
+        from:           alightStation.stationName.Zh_tw,
+        to:             "目的地",
+        distanceM:      Math.round(walkFrom.distanceM),
+        minutesEst:     Math.round(walkFrom.durationSec / 60),
+        polyline:       walkFrom.polyline,
+        a11yFacilities: alightA11y as IOsmA11y[],
+      },
+    ],
+    accessibilityHighlights: facilityHighlights,
+  };
+}
+
 // ─── Route facility collector ─────────────────────────────────────────────────
 
 function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
@@ -698,6 +1074,8 @@ function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
     if (leg.type === "WALK") return leg.a11yFacilities;
     if (leg.type === "BUS") return [...leg.departureStopA11y, ...leg.arrivalStopA11y];
     if (leg.type === "METRO") return [...leg.departureStationA11y, ...leg.arrivalStationA11y];
+    if (leg.type === "THSR") return [...leg.departureStationA11y, ...leg.arrivalStationA11y];
+    if (leg.type === "TRA")  return [...leg.departureStationA11y, ...leg.arrivalStationA11y];
     return [];
   });
 }
@@ -756,6 +1134,20 @@ function deduplicateRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
       seen.add(key);
       return true;
     }
+    const thsrLeg = r.legs.find((l): l is ThsrLeg => l.type === "THSR");
+    if (thsrLeg) {
+      const key = `THSR|${thsrLeg.departureStationUID}|${thsrLeg.arrivalStationUID}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }
+    const traLeg = r.legs.find((l): l is TraLeg => l.type === "TRA");
+    if (traLeg) {
+      const key = `TRA|${traLeg.departureStationUID}|${traLeg.arrivalStationUID}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }
     // No transit leg to dedupe on — keep the route.
     return true;
   });
@@ -802,8 +1194,21 @@ export async function findAccessibleRoutes(
       .catch((): AccessibleRoute[] => [])
   );
 
-  const [busRoutes, ...metroArrays] = await Promise.all([busSearchPromise, ...metroPromises]);
-  const combined = [...busRoutes, ...metroArrays.flat()];
+  const thsrPromise = buildThsrCandidate(origin, destination)
+    .then((r): AccessibleRoute[] => (r ? [r] : []))
+    .catch((): AccessibleRoute[] => []);
+
+  const traPromise = buildTraCandidate(origin, destination)
+    .then((r): AccessibleRoute[] => (r ? [r] : []))
+    .catch((): AccessibleRoute[] => []);
+
+  const [busRoutes, ...allRailArrays] = await Promise.all([
+    busSearchPromise,
+    ...metroPromises,
+    thsrPromise,
+    traPromise,
+  ]);
+  const combined = [...busRoutes, ...allRailArrays.flat()];
   if (!combined.length) return [];
 
   return scoreAndRank(deduplicateRoutes(combined)).slice(0, 3);

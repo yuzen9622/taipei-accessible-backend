@@ -173,3 +173,86 @@ export type TdxMetroStationFacility = {
     Quantity?: number;
   }>;
 };
+
+// ─── THSR TDX response shapes ─────────────────────────────────────────────────
+
+export type TdxThsrStation = {
+  StationUID: string;        // e.g. "THSR-0990"
+  StationID: string;         // e.g. "0990"
+  StationName: { Zh_tw: string; En: string };
+  StationAddress?: string;
+  StationPosition: { PositionLon: number; PositionLat: number };
+};
+
+export type TdxThsrGeneralTimetableItem = {
+  GeneralTimetable: {
+    GeneralTrainInfo: {
+      TrainNo: string;
+      Direction: 0 | 1;
+      StartingStationID: string;
+      EndingStationID: string;
+      Notes?: string;
+    };
+    StopTimes: Array<{
+      Sequence: number;
+      StationID: string;
+      StationName: { Zh_tw: string; En: string };
+      ArrivalTime: string;    // "HH:mm"
+      DepartureTime: string;  // "HH:mm"
+    }>;
+    ServiceDay?: {
+      Sunday: boolean; Monday: boolean; Tuesday: boolean;
+      Wednesday: boolean; Thursday: boolean; Friday: boolean; Saturday: boolean;
+    };
+  };
+};
+
+export type TdxThsrStationFacility = {
+  StationUID: string;
+  Facilities?: Array<{
+    FacilityType: number;
+    FacilityName?: { Zh_tw: string };
+    Quantity?: number;
+  }>;
+};
+
+// ─── TRA TDX response shapes ──────────────────────────────────────────────────
+
+export type TdxTraStation = {
+  StationUID: string;        // e.g. "TRA-1000"
+  StationID: string;         // e.g. "1000"
+  StationName: { Zh_tw: string; En: string };
+  StationAddress?: string;
+  StationPosition: { PositionLon: number; PositionLat: number };
+};
+
+export type TdxTraGeneralTimetableItem = {
+  TrainInfo: {
+    TrainNo: string;
+    Direction: 0 | 1;
+    TrainTypeID?: string;
+    TrainTypeName?: { Zh_tw: string; En?: string };
+    StartingStationID: string;
+    EndingStationID: string;
+    Wheelchair?: number;    // 1=yes, 2=no, 3=partial
+    Notes?: string;
+  };
+  StopTimes: Array<{
+    Sequence: number;
+    StationID: string;
+    StationName: { Zh_tw: string; En: string };
+    ArrivalTime: string;    // "HH:mm"
+    DepartureTime: string;  // "HH:mm"
+    DropOffTime?: string;
+    PickupTime?: string;
+  }>;
+};
+
+export type TdxTraStationFacility = {
+  StationUID: string;
+  Facilities?: Array<{
+    FacilityType: number;
+    FacilityName?: { Zh_tw: string };
+    Quantity?: number;
+  }>;
+};

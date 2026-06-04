@@ -12,7 +12,9 @@
         "postinstall": "npm run build",
         "import:osm": "npx dotenvx run -- ts-node src/scripts/import-osm-a11y.ts",
         "import:tdx-stops": "npx dotenvx run -- ts-node src/scripts/import-tdx-stops.ts",
-        "import:tdx-metro": "npx dotenvx run -- ts-node src/scripts/import-tdx-metro.ts"
+        "import:tdx-metro": "npx dotenvx run -- ts-node src/scripts/import-tdx-metro.ts",
+        "import:tdx-thsr": "npx dotenvx run -- ts-node src/scripts/import-tdx-thsr.ts",
+        "import:tdx-tra": "npx dotenvx run -- ts-node src/scripts/import-tdx-tra.ts"
     },
     "keywords": [
         "express",

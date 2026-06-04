@@ -42,3 +42,19 @@ export const CITY_METRO_SYSTEMS: Partial<Record<TaiwanCityEn, string[]>> = {
   [TaiwanCityEn.Taichung]:  ["TMRT"],
   [TaiwanCityEn.Kaohsiung]: ["KRTC"],
 };
+
+const RAIL_BASE = "https://tdx.transportdata.tw/api/basic/v2/Rail";
+
+export const thsrUrl = {
+  stationUrl:          `${RAIL_BASE}/THSR/Station`,
+  generalTimetableUrl: `${RAIL_BASE}/THSR/GeneralTimetable`,
+  dailyTimetableUrl:   `${RAIL_BASE}/THSR/DailyTrainTimetable/Today`,
+  stationFacilityUrl:  `${RAIL_BASE}/THSR/StationFacility`,
+};
+
+export const traUrl = {
+  stationUrl:          `${RAIL_BASE}/TRA/Station`,
+  generalTimetableUrl: `${RAIL_BASE}/TRA/GeneralTimetable`,
+  dailyTimetableUrl:   `${RAIL_BASE}/TRA/DailyTrainTimetable/Today`,
+  stationFacilityUrl:  `${RAIL_BASE}/TRA/StationFacility`,
+};
