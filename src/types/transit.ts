@@ -227,25 +227,28 @@ export type TdxTraStation = {
 };
 
 export type TdxTraGeneralTimetableItem = {
-  TrainInfo: {
-    TrainNo: string;
-    Direction: 0 | 1;
-    TrainTypeID?: string;
-    TrainTypeName?: { Zh_tw: string; En?: string };
-    StartingStationID: string;
-    EndingStationID: string;
-    Wheelchair?: number;    // 1=yes, 2=no, 3=partial
-    Notes?: string;
+  GeneralTimetable: {
+    GeneralTrainInfo: {
+      TrainNo: string;
+      Direction: 0 | 1;
+      TrainTypeID?: string;
+      TrainTypeName?: { Zh_tw: string; En?: string };
+      StartingStationID: string;
+      EndingStationID: string;
+      WheelchairFlag?: number;
+    };
+    StopTimes: Array<{
+      Sequence: number;
+      StationID: string;
+      StationName?: { Zh_tw: string; En: string };
+      ArrivalTime: string;
+      DepartureTime: string;
+    }>;
+    ServiceDay?: {
+      Sunday: boolean; Monday: boolean; Tuesday: boolean;
+      Wednesday: boolean; Thursday: boolean; Friday: boolean; Saturday: boolean;
+    };
   };
-  StopTimes: Array<{
-    Sequence: number;
-    StationID: string;
-    StationName: { Zh_tw: string; En: string };
-    ArrivalTime: string;    // "HH:mm"
-    DepartureTime: string;  // "HH:mm"
-    DropOffTime?: string;
-    PickupTime?: string;
-  }>;
 };
 
 export type TdxTraStationFacility = {

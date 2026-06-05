@@ -62,12 +62,10 @@ const OsmA11ySchema = z
           .openapi({ example: [121.567, 25.041] }),
       })
       .openapi({ description: "GeoJSON Point [lng, lat]" }),
-    importedAt: z
-      .string()
-      .openapi({
-        example: "2026-05-01T08:30:00.000Z",
-        description: "ISO date",
-      }),
+    importedAt: z.string().openapi({
+      example: "2026-05-01T08:30:00.000Z",
+      description: "ISO date",
+    }),
   })
   .openapi("OsmA11y");
 
@@ -94,13 +92,11 @@ const WaitInfoSchema = z
       .number()
       .nullable()
       .openapi({ example: 6, description: "null = no service today" }),
-    source: z
-      .enum(["realtime", "schedule", "unavailable"])
-      .openapi({
-        example: "realtime",
-        description:
-          "realtime = TDX ETA, schedule = timetable lookup, unavailable = no data",
-      }),
+    source: z.enum(["realtime", "schedule", "unavailable"]).openapi({
+      example: "realtime",
+      description:
+        "realtime = TDX ETA, schedule = timetable lookup, unavailable = no data",
+    }),
   })
   .openapi("WaitInfo");
 
@@ -125,12 +121,10 @@ const BusLegSchema = z
     departureStop: z.string().openapi({ example: "市政府站" }),
     arrivalStop: z.string().openapi({ example: "台北101" }),
     waitInfo: WaitInfoSchema,
-    estimatedWaitMinutes: z
-      .number()
-      .openapi({
-        example: 6,
-        description: "waitInfo.minutes ?? 0, kept for backwards compatibility",
-      }),
+    estimatedWaitMinutes: z.number().openapi({
+      example: 6,
+      description: "waitInfo.minutes ?? 0, kept for backwards compatibility",
+    }),
     direction: z
       .union([z.literal(0), z.literal(1)])
       .openapi({ example: 0, description: "0 = outbound, 1 = inbound" }),
@@ -178,24 +172,20 @@ const MetroLegSchema = z
 
 const ScoreComponentsSchema = z
   .object({
-    facilityScore: z
-      .number()
-      .openapi({
-        example: 72,
-        description: "0–100: weighted quality of OSM accessibility facilities at all stops",
-      }),
-    timeScore: z
-      .number()
-      .openapi({
-        example: 85,
-        description: "0–100: normalized travel time (100 = fastest candidate)",
-      }),
-    criticalFeatureScore: z
-      .number()
-      .openapi({
-        example: 65,
-        description: "0–100: presence of Tier 1 critical features (elevator, flush kerb, ramp)",
-      }),
+    facilityScore: z.number().openapi({
+      example: 72,
+      description:
+        "0–100: weighted quality of OSM accessibility facilities at all stops",
+    }),
+    timeScore: z.number().openapi({
+      example: 85,
+      description: "0–100: normalized travel time (100 = fastest candidate)",
+    }),
+    criticalFeatureScore: z.number().openapi({
+      example: 65,
+      description:
+        "0–100: presence of Tier 1 critical features (elevator, flush kerb, ramp)",
+    }),
   })
   .openapi("ScoreComponents");
 

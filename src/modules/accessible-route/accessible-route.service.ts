@@ -733,6 +733,35 @@ async function buildMetroCandidate(
 
 // ─── Train (THSR / TRA) helpers ──────────────────────────────────────────────
 
+const timetableCache = new Map<string, { data: any; expiresAt: number }>();
+
+function getCachedTimetable<T>(key: string): T | null {
+  const entry = timetableCache.get(key);
+  if (!entry || Date.now() > entry.expiresAt) { timetableCache.delete(key); return null; }
+  return entry.data as T;
+}
+function setCachedTimetable(key: string, data: any): void {
+  timetableCache.set(key, { data, expiresAt: Date.now() + 2 * 60 * 60 * 1000 });
+}
+
+async function fetchWithCache<T>(url: string, cacheKey: string): Promise<T | null> {
+  const cached = getCachedTimetable<T>(cacheKey);
+  if (cached) return cached;
+  const resp = await tdxFetch(url);
+  if (resp.status === 429) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const retry = await tdxFetch(url);
+    if (!retry.ok) return null;
+    const data = (await retry.json()) as T;
+    setCachedTimetable(cacheKey, data);
+    return data;
+  }
+  if (!resp.ok) return null;
+  const data = (await resp.json()) as T;
+  setCachedTimetable(cacheKey, data);
+  return data;
+}
+
 function timeToMins(t: string): number {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + m;
@@ -754,12 +783,15 @@ async function findNextThsrTrain(
 } | null> {
   try {
     const url =
-      `${thsrUrl.generalTimetableUrl}?$format=JSON` +
+      `${thsrUrl.generalTimetableUrl}?$format=JSON&$top=200` +
       `&$filter=GeneralTimetable/StopTimes/any(s:s/StationID eq '${originStationID}')`;
-    const resp = await tdxFetch(url);
-    if (!resp.ok) return null;
-    const data = (await resp.json()) as TdxThsrGeneralTimetableItem[];
-    if (!Array.isArray(data) || !data.length) return null;
+    const cacheKey = `THSR|${originStationID}`;
+    const raw = await fetchWithCache<TdxThsrGeneralTimetableItem[]>(url, cacheKey);
+    if (!Array.isArray(raw) || !raw.length) return null;
+    const data = raw.filter((item) =>
+      item.GeneralTimetable.StopTimes.some((s) => s.StationID === destStationID)
+    );
+    if (!data.length) return null;
 
     const now = new Date();
     const todayKey = DOW_KEYS[now.getDay()];
@@ -877,7 +909,7 @@ async function buildThsrCandidate(
   };
 
   return {
-    routeId:   `THSR-${boardStation.stationUID}-${alightStation.stationUID}`,
+    routeId:   `THSR-${boardStation.stationID}-${alightStation.stationID}`,
     routeName: `高鐵 ${boardStation.stationName.Zh_tw} → ${alightStation.stationName.Zh_tw}`,
     totalMinutes,
     legs: [
@@ -921,13 +953,17 @@ async function findNextTraTrain(
   try {
     const url =
       `${traUrl.generalTimetableUrl}?$format=JSON` +
-      `&$filter=StopTimes/any(s:s/StationID eq '${originStationID}')`;
-    const resp = await tdxFetch(url);
-    if (!resp.ok) return null;
-    const data = (await resp.json()) as TdxTraGeneralTimetableItem[];
-    if (!Array.isArray(data) || !data.length) return null;
+      `&$filter=GeneralTimetable/StopTimes/any(s:s/StationID eq '${originStationID}')`;
+    const cacheKey = `TRA|${originStationID}`;
+    const raw = await fetchWithCache<TdxTraGeneralTimetableItem[]>(url, cacheKey);
+    if (!Array.isArray(raw) || !raw.length) return null;
+    const data = raw.filter((item) =>
+      item.GeneralTimetable.StopTimes.some((s) => s.StationID === destStationID)
+    );
+    if (!data.length) return null;
 
     const now = new Date();
+    const todayKey = DOW_KEYS[now.getDay()];
     const nowMins = now.getHours() * 60 + now.getMinutes();
 
     let best: {
@@ -937,8 +973,10 @@ async function findNextTraTrain(
     let bestWait = Infinity;
 
     for (const item of data) {
-      const originStop = item.StopTimes.find((s) => s.StationID === originStationID);
-      const destStop   = item.StopTimes.find((s) => s.StationID === destStationID);
+      const gt = item.GeneralTimetable;
+      if (gt.ServiceDay && !gt.ServiceDay[todayKey]) continue;
+      const originStop = gt.StopTimes.find((s) => s.StationID === originStationID);
+      const destStop   = gt.StopTimes.find((s) => s.StationID === destStationID);
       if (!originStop || !destStop) continue;
       if (originStop.Sequence >= destStop.Sequence) continue;
 
@@ -949,8 +987,8 @@ async function findNextTraTrain(
       const arrMins = timeToMins(destStop.ArrivalTime);
       bestWait = diff;
       best = {
-        trainNo:       item.TrainInfo.TrainNo,
-        trainTypeName: item.TrainInfo.TrainTypeName?.Zh_tw ?? "列車",
+        trainNo:       gt.GeneralTrainInfo.TrainNo,
+        trainTypeName: gt.GeneralTrainInfo.TrainTypeName?.Zh_tw ?? "列車",
         departureTime: originStop.DepartureTime,
         arrivalTime:   destStop.ArrivalTime,
         rideMinutes:   Math.max(1, arrMins - depMins),
@@ -1039,7 +1077,7 @@ async function buildTraCandidate(
   };
 
   return {
-    routeId:   `TRA-${boardStation.stationUID}-${alightStation.stationUID}`,
+    routeId:   `TRA-${boardStation.stationID}-${alightStation.stationID}`,
     routeName: `臺鐵${trainInfo.trainTypeName} ${boardStation.stationName.Zh_tw} → ${alightStation.stationName.Zh_tw}`,
     totalMinutes,
     legs: [
