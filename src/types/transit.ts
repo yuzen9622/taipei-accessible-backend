@@ -194,7 +194,7 @@ export type TdxThsrGeneralTimetableItem = {
       Notes?: string;
     };
     StopTimes: Array<{
-      Sequence: number;
+      StopSequence: number;
       StationID: string;
       StationName: { Zh_tw: string; En: string };
       ArrivalTime: string;    // "HH:mm"
@@ -238,7 +238,7 @@ export type TdxTraGeneralTimetableItem = {
       WheelchairFlag?: number;
     };
     StopTimes: Array<{
-      Sequence: number;
+      StopSequence: number;
       StationID: string;
       StationName?: { Zh_tw: string; En: string };
       ArrivalTime: string;
