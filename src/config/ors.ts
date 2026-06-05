@@ -6,6 +6,8 @@
  * For unlimited requests, self-host: https://github.com/GIScience/openrouteservice
  */
 
+import { getWalkCache, setWalkCache } from "../service/walk-cache.service";
+
 const ORS_BASE = "https://api.openrouteservice.org/v2";
 const WHEELCHAIR_SPEED_M_PER_MIN = 60; // conservative wheelchair walking speed
 
@@ -48,7 +50,20 @@ export async function orsWalkingRoute(
 ): Promise<WalkingRoute> {
   const apiKey = process.env.ORS_API_KEY;
 
+  // Phase 1 (FR-04): check the walk cache first. A cached entry only stores
+  // duration + distance, so reconstruct a straight-line-shaped polyline.
+  const cached = await getWalkCache(from, to);
+  if (cached) {
+    return {
+      polyline: [from, to],
+      distanceM: cached.distanceM,
+      durationSec: cached.durationSec,
+    };
+  }
+
   if (!apiKey) {
+    // Straight-line fallback is NOT cached — caching poor estimates would
+    // pollute the cache once ORS becomes available.
     return straightLineRoute(from, to);
   }
 
@@ -73,11 +88,19 @@ export async function orsWalkingRoute(
     const feature = data.features?.[0];
     if (!feature) return straightLineRoute(from, to);
 
-    return {
+    const route: WalkingRoute = {
       polyline: feature.geometry.coordinates as [number, number][],
       distanceM: feature.properties.summary.distance,
       durationSec: feature.properties.summary.duration,
     };
+
+    // Cache only successful ORS responses. Fire-and-forget; never delay or
+    // break the caller on a cache-write failure.
+    void setWalkCache(from, to, route.durationSec, route.distanceM).catch(
+      () => {},
+    );
+
+    return route;
   } catch (err) {
     console.warn("ORS request failed — falling back to straight line:", err);
     return straightLineRoute(from, to);
