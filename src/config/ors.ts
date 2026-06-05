@@ -9,7 +9,7 @@
 import { getWalkCache, setWalkCache } from "../service/walk-cache.service";
 
 const ORS_BASE = "https://api.openrouteservice.org/v2";
-const WHEELCHAIR_SPEED_M_PER_MIN = 60; // conservative wheelchair walking speed
+export const WHEELCHAIR_SPEED_M_PER_MIN = 60; // conservative wheelchair walking speed
 
 export interface WalkingRoute {
   polyline: [number, number][]; // [[lng, lat], ...] GeoJSON order
@@ -17,7 +17,7 @@ export interface WalkingRoute {
   durationSec: number;
 }
 
-function haversineCoords(a: [number, number], b: [number, number]): number {
+export function haversineCoords(a: [number, number], b: [number, number]): number {
   const R = 6371000;
   const [lng1, lat1] = a;
   const [lng2, lat2] = b;
@@ -104,5 +104,67 @@ export async function orsWalkingRoute(
   } catch (err) {
     console.warn("ORS request failed — falling back to straight line:", err);
     return straightLineRoute(from, to);
+  }
+}
+
+/**
+ * Phase 2 — ORS Matrix: one-to-many walking durations.
+ *
+ * Returns walking duration in SECONDS for each destination, in the same order
+ * as `destinations`. An element is `null` only when ORS reports a destination
+ * as unreachable. When ORS_API_KEY is unset or any error occurs, falls back to
+ * straight-line Haversine estimates (never null in fallback mode).
+ */
+export async function orsWalkingMatrix(
+  origin: [number, number], // [lng, lat]
+  destinations: [number, number][], // [[lng, lat], ...]
+): Promise<(number | null)[]> {
+  const fallback = (): (number | null)[] =>
+    destinations.map((d) => {
+      const distM = haversineCoords(origin, d);
+      return (distM / WHEELCHAIR_SPEED_M_PER_MIN) * 60;
+    });
+
+  if (destinations.length === 0) return [];
+
+  const apiKey = process.env.ORS_API_KEY;
+  if (!apiKey) return fallback();
+
+  try {
+    const body = {
+      locations: [origin, ...destinations],
+      sources: [0],
+      destinations: Array.from(
+        { length: destinations.length },
+        (_, i) => i + 1,
+      ),
+      metrics: ["duration"],
+    };
+
+    const resp = await fetch(`${ORS_BASE}/matrix/foot-walking`, {
+      method: "POST",
+      headers: {
+        Authorization: apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      console.warn(`ORS matrix ${resp.status} — falling back to straight line`);
+      return fallback();
+    }
+
+    const data = (await resp.json()) as any;
+    const row = data.durations?.[0] as (number | null)[] | undefined;
+    if (!Array.isArray(row) || row.length !== destinations.length) {
+      console.warn("ORS matrix unexpected response — falling back");
+      return fallback();
+    }
+
+    return row.map((v) => (typeof v === "number" ? v : null));
+  } catch (err) {
+    console.warn("ORS matrix request failed — falling back to straight line:", err);
+    return fallback();
   }
 }
