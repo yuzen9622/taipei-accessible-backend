@@ -27,7 +27,7 @@ export interface WaitInfo {
   source: "realtime" | "schedule" | "unavailable";
 }
 
-interface NearestBus {
+export interface NearestBus {
   plateNumb: string;
   position: [number, number];
   speed?: number;
@@ -135,7 +135,7 @@ export interface AccessibleRoute {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function nearQuery(coords: [number, number], maxDistM: number) {
+export function nearQuery(coords: [number, number], maxDistM: number) {
   return {
     location: {
       $near: {
@@ -146,7 +146,7 @@ function nearQuery(coords: [number, number], maxDistM: number) {
   };
 }
 
-function haversineM(a: [number, number], b: [number, number]): number {
+export function haversineM(a: [number, number], b: [number, number]): number {
   const R = 6371000;
   const [lng1, lat1] = a;
   const [lng2, lat2] = b;
@@ -160,7 +160,7 @@ function haversineM(a: [number, number], b: [number, number]): number {
   return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
-async function fetchTdxRoute(
+export async function fetchTdxRoute(
   subRouteId: string,
   city: string
 ): Promise<BusRoute[]> {
@@ -211,7 +211,7 @@ async function fetchScheduledWait(
   }
 }
 
-async function fetchWaitInfo(
+export async function fetchWaitInfo(
   subRouteId: string,
   city: string,
   direction: number,
@@ -253,7 +253,7 @@ async function fetchWaitInfo(
 
 // ─── Real-time bus position ───────────────────────────────────────────────────
 
-async function fetchNearestBus(
+export async function fetchNearestBus(
   subRouteId: string,
   city: string,
   direction: number,
@@ -322,7 +322,7 @@ async function fetchNearestBus(
 
 // ─── Candidate builder ───────────────────────────────────────────────────────
 
-async function buildCandidate(
+export async function buildCandidate(
   subRouteId: string,
   city: string,
   origin: { lat: number; lng: number },
@@ -457,7 +457,7 @@ async function buildCandidate(
 
 // ─── Metro helpers ───────────────────────────────────────────────────────────
 
-const FACILITY_LABELS: Record<number, string> = {
+export const FACILITY_LABELS: Record<number, string> = {
   1: "有電梯",
   2: "有電扶梯",
   3: "有無障礙廁所",
@@ -465,7 +465,7 @@ const FACILITY_LABELS: Record<number, string> = {
   5: "有導盲磚",
 };
 
-async function fetchMetroStationOfLine(
+export async function fetchMetroStationOfLine(
   railSystem: string
 ): Promise<TdxMetroStationOfLine[]> {
   const resp = await tdxFetch(`${metroUrl.stationOfLineUrl(railSystem)}?$format=JSON`);
@@ -473,7 +473,7 @@ async function fetchMetroStationOfLine(
   return (await resp.json()) as TdxMetroStationOfLine[];
 }
 
-async function fetchMetroTravelTimes(
+export async function fetchMetroTravelTimes(
   railSystem: string
 ): Promise<Map<string, number>> {
   const travelMap = new Map<string, number>();
@@ -493,7 +493,7 @@ async function fetchMetroTravelTimes(
   return travelMap;
 }
 
-async function fetchMetroHeadway(
+export async function fetchMetroHeadway(
   railSystem: string,
   lineUid: string
 ): Promise<number> {
@@ -528,7 +528,7 @@ async function fetchMetroHeadway(
   }
 }
 
-async function fetchMetroFacilities(
+export async function fetchMetroFacilities(
   railSystem: string,
   stationUid: string
 ): Promise<TdxMetroStationFacility | null> {
@@ -546,7 +546,7 @@ async function fetchMetroFacilities(
 
 // ─── Metro candidate builder ──────────────────────────────────────────────────
 
-async function buildMetroCandidate(
+export async function buildMetroCandidate(
   railSystem: string,
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number }
@@ -1133,7 +1133,7 @@ function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
 //     of continuous tag scores to ensure Tier 1 barriers are never diluted.
 //   • Time normalization: linear across candidates — fastest = 100, slowest = 0.
 
-function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
+export function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
   const maxTime = Math.max(...routes.map((r) => r.totalMinutes), 1);
 
   return routes
