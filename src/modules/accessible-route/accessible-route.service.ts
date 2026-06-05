@@ -42,6 +42,16 @@ export interface WalkLeg {
   minutesEst: number;
   polyline: [number, number][]; // [[lng, lat], ...] GeoJSON order
   a11yFacilities: IOsmA11y[];
+  /**
+   * Set only on transfer routes when the walk leg ends/starts at a TRTC metro
+   * station with A11y exit data. Non-breaking optional field; null otherwise.
+   */
+  exitInfo?: {
+    exitName: string;
+    exitNumber: string;
+    type: "elevator" | "ramp";
+    coords: [number, number];
+  } | null;
 }
 
 export interface BusLeg {

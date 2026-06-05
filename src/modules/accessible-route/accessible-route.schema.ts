@@ -83,6 +83,19 @@ const WalkLegSchema = z
       ],
     }),
     a11yFacilities: z.array(OsmA11ySchema),
+    exitInfo: z
+      .object({
+        exitName: z.string(),
+        exitNumber: z.string(),
+        type: z.enum(["elevator", "ramp"]),
+        coords: z.tuple([z.number(), z.number()]),
+      })
+      .nullable()
+      .optional()
+      .openapi({
+        description:
+          "TRTC metro exit (elevator/ramp) used at this walk endpoint; only set on transfer routes",
+      }),
   })
   .openapi("WalkLeg");
 
