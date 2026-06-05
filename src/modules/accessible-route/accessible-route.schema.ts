@@ -165,10 +165,69 @@ const MetroLegSchema = z
     arrivalStationA11y: z.array(OsmA11ySchema),
     facilityHighlights: z
       .array(z.string())
-
       .openapi({ example: ["乘車站有電梯", "下車站有無障礙廁所"] }),
   })
   .openapi("MetroLeg");
+
+const ThsrLegSchema = z
+  .object({
+    type: z.literal("THSR").openapi({ example: "THSR" }),
+    trainNo: z.string().openapi({ example: "0617" }),
+    departureStation: z.string().openapi({ example: "台北" }),
+    arrivalStation: z.string().openapi({ example: "台中" }),
+    departureStationUID: z.string().openapi({ example: "THSR-1000" }),
+    arrivalStationUID: z.string().openapi({ example: "THSR-1040" }),
+    departureTime: z.string().openapi({ example: "09:00", description: "HH:mm" }),
+    arrivalTime: z.string().openapi({ example: "09:47", description: "HH:mm" }),
+    rideMinutes: z.number().openapi({ example: 47 }),
+    waitInfo: WaitInfoSchema,
+    estimatedWaitMinutes: z.number().openapi({ example: 8 }),
+    polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
+      example: [
+        [121.516, 25.013],
+        [120.684, 24.178],
+      ],
+      description: "[boardStation, alightStation] only — two-point line",
+    }),
+    departureStationA11y: z.array(OsmA11ySchema),
+    arrivalStationA11y: z.array(OsmA11ySchema),
+    facilityHighlights: z
+      .array(z.string())
+      .openapi({ example: ["高鐵站設有無障礙設施", "列車備有無障礙座位及輪椅空間"] }),
+  })
+  .openapi("ThsrLeg");
+
+const TraLegSchema = z
+  .object({
+    type: z.literal("TRA").openapi({ example: "TRA" }),
+    trainNo: z.string().openapi({ example: "0131" }),
+    trainTypeName: z.string().openapi({
+      example: "自強",
+      description: "Train type in Chinese, e.g. 自強, 莒光, 區間車",
+    }),
+    departureStation: z.string().openapi({ example: "台北" }),
+    arrivalStation: z.string().openapi({ example: "基隆" }),
+    departureStationUID: z.string().openapi({ example: "TRA-0900" }),
+    arrivalStationUID: z.string().openapi({ example: "TRA-0900H" }),
+    departureTime: z.string().openapi({ example: "08:30", description: "HH:mm" }),
+    arrivalTime: z.string().openapi({ example: "09:02", description: "HH:mm" }),
+    rideMinutes: z.number().openapi({ example: 32 }),
+    waitInfo: WaitInfoSchema,
+    estimatedWaitMinutes: z.number().openapi({ example: 12 }),
+    polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
+      example: [
+        [121.516, 25.013],
+        [121.74, 25.13],
+      ],
+      description: "[boardStation, alightStation] only — two-point line",
+    }),
+    departureStationA11y: z.array(OsmA11ySchema),
+    arrivalStationA11y: z.array(OsmA11ySchema),
+    facilityHighlights: z
+      .array(z.string())
+      .openapi({ example: ["臺鐵自強 列車", "乘車站附近有電梯"] }),
+  })
+  .openapi("TraLeg");
 
 const ScoreComponentsSchema = z
   .object({
@@ -194,15 +253,20 @@ const AccessibleRouteSchema = z
     routeId: z.string().openapi({ example: "route-001" }),
     routeName: z.string().openapi({ example: "信義幹線" }),
     totalMinutes: z.number().openapi({ example: 18 }),
+    transferCount: z
+      .number()
+      .openapi({ example: 0, description: "0=direct, 1=one transfer" }),
     legs: z
       .array(
         z.discriminatedUnion("type", [
           WalkLegSchema,
           BusLegSchema,
           MetroLegSchema,
+          ThsrLegSchema,
+          TraLegSchema,
         ]),
       )
-      .openapi({ description: "Ordered legs: walk → transit → walk" }),
+      .openapi({ description: "Ordered legs: walk → transit → walk. Transit leg type is BUS, METRO, THSR, or TRA." }),
     accessibilityHighlights: z
       .array(z.string())
       .openapi({ example: ["全程低地板公車", "出入口設有電梯"] }),
@@ -272,7 +336,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "Accessible transit route plan",
   description:
-    "Finds wheelchair-accessible bus and metro routes between an origin and destination. Each point can be a place name (geocoded via Google Maps) or explicit `{latitude, longitude}` coordinates. Returns up to 3 ranked routes scored by accessibility highlights and travel time.",
+    "Finds wheelchair-accessible routes between an origin and destination. Searches bus (city/inter-city), MRT metro, THSR high-speed rail, and TRA Taiwan Railways concurrently. Each point can be a place name (geocoded via Google Maps) or explicit `{latitude, longitude}` coordinates. Returns up to 3 candidates ranked by a composite accessibility score (65% facility quality + 35% travel time). Transit leg type is one of `BUS`, `METRO`, `THSR`, or `TRA`.",
   request: {
     body: {
       content: { "application/json": { schema: AccessibleRouteBodySchema } },
@@ -282,7 +346,7 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        "Up to 3 accessible routes (bus and/or metro) ranked by accessibility score",
+        "Up to 3 accessible routes (BUS / METRO / THSR / TRA) ranked by accessibility score",
       content: {
         "application/json": { schema: AccessibleRouteResponseSchema },
       },
@@ -292,7 +356,7 @@ registry.registerPath({
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
-      description: "No connected bus or metro routes found",
+      description: "No connected bus, metro, THSR, or TRA routes found",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {

@@ -119,6 +119,8 @@ export interface AccessibleRoute {
   routeId: string;
   routeName: string;
   totalMinutes: number;
+  /** 0 = direct, 1 = one transfer */
+  transferCount: number;
   legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[];
   accessibilityHighlights: string[];
   /** 0–100 evidence-based accessibility score. Set by scoreAndRank(). */
@@ -430,6 +432,7 @@ export async function buildCandidate(
     routeId: subRouteId,
     routeName: subRouteId,
     totalMinutes,
+    transferCount: 0,
     legs: [
       {
         type: "WALK",
@@ -706,6 +709,7 @@ export async function buildMetroCandidate(
     routeId: `METRO-${boardStation.stationUid}-${alightStation.stationUid}`,
     routeName: `${railSystem} ${boardStation.stationName.Zh_tw} → ${alightStation.stationName.Zh_tw}`,
     totalMinutes,
+    transferCount: 0,
     legs: [
       {
         type: "WALK",
@@ -912,6 +916,7 @@ async function buildThsrCandidate(
     routeId:   `THSR-${boardStation.stationID}-${alightStation.stationID}`,
     routeName: `高鐵 ${boardStation.stationName.Zh_tw} → ${alightStation.stationName.Zh_tw}`,
     totalMinutes,
+    transferCount: 0,
     legs: [
       {
         type:           "WALK",
@@ -1080,6 +1085,7 @@ async function buildTraCandidate(
     routeId:   `TRA-${boardStation.stationID}-${alightStation.stationID}`,
     routeName: `臺鐵${trainInfo.trainTypeName} ${boardStation.stationName.Zh_tw} → ${alightStation.stationName.Zh_tw}`,
     totalMinutes,
+    transferCount: 0,
     legs: [
       {
         type:           "WALK",
@@ -1155,38 +1161,34 @@ export function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
     .map((s) => s.route);
 }
 
+function transitLegKey(leg: BusLeg | MetroLeg | ThsrLeg | TraLeg): string {
+  switch (leg.type) {
+    case "BUS":
+      return `BUS|${leg.routeName}|${leg.departureStop}|${leg.arrivalStop}|${leg.direction}`;
+    case "METRO":
+      return `METRO|${leg.railSystem}|${leg.departureStationUid}|${leg.arrivalStationUid}`;
+    case "THSR":
+      return `THSR|${leg.departureStationUID}|${leg.arrivalStationUID}`;
+    case "TRA":
+      return `TRA|${leg.departureStationUID}|${leg.arrivalStationUID}`;
+  }
+}
+
+function buildRouteKey(r: AccessibleRoute): string {
+  const transitLegs = r.legs.filter(
+    (l): l is BusLeg | MetroLeg | ThsrLeg | TraLeg => l.type !== "WALK"
+  );
+  if (transitLegs.length === 0) return ""; // walk-only: never deduplicate
+  return transitLegs.map(transitLegKey).join("::");
+}
+
 function deduplicateRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
   const seen = new Set<string>();
   return routes.filter((r) => {
-    const busLeg = r.legs.find((l): l is BusLeg => l.type === "BUS");
-    if (busLeg) {
-      const key = `${busLeg.departureStop}|${busLeg.arrivalStop}|${busLeg.direction}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }
-    const metroLeg = r.legs.find((l): l is MetroLeg => l.type === "METRO");
-    if (metroLeg) {
-      const key = `${metroLeg.departureStationUid}|${metroLeg.arrivalStationUid}|${metroLeg.railSystem}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }
-    const thsrLeg = r.legs.find((l): l is ThsrLeg => l.type === "THSR");
-    if (thsrLeg) {
-      const key = `THSR|${thsrLeg.departureStationUID}|${thsrLeg.arrivalStationUID}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }
-    const traLeg = r.legs.find((l): l is TraLeg => l.type === "TRA");
-    if (traLeg) {
-      const key = `TRA|${traLeg.departureStationUID}|${traLeg.arrivalStationUID}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }
-    // No transit leg to dedupe on — keep the route.
+    const key = buildRouteKey(r);
+    if (key === "") return true; // walk-only route: always keep
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -1240,6 +1242,14 @@ export async function findAccessibleRoutes(
     .then((r): AccessibleRoute[] => (r ? [r] : []))
     .catch((): AccessibleRoute[] => []);
 
+  // Phase 3: one-transfer routes run concurrently with the direct search.
+  // Lazy import avoids a circular dependency at module-eval time (transfer-finder
+  // imports many helpers from this file); starting it here rather than after the
+  // direct Promise.all keeps transfer latency off the critical path.
+  const transferPromise = import("./transfer-finder")
+    .then((m) => m.findTransferRoutes(origin, destination, city))
+    .catch((): AccessibleRoute[] => []);
+
   const [busRoutes, ...allRailArrays] = await Promise.all([
     busSearchPromise,
     ...metroPromises,
@@ -1247,7 +1257,10 @@ export async function findAccessibleRoutes(
     traPromise,
   ]);
   const combined = [...busRoutes, ...allRailArrays.flat()];
-  if (!combined.length) return [];
 
-  return scoreAndRank(deduplicateRoutes(combined)).slice(0, 3);
+  const transferRoutes = await transferPromise;
+  const allRoutes = [...combined, ...transferRoutes];
+  if (!allRoutes.length) return [];
+
+  return scoreAndRank(deduplicateRoutes(allRoutes)).slice(0, 3);
 }
