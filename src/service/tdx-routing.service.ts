@@ -111,6 +111,15 @@ function isWaitingSection(s: TdxSection): boolean {
   return len === 0 && s.departure.place.name === s.arrival.place.name;
 }
 
+/** A walking segment, even when TDX tags it type="transit" with a pedestrian mode. */
+function isPedestrianSection(s: TdxSection): boolean {
+  if (s.type === "pedestrian") return true;
+  const tag = `${s.transport?.mode ?? ""} ${s.transport?.category ?? ""} ${
+    s.transport?.name ?? ""
+  }`.toUpperCase();
+  return /PEDESTRIAN|WALK|FOOT/.test(tag);
+}
+
 /** Approximate a transit polyline from departure → intermediate stops → arrival. */
 function sectionPolyline(s: TdxSection): [number, number][] {
   const pts: [number, number][] = [coord(s.departure.place)];
@@ -244,12 +253,6 @@ function ymdDash(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-function addDays(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
-
 export async function planTdxRoute(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
@@ -283,11 +286,12 @@ export async function planTdxRoute(
     const realTransitSections: TdxSection[] = [];
 
     for (const s of r.sections) {
-      if (s.type === "pedestrian") {
-        legs.push(pedestrianToWalkLeg(s));
+      if (isWaitingSection(s)) continue; // TDX transfer-wait placeholder, not a leg
+      if (isPedestrianSection(s)) {
+        // Skip zero-length pedestrian stubs (transfer connectors, no real walk).
+        if ((s.travelSummary?.length ?? 0) > 0) legs.push(pedestrianToWalkLeg(s));
         continue;
       }
-      if (isWaitingSection(s)) continue; // TDX transfer-wait placeholder, not a leg
       const leg = transitSectionToLeg(s);
       legs.push(leg);
       transitLegs.push(leg);
@@ -342,13 +346,19 @@ export async function planTdxRoute(
   return out;
   };
 
-  // Today (or the caller's time); if nothing is left, roll to the next day's
-  // earliest departures (05:00) instead of returning empty.
+  // Try the caller's time (or now). If nothing comes back, retry at the next
+  // service-day morning (05:00). When `now` is before 05:00 that morning is
+  // still TODAY (not tomorrow) — so an overnight gap doesn't wrongly skip a day.
+  const base = opts?.departureTime ?? new Date();
   const todayRoutes = await runOnce(opts?.departureTime, false);
   if (todayRoutes.length) return todayRoutes;
 
-  const base = opts?.departureTime ?? new Date();
-  const tomorrowMorning = addDays(base, 1);
-  tomorrowMorning.setHours(5, 0, 0, 0);
-  return runOnce(tomorrowMorning, true);
+  const morning = new Date(base);
+  morning.setHours(5, 0, 0, 0);
+  let isNextDay = false;
+  if (morning.getTime() <= base.getTime()) {
+    morning.setDate(morning.getDate() + 1);
+    isNextDay = true;
+  }
+  return runOnce(morning, isNextDay);
 }
