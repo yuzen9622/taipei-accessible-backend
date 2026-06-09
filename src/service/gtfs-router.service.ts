@@ -107,6 +107,21 @@ function toYmd(date: Date): string {
   return `${y}${m}${d}`;
 }
 
+/** Local-date "YYYY-MM-DD" for display / AccessibleRoute.departureDate. */
+function ymdDash(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** A new Date n calendar days after the given date (local time). */
+function addDays(date: Date, n: number): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
 const WEEKDAY_FIELDS = [
   "sunday",
   "monday",
@@ -809,81 +824,106 @@ export async function planGtfsRoute(
   opts?: PlanGtfsRouteOptions
 ): Promise<AccessibleRoute[]> {
   const now = opts?.departureTime ?? new Date();
-  const afterSec = gtfsTimeToSeconds(
+  const nowSec = gtfsTimeToSeconds(
     `${String(now.getHours()).padStart(2, "0")}:${String(
       now.getMinutes()
     ).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`
   );
   const maxTransfers = opts?.maxTransfers ?? 0;
 
-  const [activeServiceIds, originStops, destStops] = await Promise.all([
-    getActiveServiceIds(now),
+  // Boarding/alighting candidate stops are day-independent — resolve once.
+  const [originStops, destStops] = await Promise.all([
     findNearestGtfsStops(origin),
     findNearestGtfsStops(destination),
   ]);
-  if (!activeServiceIds.size || !originStops.length || !destStops.length) {
-    return [];
-  }
+  if (!originStops.length || !destStops.length) return [];
 
-  const routes: AccessibleRoute[] = [];
+  // Search a single service day. afterSec filters departures; isNextDay tags the
+  // route (and stamps departureDate) when we've rolled past today.
+  const searchDay = async (
+    serviceDate: Date,
+    afterSec: number,
+    isNextDay: boolean
+  ): Promise<AccessibleRoute[]> => {
+    const activeServiceIds = await getActiveServiceIds(serviceDate);
+    if (!activeServiceIds.size) return [];
+    const dateStr = ymdDash(serviceDate);
+    const routes: AccessibleRoute[] = [];
 
-  // ── Direct ──
-  const direct = await findDirectConnections(
-    originStops.map((s) => s.stopId),
-    destStops.map((s) => s.stopId),
-    afterSec,
-    activeServiceIds,
-    { routeTypes: opts?.routeTypes, limit: opts?.limit ?? MAX_DIRECT_RESULTS }
-  );
+    const direct = await findDirectConnections(
+      originStops.map((s) => s.stopId),
+      destStops.map((s) => s.stopId),
+      afterSec,
+      activeServiceIds,
+      { routeTypes: opts?.routeTypes, limit: opts?.limit ?? MAX_DIRECT_RESULTS }
+    );
 
-  for (const conn of direct) {
-    const transitLeg = await connectionToLeg(conn, afterSec);
-    if (!transitLeg) continue;
-    const [walkIn, walkOut, boardA11y, alightA11y] = await Promise.all([
-      buildWalkLeg(
-        { coords: [origin.lng, origin.lat], label: "出發地" },
-        { coords: conn.fromCoords, label: conn.fromStopName }
-      ),
-      buildWalkLeg(
-        { coords: conn.toCoords, label: conn.toStopName },
-        { coords: [destination.lng, destination.lat], label: "目的地" }
-      ),
-      nearbyA11y(conn.fromCoords),
-      nearbyA11y(conn.toCoords),
-    ]);
-    attachA11yToLeg(transitLeg, boardA11y, alightA11y);
-    walkIn.a11yFacilities = boardA11y;
-    walkOut.a11yFacilities = alightA11y;
-    const legs = [walkIn, transitLeg, walkOut];
-    const transitMinutes = transitLeg.estimatedWaitMinutes + conn.rideMinutes;
-    const totalMinutes = walkIn.minutesEst + transitMinutes + walkOut.minutesEst;
-    routes.push(
-      assembleRoute(
+    for (const conn of direct) {
+      const transitLeg = await connectionToLeg(conn, afterSec);
+      if (!transitLeg) continue;
+      const [walkIn, walkOut, boardA11y, alightA11y] = await Promise.all([
+        buildWalkLeg(
+          { coords: [origin.lng, origin.lat], label: "出發地" },
+          { coords: conn.fromCoords, label: conn.fromStopName }
+        ),
+        buildWalkLeg(
+          { coords: conn.toCoords, label: conn.toStopName },
+          { coords: [destination.lng, destination.lat], label: "目的地" }
+        ),
+        nearbyA11y(conn.fromCoords),
+        nearbyA11y(conn.toCoords),
+      ]);
+      attachA11yToLeg(transitLeg, boardA11y, alightA11y);
+      walkIn.a11yFacilities = boardA11y;
+      walkOut.a11yFacilities = alightA11y;
+      const legs = [walkIn, transitLeg, walkOut];
+      const transitMinutes = transitLeg.estimatedWaitMinutes + conn.rideMinutes;
+      const totalMinutes =
+        walkIn.minutesEst + transitMinutes + walkOut.minutesEst;
+      const highlights = deriveHighlights(boardA11y, alightA11y);
+      if (isNextDay) highlights.unshift(`🕒 今日班次已過，顯示 ${dateStr} 最早班次`);
+      const route = assembleRoute(
         `gtfs-direct-${conn.tripId}`,
         conn.routeShortName || conn.routeLongName,
         legs,
         0,
         totalMinutes,
-        deriveHighlights(boardA11y, alightA11y)
-      )
-    );
-  }
+        highlights
+      );
+      if (isNextDay) route.departureDate = dateStr;
+      routes.push(route);
+    }
 
-  // ── One transfer ──
-  if (maxTransfers >= 1) {
-    const transferRoutes = await findOneTransferRoutes(
-      origin,
-      destination,
-      originStops,
-      destStops,
-      afterSec,
-      activeServiceIds,
-      opts
-    );
-    routes.push(...transferRoutes);
-  }
+    if (maxTransfers >= 1) {
+      const transferRoutes = await findOneTransferRoutes(
+        origin,
+        destination,
+        originStops,
+        destStops,
+        afterSec,
+        activeServiceIds,
+        opts
+      );
+      for (const r of transferRoutes) {
+        if (isNextDay) {
+          r.departureDate = dateStr;
+          r.accessibilityHighlights.unshift(
+            `🕒 今日班次已過，顯示 ${dateStr} 最早班次`
+          );
+        }
+      }
+      routes.push(...transferRoutes);
+    }
+    return routes;
+  };
 
-  return routes;
+  // Today from now; if nothing left today, roll forward to the next service day
+  // (earliest departures) instead of returning empty.
+  const todayRoutes = await searchDay(now, nowSec, false);
+  if (todayRoutes.length) return todayRoutes;
+
+  const tomorrow = addDays(now, 1);
+  return searchDay(tomorrow, 0, true);
 }
 
 /** Assemble an AccessibleRoute from legs and a precomputed total duration. */

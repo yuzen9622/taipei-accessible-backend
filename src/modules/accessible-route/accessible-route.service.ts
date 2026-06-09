@@ -144,6 +144,12 @@ export interface AccessibleRoute {
   transferCount: number;
   legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[];
   accessibilityHighlights: string[];
+  /**
+   * Service date of the route as "YYYY-MM-DD", set only when today's services
+   * are exhausted and the router rolled forward to the next service day.
+   * Undefined means the route departs today.
+   */
+  departureDate?: string;
   /** 0–100 evidence-based accessibility score. Set by scoreAndRank(). */
   accessibilityScore?: number;
   /** Semantic label for the score. Set by scoreAndRank(). */

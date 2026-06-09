@@ -239,11 +239,26 @@ function toIsoLocal(d: Date): string {
  * Plan accessible routes via the TDX hosted routing engine, mapped into
  * AccessibleRoute objects and enriched with nearby OsmA11y facilities.
  */
+function ymdDash(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function addDays(d: Date, n: number): Date {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
 export async function planTdxRoute(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
   opts?: PlanTdxRouteOptions
 ): Promise<AccessibleRoute[]> {
+  const runOnce = async (
+    depart: Date | undefined,
+    isNextDay: boolean
+  ): Promise<AccessibleRoute[]> => {
   const params = new URLSearchParams({
     origin: `${origin.lat},${origin.lng}`,
     destination: `${destination.lat},${destination.lng}`,
@@ -253,12 +268,13 @@ export async function planTdxRoute(
     first_mile_mode: "0",
     last_mile_mode: "0",
   });
-  if (opts?.departureTime) params.set("depart", toIsoLocal(opts.departureTime));
+  if (depart) params.set("depart", toIsoLocal(depart));
 
   const res = await tdxFetch(`${ROUTING_URL}?${params.toString()}`);
   if (!res.ok) return [];
   const json = (await res.json()) as { data?: { routes?: TdxRoute[] } };
   const routes = json.data?.routes ?? [];
+  const dateStr = depart ? ymdDash(depart) : "";
 
   const out: AccessibleRoute[] = [];
   for (const [i, r] of routes.entries()) {
@@ -309,14 +325,30 @@ export async function planTdxRoute(
       )
       .join(" → ");
 
+    const highlights = deriveHighlights(boardA11y, alightA11y);
+    if (isNextDay && dateStr)
+      highlights.unshift(`🕒 今日班次已過，顯示 ${dateStr} 最早班次`);
+
     out.push({
       routeId: `tdx-${i}-${r.start_time}`,
       routeName: routeName || "TDX Route",
       totalMinutes: Math.max(1, Math.round(r.travel_time / 60)),
       transferCount: r.transfers,
       legs,
-      accessibilityHighlights: deriveHighlights(boardA11y, alightA11y),
+      accessibilityHighlights: highlights,
+      ...(isNextDay && dateStr ? { departureDate: dateStr } : {}),
     });
   }
   return out;
+  };
+
+  // Today (or the caller's time); if nothing is left, roll to the next day's
+  // earliest departures (05:00) instead of returning empty.
+  const todayRoutes = await runOnce(opts?.departureTime, false);
+  if (todayRoutes.length) return todayRoutes;
+
+  const base = opts?.departureTime ?? new Date();
+  const tomorrowMorning = addDays(base, 1);
+  tomorrowMorning.setHours(5, 0, 0, 0);
+  return runOnce(tomorrowMorning, true);
 }
