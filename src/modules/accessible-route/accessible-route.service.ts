@@ -1447,6 +1447,27 @@ export async function findAccessibleRoutes(
   const geoQuery = (coord: { lat: number; lng: number }, dist: number) =>
     nearQuery([coord.lng, coord.lat], dist);
 
+  // Phase 7: when USE_GTFS_ROUTER is enabled, transit planning uses the GTFS
+  // graph (accessible, polylines, local) PLUS the TDX hosted routing engine,
+  // which fills the systems GTFS lacks (TRA, intercity rail). Both are mapped to
+  // AccessibleRoute, merged, scored, and ranked — no legacy TDX leg-builders run.
+  // Both services import only TYPES from this file, so there is no runtime cycle.
+  if (process.env.USE_GTFS_ROUTER === "true") {
+    const [gtfsRoutes, tdxRoutes] = await Promise.all([
+      import("../../service/gtfs-router.service")
+        .then((m) => m.planGtfsRoute(origin, destination, { maxTransfers: 1 }))
+        .catch((): AccessibleRoute[] => []),
+      process.env.USE_TDX_ROUTING === "true"
+        ? import("../../service/tdx-routing.service")
+            .then((m) => m.planTdxRoute(origin, destination))
+            .catch((): AccessibleRoute[] => [])
+        : Promise.resolve<AccessibleRoute[]>([]),
+    ]);
+    const merged = [...gtfsRoutes, ...tdxRoutes];
+    if (!merged.length) return [];
+    return scoreAndRank(deduplicateRoutes(merged)).slice(0, 3);
+  }
+
   // Bus search
   const busSearchPromise = (async (): Promise<AccessibleRoute[]> => {
     const [originStops, destStops] = await Promise.all([

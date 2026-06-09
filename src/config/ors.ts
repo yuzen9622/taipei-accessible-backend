@@ -70,7 +70,7 @@ export async function orsWalkingRoute(
   const profile = wheelchair ? "wheelchair" : "foot-walking";
 
   try {
-    const resp = await fetch(`${ORS_BASE}/directions/${profile}/geojson`, {
+    let resp = await fetch(`${ORS_BASE}/directions/${profile}/geojson`, {
       method: "POST",
       headers: {
         Authorization: apiKey,
@@ -78,6 +78,19 @@ export async function orsWalkingRoute(
       },
       body: JSON.stringify({ coordinates: [from, to] }),
     });
+
+    // wheelchair profile is not available on the free public API — retry with
+    // foot-walking before giving up entirely.
+    if (!resp.ok && resp.status === 404 && profile === "wheelchair") {
+      resp = await fetch(`${ORS_BASE}/directions/foot-walking/geojson`, {
+        method: "POST",
+        headers: {
+          Authorization: apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ coordinates: [from, to] }),
+      });
+    }
 
     if (!resp.ok) {
       console.warn(`ORS ${resp.status} — falling back to straight line`);
