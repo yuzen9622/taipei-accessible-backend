@@ -16,6 +16,7 @@ import A11y from "../model/a11y.model";
 import { IA11y } from "../types";
 import { orsWalkingRoute, haversineCoords } from "../config/ors";
 import { WalkLeg } from "../modules/accessible-route/accessible-route.service";
+import { getStationAccess } from "./indoor-graph.service";
 
 /** Raw lean()'d A11y document — the stored DB shape, before parsing. */
 type RawA11yDoc = IA11y;
@@ -116,6 +117,36 @@ export async function buildExitWalkLeg(
   from = "出發地"
 ): Promise<WalkLeg> {
   try {
+    // Phase 8 (spec §10.5): the GTFS pathways indoor graph is the primary,
+    // system-agnostic source. It covers every system with indoor data, so it is
+    // tried first regardless of operator. The TRTC-only A11y collection below
+    // remains as a fallback when the feed carries no pathways for the station.
+    if (process.env.USE_INDOOR_GRAPH !== "false") {
+      const access = await getStationAccess(
+        { name: station.name, coords: station.coords },
+        userCoords,
+        "wheelchair"
+      );
+      if (access?.entrance && access.stepFree) {
+        const walk = await orsWalkingRoute(userCoords, access.entrance.coords);
+        return {
+          type: "WALK",
+          from,
+          to: station.name,
+          distanceM: Math.round(walk.distanceM),
+          minutesEst: Math.round(walk.durationSec / 60),
+          polyline: walk.polyline,
+          a11yFacilities: [],
+          exitInfo: {
+            exitName: access.entrance.name,
+            exitNumber: access.entrance.exitNumber,
+            type: access.usesElevator ? "elevator" : "ramp",
+            coords: access.entrance.coords,
+          },
+        };
+      }
+    }
+
     if (station.railSystem === "TRTC") {
       const exits = await findAccessibleExits(station.name);
       if (exits.length > 0) {

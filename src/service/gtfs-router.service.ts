@@ -31,12 +31,14 @@ import { GtfsRoute } from "../model/gtfs-route.model";
 import { GtfsCalendar } from "../model/gtfs-calendar.model";
 import { GtfsFrequency } from "../model/gtfs-frequency.model";
 import { GtfsShape } from "../model/gtfs-shape.model";
+import { StationCluster } from "../model/station-cluster.model";
 import OsmA11y from "../model/osm-a11y.model";
 import {
   orsWalkingRoute,
   haversineCoords,
   WHEELCHAIR_SPEED_M_PER_MIN,
 } from "../config/ors";
+import { getStationAccess, AccessibilityMode } from "./indoor-graph.service";
 import type { IOsmA11y } from "../types";
 
 // Leg/route types live in the accessible-route module. Import as TYPES only so
@@ -70,6 +72,9 @@ const MAX_NEAR_RAIL_STOPS = 25; // rail/metro stops considered per endpoint (kep
 /** Metro / HSR / TRA route-network stopId prefixes (all use "<SYSTEM>_…"). */
 const RAIL_STOP_ID_REGEX = /^(TRTC|KRTC|KLRT|TYMC|TMRT|NTMC|THSR|TRA)_/;
 const TRANSFER_SAME_STATION_M = 200; // two route-network stops = same station if within this
+const CLUSTER_TRANSFER_MAX_M = 600; // looser bound for stops in the SAME StationCluster
+// (bus↔rail members can sit ~300-500m apart; the transfer walk time is still
+// computed from the actual distance, so the bound only gates feasibility)
 const MAX_DIRECT_RESULTS = 10; // direct connections returned before scoring
 const MAX_TRANSFER_HUB_TRIPS = 40; // cap origin/dest trips scanned for transfer hubs
 const MIN_TRANSFER_WALK_SEC = 90; // floor for in-station transfer walk
@@ -246,6 +251,32 @@ export async function findNearestGtfsStops(
     });
   }
   return out.sort((a, b) => a.distanceM - b.distanceM);
+}
+
+/**
+ * stopId → clusterId for the given stops (single indexed query against the
+ * offline-built StationCluster collection). Stops outside any cluster are
+ * absent from the map — callers fall back to exact stop_name matching.
+ */
+async function getClusterKeys(stopIds: string[]): Promise<Map<string, string>> {
+  if (!stopIds.length) return new Map();
+  const map = new Map<string, string>();
+  try {
+    const docs = await StationCluster.find({
+      memberStopIds: { $in: stopIds },
+    })
+      .select("clusterId memberStopIds")
+      .lean();
+    const wanted = new Set(stopIds);
+    for (const d of docs) {
+      for (const id of d.memberStopIds) {
+        if (wanted.has(id)) map.set(id, d.clusterId);
+      }
+    }
+  } catch {
+    /* collection missing → name matching only */
+  }
+  return map;
 }
 
 /**
@@ -781,21 +812,139 @@ export function attachA11yToLeg(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Indoor Graph enrichment (Phase 8) — step-free exit/elevator guidance per
+// rail station, derived from GTFS pathways. System-agnostic: works for any
+// station with indoor data (TRTC/NTMC/KLRT/TMRT/KRTC/TYMC/THSR/TRA).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Rail leg types that carry station-level indoor data worth enriching. */
+type RailLeg = MetroLeg | ThsrLeg | TraLeg;
+
+function isRailLeg(leg: BusLeg | MetroLeg | ThsrLeg | TraLeg): leg is RailLeg {
+  return leg.type === "METRO" || leg.type === "THSR" || leg.type === "TRA";
+}
+
+/**
+ * Enrich a rail leg + its adjacent walk legs with indoor-graph guidance:
+ *  • the in-station walk to the boarding station gets `exitInfo` (nearest
+ *    step-free entrance + elevator info), and likewise the walk OUT of the
+ *    alighting station;
+ *  • the rail leg's `facilityHighlights` gains step-free / elevator notes.
+ *
+ * Best-effort and non-throwing: stations without indoor data are left untouched.
+ * Gated by env so the extra DB work can be disabled (USE_INDOOR_GRAPH=false).
+ */
+async function enrichLegIndoor(
+  leg: RailLeg,
+  walkIn: WalkLeg | null,
+  walkOut: WalkLeg | null,
+  originCoords: [number, number],
+  destCoords: [number, number],
+  boardCoords: [number, number],
+  alightCoords: [number, number],
+  mode: AccessibilityMode = "wheelchair"
+): Promise<void> {
+  if (process.env.USE_INDOOR_GRAPH === "false") return;
+
+  const boardName = leg.departureStation;
+  const alightName = leg.arrivalStation;
+
+  const [board, alight] = await Promise.all([
+    getStationAccess({ name: boardName, coords: boardCoords }, originCoords, mode),
+    getStationAccess({ name: alightName, coords: alightCoords }, destCoords, mode),
+  ]);
+
+  const exitTypeFor = (a: NonNullable<typeof board>) =>
+    (a.usesElevator ? "elevator" : "ramp") as "elevator" | "ramp";
+
+  if (board?.entrance) {
+    // Only advertise a specific exit when it is a PROVEN step-free entrance —
+    // otherwise the nearest entrance may be stairs-only, which would mislead.
+    if (walkIn && board.stepFree) {
+      walkIn.exitInfo = {
+        exitName: board.entrance.name,
+        exitNumber: board.entrance.exitNumber,
+        type: exitTypeFor(board),
+        coords: board.entrance.coords,
+      };
+    }
+    if (board.stepFree && board.usesElevator) {
+      leg.facilityHighlights.push(
+        `乘車站「${board.stationName}」可由${board.entrance.name}電梯無障礙進站` +
+          (board.elevatorLevelName ? `（${board.elevatorLevelName}）` : "")
+      );
+    } else if (board.stepFree) {
+      leg.facilityHighlights.push(
+        `乘車站「${board.stationName}」${board.entrance.name}為無障礙平面進站`
+      );
+    } else if (board.hasElevator) {
+      leg.facilityHighlights.push(`乘車站「${board.stationName}」設有電梯`);
+    }
+  }
+
+  if (alight?.entrance) {
+    if (walkOut && alight.stepFree) {
+      walkOut.exitInfo = {
+        exitName: alight.entrance.name,
+        exitNumber: alight.entrance.exitNumber,
+        type: exitTypeFor(alight),
+        coords: alight.entrance.coords,
+      };
+    }
+    if (alight.stepFree && alight.usesElevator) {
+      leg.facilityHighlights.push(
+        `下車站「${alight.stationName}」可由${alight.entrance.name}電梯無障礙出站` +
+          (alight.elevatorLevelName ? `（${alight.elevatorLevelName}）` : "")
+      );
+    } else if (alight.stepFree) {
+      leg.facilityHighlights.push(
+        `下車站「${alight.stationName}」${alight.entrance.name}為無障礙平面出站`
+      );
+    } else if (alight.hasElevator) {
+      leg.facilityHighlights.push(`下車站「${alight.stationName}」設有電梯`);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // First/last-mile walk legs (ORS)
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function buildWalkLeg(
   from: { coords: [number, number]; label: string },
-  to: { coords: [number, number]; label: string }
+  to: { coords: [number, number]; label: string },
+  wheelchair = true
 ): Promise<WalkLeg> {
-  const route = await orsWalkingRoute(from.coords, to.coords);
+  // Same-point transfer (e.g. boarding the next trip at the very same platform
+  // stop): skip ORS entirely — a zero-length request yields NaN summaries.
+  const directM = haversineCoords(from.coords, to.coords);
+  if (directM < 5) {
+    return {
+      type: "WALK",
+      from: from.label,
+      to: to.label,
+      distanceM: 0,
+      minutesEst: 0,
+      polyline: [from.coords, to.coords],
+      a11yFacilities: [],
+      exitInfo: null,
+    };
+  }
+
+  const route = await orsWalkingRoute(from.coords, to.coords, wheelchair);
+  const distanceM = Number.isFinite(route.distanceM)
+    ? Math.round(route.distanceM)
+    : Math.round(directM);
+  const minutesEst = Number.isFinite(route.durationSec)
+    ? Math.max(1, Math.round(route.durationSec / 60))
+    : Math.max(1, Math.round(distanceM / WHEELCHAIR_SPEED_M_PER_MIN));
   return {
     type: "WALK",
     from: from.label,
     to: to.label,
-    distanceM: Math.round(route.distanceM),
-    minutesEst: Math.max(1, Math.round(route.durationSec / 60)),
-    polyline: route.polyline,
+    distanceM,
+    minutesEst,
+    polyline: route.polyline?.length >= 2 ? route.polyline : [from.coords, to.coords],
     a11yFacilities: [],
     exitInfo: null,
   };
@@ -807,9 +956,15 @@ async function buildWalkLeg(
 
 export interface PlanGtfsRouteOptions {
   departureTime?: Date;
-  maxTransfers?: 0 | 1;
+  /** 0–2 transfers (Phase 12). Two-transfer search only runs when direct +
+   *  one-transfer yield fewer than 3 routes. */
+  maxTransfers?: 0 | 1 | 2;
   routeTypes?: Array<1 | 2 | 3 | 4>;
   limit?: number;
+  /** Accessibility mode (Phase 11): selects the ORS walking profile
+   *  (wheelchair vs foot-walking) and the indoor-graph traversal rules.
+   *  Defaults to "wheelchair" to preserve the original conservative behaviour. */
+  mode?: AccessibilityMode;
 }
 
 /**
@@ -830,6 +985,8 @@ export async function planGtfsRoute(
     ).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`
   );
   const maxTransfers = opts?.maxTransfers ?? 0;
+  const mode = opts?.mode ?? "wheelchair";
+  const wheelchairWalk = mode === "wheelchair";
 
   // Boarding/alighting candidate stops are day-independent — resolve once.
   const [originStops, destStops] = await Promise.all([
@@ -864,11 +1021,13 @@ export async function planGtfsRoute(
       const [walkIn, walkOut, boardA11y, alightA11y] = await Promise.all([
         buildWalkLeg(
           { coords: [origin.lng, origin.lat], label: "出發地" },
-          { coords: conn.fromCoords, label: conn.fromStopName }
+          { coords: conn.fromCoords, label: conn.fromStopName },
+          wheelchairWalk
         ),
         buildWalkLeg(
           { coords: conn.toCoords, label: conn.toStopName },
-          { coords: [destination.lng, destination.lat], label: "目的地" }
+          { coords: [destination.lng, destination.lat], label: "目的地" },
+          wheelchairWalk
         ),
         nearbyA11y(conn.fromCoords),
         nearbyA11y(conn.toCoords),
@@ -876,6 +1035,18 @@ export async function planGtfsRoute(
       attachA11yToLeg(transitLeg, boardA11y, alightA11y);
       walkIn.a11yFacilities = boardA11y;
       walkOut.a11yFacilities = alightA11y;
+      if (isRailLeg(transitLeg)) {
+        await enrichLegIndoor(
+          transitLeg,
+          walkIn,
+          walkOut,
+          [origin.lng, origin.lat],
+          [destination.lng, destination.lat],
+          conn.fromCoords,
+          conn.toCoords,
+          mode
+        );
+      }
       const legs = [walkIn, transitLeg, walkOut];
       const transitMinutes = transitLeg.estimatedWaitMinutes + conn.rideMinutes;
       const totalMinutes =
@@ -913,6 +1084,29 @@ export async function planGtfsRoute(
         }
       }
       routes.push(...transferRoutes);
+    }
+
+    // Phase 12: two-transfer search is a fallback — only when simpler options
+    // leave the top-3 unfilled (it is the most expensive query path).
+    if (maxTransfers >= 2 && routes.length < 3) {
+      const twoTransferRoutes = await findTwoTransferRoutes(
+        origin,
+        destination,
+        originStops,
+        destStops,
+        afterSec,
+        activeServiceIds,
+        opts
+      );
+      for (const r of twoTransferRoutes) {
+        if (isNextDay) {
+          r.departureDate = dateStr;
+          r.accessibilityHighlights.unshift(
+            `🕒 今日班次已過，顯示 ${dateStr} 最早班次`
+          );
+        }
+      }
+      routes.push(...twoTransferRoutes);
     }
     return routes;
   };
@@ -991,44 +1185,63 @@ async function findOneTransferRoutes(
   const activeTripSet = new Set(
     trips.filter((t) => activeServiceIds.has(t.serviceId)).map((t) => t.tripId)
   );
+  // Headway-based trips carry anchor times, not actual departures — relax
+  // their transfer time-window checks (build re-resolves real times).
+  const activeArr = [...activeTripSet];
+  const flexTripIds = new Set<string>(
+    activeArr.length
+      ? ((await GtfsFrequency.find({ tripId: { $in: activeArr } }).distinct(
+          "tripId"
+        )) as string[])
+      : []
+  );
 
-  // Origin trips → board event (earliest seq), capped.
+  // Origin trips → board event (earliest seq). Schedule-based trips departing
+  // in the past are unboardable; headway trips keep their anchor times. Capped
+  // to the SOONEST departures — an arbitrary cap order starves hub diversity
+  // at busy endpoints (e.g. 台北車站 has thousands of daily trips).
   const originBoardByTrip = new Map<string, StopEvent & { stopId: string }>();
   for (const r of originBoard) {
     if (!activeTripSet.has(r.tripId)) continue;
+    const sec = gtfsTimeToSeconds(r.departureTime);
+    if (isNaN(sec)) continue;
+    if (!flexTripIds.has(r.tripId) && sec < afterSec) continue;
     const prev = originBoardByTrip.get(r.tripId);
     if (!prev || r.stopSequence < prev.seq) {
       originBoardByTrip.set(r.tripId, {
         tripId: r.tripId,
         seq: r.stopSequence,
-        sec: gtfsTimeToSeconds(r.departureTime),
+        sec,
         stopId: r.stopId,
       });
     }
   }
-  const originTripIds = [...originBoardByTrip.keys()].slice(
-    0,
-    MAX_TRANSFER_HUB_TRIPS
-  );
+  const originTripIds = [...originBoardByTrip.entries()]
+    .sort((a, b) => a[1].sec - b[1].sec)
+    .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS)
+    .map(([tripId]) => tripId);
 
-  // Dest trips → alight event (latest seq), capped.
+  // Dest trips → alight event (latest seq), soonest arrivals first, capped.
   const destAlightByTrip = new Map<string, StopEvent & { stopId: string }>();
   for (const r of destAlight) {
     if (!activeTripSet.has(r.tripId)) continue;
+    const sec = gtfsTimeToSeconds(r.arrivalTime);
+    if (isNaN(sec)) continue;
+    if (!flexTripIds.has(r.tripId) && sec < afterSec) continue;
     const prev = destAlightByTrip.get(r.tripId);
     if (!prev || r.stopSequence > prev.seq) {
       destAlightByTrip.set(r.tripId, {
         tripId: r.tripId,
         seq: r.stopSequence,
-        sec: gtfsTimeToSeconds(r.arrivalTime),
+        sec,
         stopId: r.stopId,
       });
     }
   }
-  const destTripIds = [...destAlightByTrip.keys()].slice(
-    0,
-    MAX_TRANSFER_HUB_TRIPS
-  );
+  const destTripIds = [...destAlightByTrip.entries()]
+    .sort((a, b) => a[1].sec - b[1].sec)
+    .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS)
+    .map(([tripId]) => tripId);
 
   // Downstream stops of origin trips (potential transfer hubs).
   const originDownstream = await GtfsStopTime.find({
@@ -1043,35 +1256,70 @@ async function findOneTransferRoutes(
     .select("tripId stopId stopSequence departureTime")
     .lean();
 
-  // Resolve stop names/coords for all involved stops to match hubs by name.
+  // Resolve stop names/coords for all involved stops to match hubs.
   const hubStopIds = new Set<string>();
   for (const r of originDownstream) hubStopIds.add(r.stopId);
   for (const r of destUpstream) hubStopIds.add(r.stopId);
-  const hubStops = await GtfsStop.find({ stopId: { $in: [...hubStopIds] } })
-    .select("stopId stopName stopLat stopLon")
-    .lean();
+  const [hubStops, clusterByStop] = await Promise.all([
+    GtfsStop.find({ stopId: { $in: [...hubStopIds] } })
+      .select("stopId stopName stopLat stopLon")
+      .lean(),
+    getClusterKeys([...hubStopIds]),
+  ]);
   const hubById = new Map(hubStops.map((s) => [s.stopId, s]));
+  // Hub key: StationCluster id when the stop belongs to one (connects
+  // bus「捷運淡水站」↔ metro「淡水」), exact stop_name otherwise.
+  const hubKey = (stopId: string, stopName: string) =>
+    clusterByStop.get(stopId) ?? stopName;
 
-  // Index dest upstream board events by stop NAME (hub matching is by name).
-  const destBoardByName = new Map<
+  // Index dest upstream board events by hub key.
+  const destBoardByKey = new Map<
     string,
     { tripId: string; stopId: string; seq: number; sec: number }[]
   >();
   for (const r of destUpstream) {
     const s = hubById.get(r.stopId);
     if (!s) continue;
-    const arr = destBoardByName.get(s.stopName) ?? [];
+    const key = hubKey(s.stopId, s.stopName);
+    const arr = destBoardByKey.get(key) ?? [];
     arr.push({
       tripId: r.tripId,
       stopId: r.stopId,
       seq: r.stopSequence,
       sec: gtfsTimeToSeconds(r.departureTime),
     });
-    destBoardByName.set(s.stopName, arr);
+    destBoardByKey.set(key, arr);
   }
 
   const routes: AccessibleRoute[] = [];
   const usedRouteKeys = new Set<string>();
+  let candPairs = 0;
+  let buildAttempts = 0;
+  if (process.env.GTFS_DEBUG) {
+    const originKeys = new Set<string>();
+    for (const r of originDownstream) {
+      const s = hubById.get(r.stopId);
+      if (s) originKeys.add(hubKey(s.stopId, s.stopName));
+    }
+    const destKeys = new Set(destBoardByKey.keys());
+    const common = [...originKeys].filter((k) => destKeys.has(k));
+    debugLog(
+      "[1T] originTrips:", originTripIds.length,
+      "destTrips:", destTripIds.length,
+      "originKeys:", originKeys.size,
+      "destKeys:", destKeys.size,
+      "common:", common.length,
+      "| commonSample:", common.slice(0, 6).join(",")
+    );
+    debugLog(
+      "[1T] originClusterKeys:",
+      [...originKeys].filter((k) => k.startsWith("SC_")).slice(0, 8).join(",")
+    );
+    debugLog(
+      "[1T] destClusterKeys:",
+      [...destKeys].filter((k) => k.startsWith("SC_")).slice(0, 8).join(",")
+    );
+  }
 
   for (const origTripId of originTripIds) {
     const board = originBoardByTrip.get(origTripId)!;
@@ -1084,26 +1332,39 @@ async function findOneTransferRoutes(
       if (!hubStop) continue;
       const leg1ArriveSec = gtfsTimeToSeconds(hub.arrivalTime);
 
-      const secondLegs = destBoardByName.get(hubStop.stopName);
+      const secondLegs = destBoardByKey.get(
+        hubKey(hubStop.stopId, hubStop.stopName)
+      );
       if (!secondLegs) continue;
+      candPairs++;
 
       for (const sl of secondLegs) {
         const slStop = hubById.get(sl.stopId);
         if (!slStop) continue;
-        // same physical station: name already matched, verify proximity
+        // same physical station: key already matched, verify proximity —
+        // looser bound for cluster members (bus↔rail can sit a few hundred
+        // metres apart; walk time is computed from the actual distance).
+        const sameCluster =
+          clusterByStop.get(hub.stopId) !== undefined &&
+          clusterByStop.get(hub.stopId) === clusterByStop.get(sl.stopId);
         const dist = haversineCoords(
           [hubStop.stopLon, hubStop.stopLat],
           [slStop.stopLon, slStop.stopLat]
         );
-        if (dist > TRANSFER_SAME_STATION_M) continue;
+        if (dist > (sameCluster ? CLUSTER_TRANSFER_MAX_M : TRANSFER_SAME_STATION_M))
+          continue;
 
         const transferWalkSec = Math.max(
           MIN_TRANSFER_WALK_SEC,
           Math.round((dist / WHEELCHAIR_SPEED_M_PER_MIN) * 60)
         );
-        const readySec = leg1ArriveSec + transferWalkSec;
-        const wait = sl.sec - readySec;
-        if (wait < 0 || wait > MAX_TRANSFER_WAIT_SEC) continue;
+        // Time window only constrains schedule↔schedule pairs; headway trips
+        // repeat all day (anchor times) — build resolves their real times.
+        if (!flexTripIds.has(origTripId) && !flexTripIds.has(sl.tripId)) {
+          const readySec = leg1ArriveSec + transferWalkSec;
+          const wait = sl.sec - readySec;
+          if (wait < 0 || wait > MAX_TRANSFER_WAIT_SEC) continue;
+        }
 
         const destEvt = destAlightByTrip.get(sl.tripId);
         if (!destEvt || destEvt.seq <= sl.seq) continue;
@@ -1112,6 +1373,7 @@ async function findOneTransferRoutes(
         const key = `${origTripId}|${hubStop.stopName}|${sl.tripId}`;
         if (usedRouteKeys.has(key)) continue;
         usedRouteKeys.add(key);
+        buildAttempts++;
 
         const route = await buildTransferRoute(
           origin,
@@ -1124,14 +1386,19 @@ async function findOneTransferRoutes(
           destEvt,
           afterSec,
           activeServiceIds,
-          transferWalkSec
+          transferWalkSec,
+          opts?.mode ?? "wheelchair"
         );
         if (route) routes.push(route);
-        if (routes.length >= (opts?.limit ?? 5)) return routes;
+        if (routes.length >= (opts?.limit ?? 5)) {
+          debugLog("[1T] pairs:", candPairs, "builds:", buildAttempts, "routes:", routes.length);
+          return routes;
+        }
       }
     }
   }
 
+  debugLog("[1T] pairs:", candPairs, "builds:", buildAttempts, "routes:", routes.length);
   return routes;
 }
 
@@ -1146,25 +1413,38 @@ async function buildTransferRoute(
   destEvt: StopEvent & { stopId: string },
   afterSec: number,
   activeServiceIds: Set<string>,
-  transferWalkSec: number
+  transferWalkSec: number,
+  mode: AccessibilityMode = "wheelchair"
 ): Promise<AccessibleRoute | null> {
+  const wheelchairWalk = mode === "wheelchair";
   // Reuse findDirectConnections for each leg to get full connection metadata.
-  const [leg1List, leg2List] = await Promise.all([
-    findDirectConnections([board.stopId], [hubStop.stopId], afterSec, activeServiceIds, {
-      limit: 3,
-    }),
-    findDirectConnections(
-      [slStop.stopId],
-      [destEvt.stopId],
-      board.sec, // any time; we filter by trip below
-      activeServiceIds,
-      { limit: 5 }
-    ),
-  ]);
-
+  // Sequential: leg 2's earliest catchable departure is anchored to leg 1's
+  // resolved arrival plus the transfer walk (correct for both schedule- and
+  // headway-based trips — findDirectConnections handles frequencies).
+  const leg1List = await findDirectConnections(
+    [board.stopId],
+    [hubStop.stopId],
+    afterSec,
+    activeServiceIds,
+    { limit: 3 }
+  );
   const leg1 = leg1List.find((c) => c.tripId === hub.tripId) ?? leg1List[0];
+  if (!leg1) return null;
+
+  const leg2List = await findDirectConnections(
+    [slStop.stopId],
+    [destEvt.stopId],
+    leg1.arrivalSec + transferWalkSec,
+    activeServiceIds,
+    { limit: 5 }
+  );
   const leg2 = leg2List.find((c) => c.tripId === sl.tripId) ?? leg2List[0];
-  if (!leg1 || !leg2) return null;
+  if (!leg2) return null;
+  if (
+    leg2.departureSec < leg1.arrivalSec ||
+    leg2.departureSec - leg1.arrivalSec > MAX_TRANSFER_WAIT_SEC + transferWalkSec
+  )
+    return null;
 
   const [t1, t2] = await Promise.all([
     connectionToLeg(leg1, afterSec),
@@ -1183,15 +1463,18 @@ async function buildTransferRoute(
   ] = await Promise.all([
     buildWalkLeg(
       { coords: [origin.lng, origin.lat], label: "出發地" },
-      { coords: leg1.fromCoords, label: leg1.fromStopName }
+      { coords: leg1.fromCoords, label: leg1.fromStopName },
+      wheelchairWalk
     ),
     buildWalkLeg(
       { coords: leg1.toCoords, label: leg1.toStopName },
-      { coords: leg2.fromCoords, label: leg2.fromStopName }
+      { coords: leg2.fromCoords, label: leg2.fromStopName },
+      wheelchairWalk
     ),
     buildWalkLeg(
       { coords: leg2.toCoords, label: leg2.toStopName },
-      { coords: [destination.lng, destination.lat], label: "目的地" }
+      { coords: [destination.lng, destination.lat], label: "目的地" },
+      wheelchairWalk
     ),
     nearbyA11y(leg1.fromCoords),
     nearbyA11y(leg1.toCoords),
@@ -1204,6 +1487,35 @@ async function buildTransferRoute(
   walkIn.a11yFacilities = a11y1Board;
   transferWalk.a11yFacilities = a11y1Alight;
   walkOut.a11yFacilities = a11y2Alight;
+
+  // Indoor-graph enrichment: leg1 carries the street→platform entry (walkIn),
+  // leg2 carries the platform→street exit (walkOut). The transfer hub between
+  // them is in-station, so it gets highlight notes but no street exitInfo.
+  if (isRailLeg(t1)) {
+    await enrichLegIndoor(
+      t1,
+      walkIn,
+      null,
+      [origin.lng, origin.lat],
+      leg1.toCoords,
+      leg1.fromCoords,
+      leg1.toCoords,
+      mode
+    );
+  }
+  if (isRailLeg(t2)) {
+    await enrichLegIndoor(
+      t2,
+      null,
+      walkOut,
+      leg2.fromCoords,
+      [destination.lng, destination.lat],
+      leg2.fromCoords,
+      leg2.toCoords,
+      mode
+    );
+  }
+
   const highlights = deriveHighlights(a11y1Board, a11y2Alight);
 
   const legs = [walkIn, t1, transferWalk, t2, walkOut];
@@ -1222,6 +1534,607 @@ async function buildTransferRoute(
     }`,
     legs,
     1,
+    totalMinutes,
+    highlights
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Two-transfer routes (Phase 12)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_TWO_TRANSFER_RESULTS = 3;
+const MAX_HUB_NAMES = 25; // hub-station names considered per side
+const MAX_MIDDLE_STOP_TIME_ROWS = 30000; // hard cap on the middle-trip join scan
+const MAX_TWO_TRANSFER_SIDE_TRIPS = 120; // origin/dest trips kept (time-sorted)
+
+/** Seconds since service-day midnight → zero-padded "HH:MM:SS" (no 24h wrap). */
+function secondsToHHmmss(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(
+    r
+  ).padStart(2, "0")}`;
+}
+
+/** Stage-by-stage diagnostics for the two-transfer join (GTFS_DEBUG=1). */
+const debugLog = (...args: unknown[]) => {
+  if (process.env.GTFS_DEBUG) console.log("[gtfs-2transfer]", ...args);
+};
+
+/**
+ * Two-transfer routes: tripA (origin → hub X) + tripB (X → Y) + tripC (Y → dest).
+ *
+ * Bounded chain join over stop NAMES (this feed has no transfers.txt and
+ * route-network stops carry no parent_station):
+ *  1. Hub X candidates = downstream stops of trips boardable near the origin.
+ *  2. Hub Y candidates = upstream stops of trips alighting near the destination.
+ *  3. Middle trips = active trips serving an X-name stop BEFORE a Y-name stop.
+ *  4. Chains must satisfy: leg1 arrive + walk ≤ leg2 depart, and
+ *     leg2 arrive + walk ≤ leg3 depart (each wait ≤ MAX_TRANSFER_WAIT_SEC).
+ *
+ * Runs only as a fallback when direct + one-transfer leave the top-3 unfilled,
+ * because the name-join scan is the most expensive query in the router.
+ */
+async function findTwoTransferRoutes(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  originStops: GtfsStopNear[],
+  destStops: GtfsStopNear[],
+  afterSec: number,
+  activeServiceIds: Set<string>,
+  opts?: PlanGtfsRouteOptions
+): Promise<AccessibleRoute[]> {
+  const originStopIds = originStops.map((s) => s.stopId);
+  const destStopIds = destStops.map((s) => s.stopId);
+  const originNames = new Set(originStops.map((s) => s.stopName));
+  const destNames = new Set(destStops.map((s) => s.stopName));
+
+  // ── 1+2. Same per-side scans as the one-transfer search ──
+  const [originBoard, destAlight] = await Promise.all([
+    GtfsStopTime.find({ stopId: { $in: originStopIds } })
+      .select("tripId stopId stopSequence departureTime")
+      .lean(),
+    GtfsStopTime.find({ stopId: { $in: destStopIds } })
+      .select("tripId stopId stopSequence arrivalTime")
+      .lean(),
+  ]);
+
+  const tripIds = [
+    ...new Set([
+      ...originBoard.map((r) => r.tripId),
+      ...destAlight.map((r) => r.tripId),
+    ]),
+  ];
+  const trips = await GtfsTrip.find({ tripId: { $in: tripIds } }).lean();
+  const activeTripSet = new Set(
+    trips.filter((t) => activeServiceIds.has(t.serviceId)).map((t) => t.tripId)
+  );
+
+  // Headway-based (frequencies.txt) trips carry early-morning ANCHOR times in
+  // stop_times, not actual departures — they repeat all day. Their events are
+  // kept regardless of afterSec and their time-window checks are relaxed; the
+  // REAL departure is resolved at build time by findDirectConnections, which
+  // handles frequencies correctly.
+  const activeTripIdArr = [...activeTripSet];
+  const flexTripIds = new Set<string>(
+    activeTripIdArr.length
+      ? ((await GtfsFrequency.find({
+          tripId: { $in: activeTripIdArr },
+        }).distinct("tripId")) as string[])
+      : []
+  );
+
+  const originBoardByTrip = new Map<string, StopEvent & { stopId: string }>();
+  for (const r of originBoard) {
+    if (!activeTripSet.has(r.tripId)) continue;
+    const sec = gtfsTimeToSeconds(r.departureTime);
+    if (isNaN(sec)) continue;
+    if (!flexTripIds.has(r.tripId) && sec < afterSec) continue;
+    const prev = originBoardByTrip.get(r.tripId);
+    if (!prev || r.stopSequence < prev.seq) {
+      originBoardByTrip.set(r.tripId, {
+        tripId: r.tripId,
+        seq: r.stopSequence,
+        sec,
+        stopId: r.stopId,
+      });
+    }
+  }
+  // Soonest departures first — an arbitrary cap order lets a flood of
+  // intercity-rail trips crowd out the frequent metro trips that actually chain.
+  const originTripIds = [...originBoardByTrip.entries()]
+    .sort((a, b) => a[1].sec - b[1].sec)
+    .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS)
+    .map(([tripId]) => tripId);
+
+  const destAlightByTrip = new Map<string, StopEvent & { stopId: string }>();
+  for (const r of destAlight) {
+    if (!activeTripSet.has(r.tripId)) continue;
+    const sec = gtfsTimeToSeconds(r.arrivalTime);
+    if (isNaN(sec)) continue;
+    // can't arrive before departure — except flexible (headway) trips
+    if (!flexTripIds.has(r.tripId) && sec < afterSec) continue;
+    const prev = destAlightByTrip.get(r.tripId);
+    if (!prev || r.stopSequence > prev.seq) {
+      destAlightByTrip.set(r.tripId, {
+        tripId: r.tripId,
+        seq: r.stopSequence,
+        sec,
+        stopId: r.stopId,
+      });
+    }
+  }
+  const destTripIds = [...destAlightByTrip.entries()]
+    .sort((a, b) => a[1].sec - b[1].sec)
+    .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS)
+    .map(([tripId]) => tripId);
+  if (!originTripIds.length || !destTripIds.length) return [];
+
+  const [originDownstream, destUpstream] = await Promise.all([
+    GtfsStopTime.find({ tripId: { $in: originTripIds } })
+      .select("tripId stopId stopSequence arrivalTime")
+      .lean(),
+    GtfsStopTime.find({ tripId: { $in: destTripIds } })
+      .select("tripId stopId stopSequence departureTime")
+      .lean(),
+  ]);
+
+  const sideStopIds = new Set<string>();
+  for (const r of originDownstream) sideStopIds.add(r.stopId);
+  for (const r of destUpstream) sideStopIds.add(r.stopId);
+  const [sideStops, sideClusters] = await Promise.all([
+    GtfsStop.find({ stopId: { $in: [...sideStopIds] } })
+      .select("stopId stopName stopLat stopLon")
+      .lean(),
+    getClusterKeys([...sideStopIds, ...originStopIds, ...destStopIds]),
+  ]);
+  const sideById = new Map(sideStops.map((s) => [s.stopId, s]));
+  // Hub key: StationCluster id when available (bus↔rail), stop_name otherwise.
+  const keyOf = (stopId: string, stopName: string) =>
+    sideClusters.get(stopId) ?? stopName;
+  const isClusterKey = (key: string) => key.startsWith("SC_");
+  const hubDistBound = (key: string) =>
+    isClusterKey(key) ? CLUSTER_TRANSFER_MAX_M : TRANSFER_SAME_STATION_M;
+  // Hubs must not be the origin/destination boarding area itself.
+  const endpointKeys = new Set<string>();
+  for (const s of originStops) endpointKeys.add(keyOf(s.stopId, s.stopName));
+  for (const s of destStops) endpointKeys.add(keyOf(s.stopId, s.stopName));
+
+  // Earliest leg1 arrival per hub-X key (board must follow the origin event).
+  type HubEvent = {
+    tripId: string;
+    stopId: string;
+    seq: number;
+    sec: number;
+    coords: [number, number];
+  };
+  const leg1ByXKey = new Map<string, HubEvent & { boardStopId: string }>();
+  for (const r of originDownstream) {
+    const board = originBoardByTrip.get(r.tripId);
+    if (!board || r.stopSequence <= board.seq) continue;
+    const s = sideById.get(r.stopId);
+    if (!s) continue;
+    const key = keyOf(s.stopId, s.stopName);
+    if (endpointKeys.has(key) || originNames.has(s.stopName) || destNames.has(s.stopName))
+      continue;
+    const sec = gtfsTimeToSeconds(r.arrivalTime);
+    if (isNaN(sec)) continue;
+    const prev = leg1ByXKey.get(key);
+    if (!prev || sec < prev.sec) {
+      leg1ByXKey.set(key, {
+        tripId: r.tripId,
+        stopId: r.stopId,
+        seq: r.stopSequence,
+        sec,
+        coords: [s.stopLon, s.stopLat],
+        boardStopId: board.stopId,
+      });
+    }
+  }
+
+  // Leg3 departures per hub-Y key, sorted ascending (alight must precede dest).
+  const leg3ByYKey = new Map<string, (HubEvent & { alightStopId: string })[]>();
+  for (const r of destUpstream) {
+    const alight = destAlightByTrip.get(r.tripId);
+    if (!alight || r.stopSequence >= alight.seq) continue;
+    const s = sideById.get(r.stopId);
+    if (!s) continue;
+    const key = keyOf(s.stopId, s.stopName);
+    if (endpointKeys.has(key) || originNames.has(s.stopName) || destNames.has(s.stopName))
+      continue;
+    const sec = gtfsTimeToSeconds(r.departureTime);
+    if (isNaN(sec)) continue;
+    const arr = leg3ByYKey.get(key) ?? [];
+    arr.push({
+      tripId: r.tripId,
+      stopId: r.stopId,
+      seq: r.stopSequence,
+      sec,
+      coords: [s.stopLon, s.stopLat],
+      alightStopId: alight.stopId,
+    });
+    leg3ByYKey.set(key, arr);
+  }
+  for (const arr of leg3ByYKey.values()) arr.sort((a, b) => a.sec - b.sec);
+
+  // Cap hub keys: X by earliest leg1 arrival, Y by earliest leg3 departure.
+  const xKeys = [...leg1ByXKey.entries()]
+    .sort((a, b) => a[1].sec - b[1].sec)
+    .slice(0, MAX_HUB_NAMES)
+    .map(([key]) => key);
+  const yKeys = [...leg3ByYKey.keys()].slice(0, MAX_HUB_NAMES);
+  debugLog(
+    "originTrips:", originTripIds.length,
+    "destTrips:", destTripIds.length,
+    "xKeys:", xKeys.length,
+    "yKeys:", yKeys.length
+  );
+  debugLog("xKeys:", xKeys.join(","));
+  debugLog("yKeys:", yKeys.join(","));
+  if (!xKeys.length || !yKeys.length) return [];
+
+  // ── 3. Middle trips joining an X-hub stop to a Y-hub stop ──
+  // Cluster keys resolve to their member stop ids; plain keys match by name.
+  const allKeys = [...new Set([...xKeys, ...yKeys])];
+  const clusterIds = allKeys.filter(isClusterKey);
+  const plainNames = allKeys.filter((k) => !isClusterKey(k));
+  const clusterDocs = clusterIds.length
+    ? await StationCluster.find({ clusterId: { $in: clusterIds } })
+        .select("clusterId memberStopIds")
+        .lean()
+    : [];
+  const clusterByMember = new Map<string, string>();
+  for (const c of clusterDocs)
+    for (const id of c.memberStopIds) clusterByMember.set(id, c.clusterId);
+
+  const middleStops = await GtfsStop.find({
+    locationType: 0,
+    parentStation: null,
+    $or: [
+      ...(plainNames.length ? [{ stopName: { $in: plainNames } }] : []),
+      ...(clusterByMember.size
+        ? [{ stopId: { $in: [...clusterByMember.keys()] } }]
+        : []),
+    ],
+  })
+    .select("stopId stopName stopLat stopLon")
+    .lean();
+  const middleById = new Map(middleStops.map((s) => [s.stopId, s]));
+  const middleKeyOf = (stopId: string, stopName: string) =>
+    clusterByMember.get(stopId) ?? stopName;
+  const xNameSet = new Set(xKeys);
+  const yNameSet = new Set(yKeys);
+
+  // departureTime ≥ now is safe for both roles of a row (a middle-leg board
+  // departs after the leg-1 arrival ≥ afterSec; an alight follows its board),
+  // and keeps the morning-trip bulk from exhausting the row cap.
+  const middleRows = await GtfsStopTime.find({
+    stopId: { $in: middleStops.map((s) => s.stopId) },
+    departureTime: { $gte: secondsToHHmmss(afterSec) },
+  })
+    .select("tripId stopId stopSequence arrivalTime departureTime")
+    .limit(MAX_MIDDLE_STOP_TIME_ROWS)
+    .lean();
+
+  type MiddleCand = {
+    board: { stopId: string; seq: number; sec: number; name: string; coords: [number, number] };
+    alight: { stopId: string; seq: number; sec: number; name: string; coords: [number, number] };
+  };
+  const middleByTrip = new Map<string, MiddleCand>();
+  for (const r of middleRows) {
+    const s = middleById.get(r.stopId);
+    if (!s) continue;
+    const key = middleKeyOf(s.stopId, s.stopName);
+    const cand =
+      middleByTrip.get(r.tripId) ??
+      ({ board: null, alight: null } as unknown as MiddleCand);
+    if (xNameSet.has(key)) {
+      const sec = gtfsTimeToSeconds(r.departureTime);
+      if (!isNaN(sec) && (!cand.board || r.stopSequence < cand.board.seq)) {
+        cand.board = {
+          stopId: r.stopId,
+          seq: r.stopSequence,
+          sec,
+          name: key,
+          coords: [s.stopLon, s.stopLat],
+        };
+      }
+    }
+    if (yNameSet.has(key)) {
+      const sec = gtfsTimeToSeconds(r.arrivalTime);
+      if (!isNaN(sec) && (!cand.alight || r.stopSequence > cand.alight.seq)) {
+        cand.alight = {
+          stopId: r.stopId,
+          seq: r.stopSequence,
+          sec,
+          name: key,
+          coords: [s.stopLon, s.stopLat],
+        };
+      }
+    }
+    middleByTrip.set(r.tripId, cand);
+  }
+
+  const middleTripIds = [...middleByTrip.entries()]
+    .filter(
+      ([, c]) =>
+        c.board && c.alight && c.board.seq < c.alight.seq && c.board.name !== c.alight.name
+    )
+    .map(([tripId]) => tripId);
+  debugLog(
+    "middleStops:", middleStops.length,
+    "middleRows:", middleRows.length,
+    "middleTrips(joined):", middleTripIds.length
+  );
+  if (!middleTripIds.length) return [];
+
+  const middleTrips = await GtfsTrip.find({
+    tripId: { $in: middleTripIds },
+  }).lean();
+  const activeMiddleIds = middleTrips
+    .filter((t) => activeServiceIds.has(t.serviceId))
+    .map((t) => t.tripId);
+  const middleFlexIds = new Set<string>(
+    activeMiddleIds.length
+      ? ((await GtfsFrequency.find({
+          tripId: { $in: activeMiddleIds },
+        }).distinct("tripId")) as string[])
+      : []
+  );
+
+  // ── 4. Time-chain validation, earliest-departure first ──
+  const walkSecBetween = (a: [number, number], b: [number, number]) =>
+    Math.max(
+      MIN_TRANSFER_WALK_SEC,
+      Math.round((haversineCoords(a, b) / WHEELCHAIR_SPEED_M_PER_MIN) * 60)
+    );
+
+  const chains: { leg1: HubEvent & { boardStopId: string }; mid: MiddleCand; midTripId: string; leg3: HubEvent & { alightStopId: string } }[] = [];
+  const seenCombos = new Set<string>();
+
+  for (const midTripId of activeMiddleIds.sort(
+    (a, b) => middleByTrip.get(a)!.board.sec - middleByTrip.get(b)!.board.sec
+  )) {
+    const mid = middleByTrip.get(midTripId)!;
+
+    const midFlex = middleFlexIds.has(midTripId);
+
+    const leg1 = leg1ByXKey.get(mid.board.name);
+    if (!leg1) continue;
+    // Same physical station check (key matched; verify proximity — looser
+    // bound when the key is a cluster, since bus↔rail members sit apart).
+    if (haversineCoords(leg1.coords, mid.board.coords) > hubDistBound(mid.board.name))
+      continue;
+    // Time windows only constrain pairs of SCHEDULE-based trips: headway trips
+    // carry anchor times and repeat all day, so their windows are meaningless
+    // here — buildTwoTransferRoute resolves their real departures and enforces
+    // feasibility with chained afterSec.
+    if (!flexTripIds.has(leg1.tripId) && !midFlex) {
+      const wait1 =
+        mid.board.sec - (leg1.sec + walkSecBetween(leg1.coords, mid.board.coords));
+      if (wait1 < 0 || wait1 > MAX_TRANSFER_WAIT_SEC) continue;
+    }
+
+    const leg3Cands = leg3ByYKey.get(mid.alight.name) ?? [];
+    const leg3 = leg3Cands.find((c) => {
+      if (haversineCoords(mid.alight.coords, c.coords) > hubDistBound(mid.alight.name))
+        return false;
+      if (flexTripIds.has(c.tripId) || midFlex) return true;
+      const wait2 =
+        c.sec - (mid.alight.sec + walkSecBetween(mid.alight.coords, c.coords));
+      return wait2 >= 0 && wait2 <= MAX_TRANSFER_WAIT_SEC;
+    });
+    if (!leg3) continue;
+
+    // Dedupe by transfer-hub PAIR, not trip ids — consecutive trips of the
+    // same lines through the same hubs are near-identical chains and would
+    // exhaust the build buffer with candidates that all fail the same filter.
+    const combo = `${mid.board.name}|${mid.alight.name}`;
+    if (seenCombos.has(combo)) continue;
+    seenCombos.add(combo);
+
+    chains.push({ leg1, mid, midTripId, leg3 });
+    if (chains.length >= MAX_TWO_TRANSFER_RESULTS * 7) break; // build buffer
+  }
+  debugLog("activeMiddle:", activeMiddleIds.length, "chains:", chains.length);
+
+  // ── 5. Build full routes for the best chains ──
+  const routes: AccessibleRoute[] = [];
+  for (const chain of chains) {
+    const route = await buildTwoTransferRoute(
+      origin,
+      destination,
+      chain,
+      afterSec,
+      activeServiceIds,
+      opts?.mode ?? "wheelchair"
+    );
+    if (route) routes.push(route);
+    if (routes.length >= MAX_TWO_TRANSFER_RESULTS) break;
+  }
+  return routes;
+}
+
+async function buildTwoTransferRoute(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  chain: {
+    leg1: { tripId: string; stopId: string; boardStopId: string };
+    mid: {
+      board: { stopId: string };
+      alight: { stopId: string };
+    };
+    midTripId: string;
+    leg3: { tripId: string; stopId: string; alightStopId: string };
+  },
+  afterSec: number,
+  activeServiceIds: Set<string>,
+  mode: AccessibilityMode = "wheelchair"
+): Promise<AccessibleRoute | null> {
+  const wheelchairWalk = mode === "wheelchair";
+
+  // Re-resolve each leg through findDirectConnections for full metadata
+  // (frequencies, shape, route names). Sequential on purpose: each leg's
+  // earliest catchable departure is anchored to the PREVIOUS leg's arrival
+  // plus the in-station transfer walk — querying all three with the original
+  // afterSec would return departures that precede the upstream arrival.
+  const c1List = await findDirectConnections(
+    [chain.leg1.boardStopId],
+    [chain.leg1.stopId],
+    afterSec,
+    activeServiceIds,
+    { limit: 3 }
+  );
+  const c1 = c1List.find((c) => c.tripId === chain.leg1.tripId) ?? c1List[0];
+  if (!c1) return null;
+
+  const c2List = await findDirectConnections(
+    [chain.mid.board.stopId],
+    [chain.mid.alight.stopId],
+    c1.arrivalSec + MIN_TRANSFER_WALK_SEC,
+    activeServiceIds,
+    { limit: 5 }
+  );
+  const c2 = c2List.find((c) => c.tripId === chain.midTripId) ?? c2List[0];
+  if (!c2) return null;
+
+  const c3List = await findDirectConnections(
+    [chain.leg3.stopId],
+    [chain.leg3.alightStopId],
+    c2.arrivalSec + MIN_TRANSFER_WALK_SEC,
+    activeServiceIds,
+    { limit: 5 }
+  );
+  const c3 = c3List.find((c) => c.tripId === chain.leg3.tripId) ?? c3List[0];
+  if (!c3) return null;
+
+  // Re-boarding the same line (same route, or the reverse-direction variant —
+  // metro naming is "A－B" / "B－A") is never a sensible transfer chain.
+  const lineKey = (c: GtfsConnection) =>
+    (c.routeShortName || c.routeLongName).split("－").sort().join("－");
+  const sameLine = (a: GtfsConnection, b: GtfsConnection) =>
+    a.routeId === b.routeId || lineKey(a) === lineKey(b);
+  if (sameLine(c1, c2) || sameLine(c2, c3)) return null;
+
+  // Redundant-transfer check (catches same-line short-turn variants and
+  // backtracking, which share stop ids): when the previous trip already serves
+  // the next leg's alight stop, the rider could simply have stayed on board.
+  const [c1Reach, c2Reach] = await Promise.all([
+    GtfsStopTime.findOne({ tripId: c1.tripId, stopId: c2.toStopId })
+      .select("_id")
+      .lean(),
+    GtfsStopTime.findOne({ tripId: c2.tripId, stopId: c3.toStopId })
+      .select("_id")
+      .lean(),
+  ]);
+  if (c1Reach || c2Reach) return null;
+
+  // Safety: the chain must still be time-ordered and each wait bounded.
+  if (
+    c2.departureSec < c1.arrivalSec ||
+    c3.departureSec < c2.arrivalSec ||
+    c2.departureSec - c1.arrivalSec > MAX_TRANSFER_WAIT_SEC ||
+    c3.departureSec - c2.arrivalSec > MAX_TRANSFER_WAIT_SEC
+  )
+    return null;
+
+  const [t1, t2, t3] = await Promise.all([
+    connectionToLeg(c1, afterSec),
+    connectionToLeg(c2, c1.arrivalSec),
+    connectionToLeg(c3, c2.arrivalSec),
+  ]);
+  if (!t1 || !t2 || !t3) return null;
+
+  const [walkIn, transferWalk1, transferWalk2, walkOut] = await Promise.all([
+    buildWalkLeg(
+      { coords: [origin.lng, origin.lat], label: "出發地" },
+      { coords: c1.fromCoords, label: c1.fromStopName },
+      wheelchairWalk
+    ),
+    buildWalkLeg(
+      { coords: c1.toCoords, label: c1.toStopName },
+      { coords: c2.fromCoords, label: c2.fromStopName },
+      wheelchairWalk
+    ),
+    buildWalkLeg(
+      { coords: c2.toCoords, label: c2.toStopName },
+      { coords: c3.fromCoords, label: c3.fromStopName },
+      wheelchairWalk
+    ),
+    buildWalkLeg(
+      { coords: c3.toCoords, label: c3.toStopName },
+      { coords: [destination.lng, destination.lat], label: "目的地" },
+      wheelchairWalk
+    ),
+  ]);
+
+  const [a11y1Board, a11y1Alight, a11y2Alight, a11y3Board, a11y3Alight] =
+    await Promise.all([
+      nearbyA11y(c1.fromCoords),
+      nearbyA11y(c1.toCoords),
+      nearbyA11y(c2.toCoords),
+      nearbyA11y(c3.fromCoords),
+      nearbyA11y(c3.toCoords),
+    ]);
+
+  attachA11yToLeg(t1, a11y1Board, a11y1Alight);
+  attachA11yToLeg(t2, a11y1Alight, a11y2Alight);
+  attachA11yToLeg(t3, a11y3Board, a11y3Alight);
+  walkIn.a11yFacilities = a11y1Board;
+  transferWalk1.a11yFacilities = a11y1Alight;
+  transferWalk2.a11yFacilities = a11y2Alight;
+  walkOut.a11yFacilities = a11y3Alight;
+
+  // Indoor enrichment only at the street ends (transfer hubs stay in-station).
+  if (isRailLeg(t1)) {
+    await enrichLegIndoor(
+      t1,
+      walkIn,
+      null,
+      [origin.lng, origin.lat],
+      c1.toCoords,
+      c1.fromCoords,
+      c1.toCoords,
+      mode
+    );
+  }
+  if (isRailLeg(t3)) {
+    await enrichLegIndoor(
+      t3,
+      null,
+      walkOut,
+      c3.fromCoords,
+      [destination.lng, destination.lat],
+      c3.fromCoords,
+      c3.toCoords,
+      mode
+    );
+  }
+
+  const highlights = deriveHighlights(a11y1Board, a11y3Alight);
+  const legs = [walkIn, t1, transferWalk1, t2, transferWalk2, t3, walkOut];
+  const totalMinutes =
+    walkIn.minutesEst +
+    t1.estimatedWaitMinutes +
+    c1.rideMinutes +
+    transferWalk1.minutesEst +
+    t2.estimatedWaitMinutes +
+    c2.rideMinutes +
+    transferWalk2.minutesEst +
+    t3.estimatedWaitMinutes +
+    c3.rideMinutes +
+    walkOut.minutesEst;
+
+  return assembleRoute(
+    `gtfs-2transfer-${c1.tripId}-${c2.tripId}-${c3.tripId}`,
+    `${c1.routeShortName || c1.routeLongName} → ${
+      c2.routeShortName || c2.routeLongName
+    } → ${c3.routeShortName || c3.routeLongName}`,
+    legs,
+    2,
     totalMinutes,
     highlights
   );
