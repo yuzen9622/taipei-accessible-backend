@@ -17,6 +17,19 @@ export const NearbyA11yQuerySchema = z
   })
   .strict();
 
+export const A11yPlaceQuerySchema = z
+  .object({
+    osmId: z
+      .string()
+      .min(1)
+      .openapi({
+        example: "12342946149",
+        description:
+          "OSM facility id(s); comma-separated for batch lookup (e.g. \"123,456\")",
+      }),
+  })
+  .strict();
+
 // ── Domain schemas ──────────────────────────────────────────────────────────
 
 const GeoPointSchema = z
@@ -171,6 +184,32 @@ registry.registerPath({
       content: { "application/json": { schema: NearbyA11yResponseSchema } },
     },
     400: { description: "Missing or invalid lat/lng" },
+    500: { description: "Server error" },
+  },
+});
+
+export const A11yPlaceResponseSchema = ApiResponseSchema(
+  z.array(OsmA11ySchema),
+  "A11yPlaceResponse"
+);
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/place",
+  tags: ["Accessibility"],
+  summary: "Full OSM facility detail (Phase 14)",
+  description:
+    "Returns the complete OsmA11y document(s) — all OSM tags included — for the given osmId(s). Route responses (/a11y/accessible-route) carry slimmed facility objects with whitelisted tags only; use this endpoint when the full record is needed. `osmId` accepts a comma-separated list for batch lookup.",
+  request: {
+    query: A11yPlaceQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Full facility document(s)",
+      content: { "application/json": { schema: A11yPlaceResponseSchema } },
+    },
+    400: { description: "Missing osmId" },
+    404: { description: "No facility found for the given id(s)" },
     500: { description: "Server error" },
   },
 });

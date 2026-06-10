@@ -26,6 +26,37 @@ async function getBathroomData(req: Request, res: Response<ApiResponse<any>>) {
   }
 }
 
+/**
+ * Phase 14: full-detail lookup for OSM a11y facilities. Route responses carry
+ * slimmed facility objects (whitelisted tags only); this endpoint returns the
+ * complete documents on demand. `osmId` accepts a comma-separated list.
+ */
+async function getA11yPlace(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const raw = String(req.query.osmId ?? "");
+    const ids = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!ids.length) {
+      return sendResponse(res, false, "error", 400, "缺少必要參數：osmId");
+    }
+    const places = await OsmA11y.find({ osmId: { $in: ids } }).lean();
+    if (!places.length) {
+      return sendResponse(res, false, "error", 404, "查無此設施");
+    }
+    return sendResponse(res, true, "success", 200, "OK", places);
+  } catch (error) {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      500,
+      (error as string) || "Internal Server Error"
+    );
+  }
+}
+
 async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
   try {
     const { lat, lng } = req.query;
@@ -64,4 +95,5 @@ export {
   getA11yData,
   nearbyA11y,
   getBathroomData,
+  getA11yPlace,
 };
