@@ -671,6 +671,8 @@ export async function connectionToLeg(
       routeName: conn.routeShortName || conn.routeLongName,
       departureStop: conn.fromStopName,
       arrivalStop: conn.toStopName,
+      departureTime: conn.departureTime,
+      arrivalTime: conn.arrivalTime,
       waitInfo,
       estimatedWaitMinutes,
       direction: conn.direction,
@@ -695,6 +697,8 @@ export async function connectionToLeg(
       direction: conn.direction,
       stopsCount: conn.stopsCount,
       rideMinutes: conn.rideMinutes,
+      departureTime: conn.departureTime,
+      arrivalTime: conn.arrivalTime,
       waitInfo,
       estimatedWaitMinutes,
       polyline,
@@ -970,6 +974,62 @@ async function buildWalkLeg(
 // High-level route planning
 // ─────────────────────────────────────────────────────────────────────────────
 
+const PROGRESS_MARGIN_M = 150; // minimum geographic progress a ride must make
+const AT_ENDPOINT_M = 400; // board/alight within this of an endpoint is "at" it
+const MIN_ACCESS_WALK_BUDGET_M = 2500; // walk budget floor for short journeys
+
+/**
+ * Cap on walkIn + walkOut per route: walking farther than the entire
+ * origin→destination crow-flies distance to reach transit is never sensible
+ * (the rider should just walk). Catches the 10 km rail-radius pathology where
+ * a route walks 7 km to a TRA station and 11 km out the other end while the
+ * ride itself is directionally "fine".
+ */
+function accessWalkBudgetM(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number }
+): number {
+  const direct = haversineCoords(
+    [origin.lng, origin.lat],
+    [destination.lng, destination.lat]
+  );
+  return Math.max(MIN_ACCESS_WALK_BUDGET_M, direct);
+}
+
+/**
+ * Geographic sanity check for a journey's (first board, last alight) pair.
+ * The origin and destination candidate sets overlap (the rail search radius is
+ * 10 km), so the trip join can pair a board stop NEAR THE DESTINATION with an
+ * alight stop far from it — e.g. walk past the school to 台中車站, ride to
+ * 新烏日, walk all the way back. Two rejections:
+ *  1. the ride ends no closer to the destination than it began;
+ *  2. boarding farther from the origin than the alight stop is (the rider
+ *     walked past the goal and is riding backwards).
+ * Both are waived when the stop in question sits practically AT the endpoint.
+ */
+function ridesToward(
+  boardCoords: [number, number],
+  alightCoords: [number, number],
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number }
+): boolean {
+  const o: [number, number] = [origin.lng, origin.lat];
+  const d: [number, number] = [destination.lng, destination.lat];
+  const alightToDest = haversineCoords(alightCoords, d);
+  if (
+    alightToDest > AT_ENDPOINT_M &&
+    alightToDest > haversineCoords(boardCoords, d) - PROGRESS_MARGIN_M
+  )
+    return false;
+  const boardToOrigin = haversineCoords(boardCoords, o);
+  if (
+    boardToOrigin > AT_ENDPOINT_M &&
+    boardToOrigin > haversineCoords(alightCoords, o) + PROGRESS_MARGIN_M
+  )
+    return false;
+  return true;
+}
+
 export interface PlanGtfsRouteOptions {
   departureTime?: Date;
   /** 0–2 transfers (Phase 12). Two-transfer search only runs when direct +
@@ -1003,6 +1063,7 @@ export async function planGtfsRoute(
   const maxTransfers = opts?.maxTransfers ?? 0;
   const mode = opts?.mode ?? "wheelchair";
   const wheelchairWalk = mode === "wheelchair";
+  const walkBudgetM = accessWalkBudgetM(origin, destination);
 
   // Boarding/alighting candidate stops are day-independent — resolve once.
   const [originStops, destStops] = await Promise.all([
@@ -1032,6 +1093,8 @@ export async function planGtfsRoute(
     );
 
     for (const conn of direct) {
+      if (!ridesToward(conn.fromCoords, conn.toCoords, origin, destination))
+        continue;
       const transitLeg = await connectionToLeg(conn, afterSec);
       if (!transitLeg) continue;
       const [walkIn, walkOut, boardA11y, alightA11y] = await Promise.all([
@@ -1048,6 +1111,7 @@ export async function planGtfsRoute(
         nearbyA11y(conn.fromCoords),
         nearbyA11y(conn.toCoords),
       ]);
+      if (walkIn.distanceM + walkOut.distanceM > walkBudgetM) continue;
       attachA11yToLeg(transitLeg, boardA11y, alightA11y);
       walkIn.a11yFacilities = boardA11y;
       walkOut.a11yFacilities = alightA11y;
@@ -1503,6 +1567,9 @@ async function buildTransferRoute(
     leg2.departureSec - leg1.arrivalSec > MAX_TRANSFER_WAIT_SEC + transferWalkSec
   )
     return null;
+  // Overall journey must head toward the destination (rejects backwards rides).
+  if (!ridesToward(leg1.fromCoords, leg2.toCoords, origin, destination))
+    return null;
 
   const [t1, t2] = await Promise.all([
     connectionToLeg(leg1, afterSec),
@@ -1540,6 +1607,8 @@ async function buildTransferRoute(
     nearbyA11y(leg2.toCoords),
   ]);
 
+  if (walkIn.distanceM + walkOut.distanceM > accessWalkBudgetM(origin, destination))
+    return null;
   attachA11yToLeg(t1, a11y1Board, a11y1Alight);
   attachA11yToLeg(t2, a11y2Board, a11y2Alight);
   walkIn.a11yFacilities = a11y1Board;
@@ -2105,6 +2174,9 @@ async function buildTwoTransferRoute(
   )
     return null;
 
+  // Overall journey must head toward the destination (rejects backwards rides).
+  if (!ridesToward(c1.fromCoords, c3.toCoords, origin, destination)) return null;
+
   const [t1, t2, t3] = await Promise.all([
     connectionToLeg(c1, afterSec),
     connectionToLeg(c2, c1.arrivalSec),
@@ -2134,6 +2206,8 @@ async function buildTwoTransferRoute(
       wheelchairWalk
     ),
   ]);
+  if (walkIn.distanceM + walkOut.distanceM > accessWalkBudgetM(origin, destination))
+    return null;
 
   const [a11y1Board, a11y1Alight, a11y2Alight, a11y3Board, a11y3Alight] =
     await Promise.all([
