@@ -33,6 +33,7 @@ export const metroUrl = {
   s2sTravelTimeUrl:   (s: string) => `${METRO_BASE}/S2STravelTime/${s}`,
   frequencyUrl:       (s: string) => `${METRO_BASE}/Frequency/${s}`,
   stationFacilityUrl: (s: string) => `${METRO_BASE}/StationFacility/${s}`,
+  alertUrl:           (s: string) => `${METRO_BASE}/Alert/${s}`,
 };
 
 export const CITY_METRO_SYSTEMS: Partial<Record<TaiwanCityEn, string[]>> = {
