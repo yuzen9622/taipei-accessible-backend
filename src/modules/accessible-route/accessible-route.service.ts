@@ -75,6 +75,10 @@ export interface BusLeg {
   routeName: string;
   departureStop: string;
   arrivalStop: string;
+  /** "HH:mm" scheduled next departure, when the source timetable provides it. */
+  departureTime?: string;
+  /** "HH:mm" scheduled arrival, when the source timetable provides it. */
+  arrivalTime?: string;
   waitInfo: WaitInfo;
   estimatedWaitMinutes: number; // waitInfo.minutes ?? 0, kept for backwards compat
   direction: 0 | 1;
@@ -96,6 +100,10 @@ export interface MetroLeg {
   direction: 0 | 1;
   stopsCount: number;
   rideMinutes: number;
+  /** "HH:mm" scheduled next departure, when the source timetable provides it. */
+  departureTime?: string;
+  /** "HH:mm" scheduled arrival, when the source timetable provides it. */
+  arrivalTime?: string;
   waitInfo: WaitInfo;
   estimatedWaitMinutes: number;
   polyline: [number, number][];

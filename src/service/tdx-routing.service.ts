@@ -99,6 +99,13 @@ function minutesBetween(a: string, b: string): number {
   return Math.max(1, Math.round((t(b) - t(a)) / 60000));
 }
 
+/** Wait minutes between arriving somewhere and a later departure (floor 0). */
+function waitMinutesBetween(arriveIso: string, departIso: string): number {
+  const t = (s: string) => new Date(s).getTime();
+  const diff = Math.round((t(departIso) - t(arriveIso)) / 60000);
+  return Number.isFinite(diff) ? Math.max(0, diff) : 0;
+}
+
 function coord(p: TdxPlace): [number, number] {
   return [p.location.lng, p.location.lat];
 }
@@ -132,8 +139,13 @@ function sectionPolyline(s: TdxSection): [number, number][] {
 
 /** Build the transit leg variant for a transit section (a11y arrays filled later). */
 function transitSectionToLeg(
-  s: TdxSection
+  s: TdxSection,
+  waitMinutes: number
 ): BusLeg | MetroLeg | ThsrLeg | TraLeg {
+  const waitInfo: { minutes: number; source: "schedule" } = {
+    minutes: waitMinutes,
+    source: "schedule",
+  };
   const t = s.transport ?? {};
   const agencyId = s.agency?.agency_id ?? "";
   const cat = (t.category ?? t.mode ?? t.type ?? "").toUpperCase();
@@ -160,8 +172,8 @@ function transitSectionToLeg(
       departureTime: depTime,
       arrivalTime: arrTime,
       rideMinutes,
-      waitInfo: { minutes: null, source: "schedule" },
-      estimatedWaitMinutes: 0,
+      waitInfo,
+      estimatedWaitMinutes: waitMinutes,
       polyline,
       departureStationA11y: [],
       arrivalStationA11y: [],
@@ -180,8 +192,8 @@ function transitSectionToLeg(
       departureTime: depTime,
       arrivalTime: arrTime,
       rideMinutes,
-      waitInfo: { minutes: null, source: "schedule" },
-      estimatedWaitMinutes: 0,
+      waitInfo,
+      estimatedWaitMinutes: waitMinutes,
       polyline,
       departureStationA11y: [],
       arrivalStationA11y: [],
@@ -201,8 +213,10 @@ function transitSectionToLeg(
       direction: 0,
       stopsCount: (s.intermediateStops?.length ?? 0) + 1,
       rideMinutes,
-      waitInfo: { minutes: null, source: "schedule" },
-      estimatedWaitMinutes: 0,
+      departureTime: depTime,
+      arrivalTime: arrTime,
+      waitInfo,
+      estimatedWaitMinutes: waitMinutes,
       polyline,
       departureStationA11y: [],
       arrivalStationA11y: [],
@@ -215,8 +229,10 @@ function transitSectionToLeg(
     routeName: lineName,
     departureStop: fromName,
     arrivalStop: toName,
-    waitInfo: { minutes: null, source: "schedule" },
-    estimatedWaitMinutes: 0,
+    departureTime: depTime,
+    arrivalTime: arrTime,
+    waitInfo,
+    estimatedWaitMinutes: waitMinutes,
     direction: 0,
     polyline,
     departureStopA11y: [],
@@ -285,14 +301,23 @@ export async function planTdxRoute(
     const transitLegs: (BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
     const realTransitSections: TdxSection[] = [];
 
+    // Track when the rider reaches each boarding point so every transit leg
+    // gets a real wait (departure − arrival-at-stop). Waiting placeholder
+    // sections must NOT advance the clock — their span IS the wait.
+    let atStopSince = r.start_time;
     for (const s of r.sections) {
       if (isWaitingSection(s)) continue; // TDX transfer-wait placeholder, not a leg
       if (isPedestrianSection(s)) {
         // Skip zero-length pedestrian stubs (transfer connectors, no real walk).
         if ((s.travelSummary?.length ?? 0) > 0) legs.push(pedestrianToWalkLeg(s));
+        atStopSince = s.arrival.time;
         continue;
       }
-      const leg = transitSectionToLeg(s);
+      const leg = transitSectionToLeg(
+        s,
+        waitMinutesBetween(atStopSince, s.departure.time)
+      );
+      atStopSince = s.arrival.time;
       legs.push(leg);
       transitLegs.push(leg);
       realTransitSections.push(s);

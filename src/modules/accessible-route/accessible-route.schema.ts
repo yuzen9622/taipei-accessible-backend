@@ -171,6 +171,14 @@ const BusLegSchema = z
     routeName: z.string().openapi({ example: "信義幹線" }),
     departureStop: z.string().openapi({ example: "市政府站" }),
     arrivalStop: z.string().openapi({ example: "台北101" }),
+    departureTime: z.string().optional().openapi({
+      example: "21:05",
+      description: "HH:mm scheduled next departure (absent when unknown)",
+    }),
+    arrivalTime: z.string().optional().openapi({
+      example: "21:32",
+      description: "HH:mm scheduled arrival (absent when unknown)",
+    }),
     waitInfo: WaitInfoSchema,
     estimatedWaitMinutes: z.number().openapi({
       example: 6,
@@ -204,6 +212,14 @@ const MetroLegSchema = z
     direction: z.union([z.literal(0), z.literal(1)]).openapi({ example: 0 }),
     stopsCount: z.number().openapi({ example: 5 }),
     rideMinutes: z.number().openapi({ example: 10 }),
+    departureTime: z.string().optional().openapi({
+      example: "21:05",
+      description: "HH:mm scheduled next departure (absent when unknown)",
+    }),
+    arrivalTime: z.string().optional().openapi({
+      example: "21:15",
+      description: "HH:mm scheduled arrival (absent when unknown)",
+    }),
     waitInfo: WaitInfoSchema,
     estimatedWaitMinutes: z.number().openapi({ example: 3 }),
     polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
