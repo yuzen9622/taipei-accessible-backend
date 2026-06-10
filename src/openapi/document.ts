@@ -8,6 +8,7 @@ import "../modules/chatbot/chatbot.schema";
 import "../modules/transit/transit.schema";
 import "../modules/user/user.schema";
 import "../modules/air/air.schema";
+import "../modules/ai/ai.schema";
 
 export function generateOpenAPIDocument() {
   const generator = new OpenApiGeneratorV3(registry.definitions);

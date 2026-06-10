@@ -13,6 +13,7 @@ import { createAccessibleRouteRouter } from "./modules/accessible-route";
 import { createTransitRouter } from "./modules/transit";
 import { createUserRouter } from "./modules/user";
 import { createAirRouter } from "./modules/air";
+import { createAiRouter } from "./modules/ai";
 import { generateOpenAPIDocument } from "./openapi/document";
 
 const app: Express = express();
@@ -67,6 +68,7 @@ app.use("/api/v1/a11y", createA11yRouter());
 app.use("/api/v1/a11y", createChatbotRouter());
 app.use("/api/v1/a11y", createAccessibleRouteRouter());
 app.use("/api/v1/air", createAirRouter());
+app.use("/api/v1/ai", createAiRouter());
 
 // 404 handler
 app.use("*", (req: Request, res: Response<ApiResponse<null>>) => {
