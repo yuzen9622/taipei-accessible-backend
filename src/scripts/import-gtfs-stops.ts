@@ -46,15 +46,23 @@ async function main() {
     const values = line.split(",");
     const row = parseLine(headers, values);
 
-    const lat = parseFloat(row.stop_lat);
-    const lon = parseFloat(row.stop_lon);
-    if (!row.stop_id || isNaN(lat) || isNaN(lon)) continue;
-
     const locationType = parseInt(row.location_type || "0", 10) as
       | 0
       | 1
       | 2
       | 3;
+
+    const hasCoords = !isNaN(parseFloat(row.stop_lat)) && !isNaN(parseFloat(row.stop_lon));
+    // Boarding stops (locationType 0) MUST have coordinates — skip if missing.
+    // Indoor graph nodes (generic nodes / gates / elevator landings, locationType 3;
+    // occasionally stations/entrances) may lack coordinates in this feed; they are
+    // pure pathway-graph vertices, so import them with placeholder [0,0]. The
+    // 2dsphere index is partial (locationType 0/2 only), so [0,0] never pollutes
+    // geospatial queries.
+    if (!row.stop_id) continue;
+    if (locationType === 0 && !hasCoords) continue;
+    const lat = hasCoords ? parseFloat(row.stop_lat) : 0;
+    const lon = hasCoords ? parseFloat(row.stop_lon) : 0;
 
     batch.push({
       updateOne: {
