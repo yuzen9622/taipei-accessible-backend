@@ -213,7 +213,7 @@ export async function findNearestGtfsStops(
     },
   });
 
-  const [railCandidates, busDocs] = await Promise.all([
+  const [railCandidates, busCandidates] = await Promise.all([
     // Over-fetch rail candidates, then keep only those actually served by a trip.
     // Many nearby rail stops carry no schedule in the feed (TRA/TMRT/NTMC have
     // stops but no stop_times) and would otherwise crowd out a scheduled-but-
@@ -221,8 +221,24 @@ export async function findNearestGtfsStops(
     GtfsStop.find({ ...near(railRadiusM), stopId: { $regex: RAIL_STOP_ID_REGEX } })
       .limit(MAX_NEAR_RAIL_STOPS * 4)
       .lean(),
-    GtfsStop.find(near(busRadiusM)).limit(busLimit).lean(),
+    GtfsStop.find(near(busRadiusM))
+      .limit(busLimit * 6)
+      .lean(),
   ]);
+
+  // The bus limit counts DISTINCT stop names, keeping every same-named
+  // duplicate (TPE/NWT dual registrations, opposite bays — they serve
+  // different routes). Without this, six copies of one stop exhaust the
+  // slots and the actually-useful stop across the street never makes it.
+  const busDocs: typeof busCandidates = [];
+  const busNames = new Set<string>();
+  for (const d of busCandidates) {
+    if (!busNames.has(d.stopName)) {
+      if (busNames.size >= busLimit) continue;
+      busNames.add(d.stopName);
+    }
+    busDocs.push(d);
+  }
 
   const railIds = railCandidates.map((s) => s.stopId);
   const servedRailIds = new Set<string>(
@@ -1196,10 +1212,22 @@ async function findOneTransferRoutes(
       : []
   );
 
-  // Origin trips → board event (earliest seq). Schedule-based trips departing
-  // in the past are unboardable; headway trips keep their anchor times. Capped
-  // to the SOONEST departures — an arbitrary cap order starves hub diversity
-  // at busy endpoints (e.g. 台北車站 has thousands of daily trips).
+  // ONE representative trip per (route, direction): hub coverage comes from
+  // route DIVERSITY, not from many same-route trips — a global "soonest N
+  // trips" cap fills up with one busy line's departures and (worse) only the
+  // first hour of service, so a later-arriving first leg never matches. The
+  // representative's times are for hub discovery only; buildTransferRoute
+  // re-resolves the actual catchable departures with chained afterSec.
+  const routeDirByTrip = new Map(
+    trips.map((t) => [t.tripId, `${t.routeId}|${t.directionId ?? 0}`])
+  );
+
+  // Board/alight stop choice is by PROXIMITY to the endpoint (not stop
+  // sequence): keeping the latest-sequence alight rides past the destination
+  // station and walks back (e.g. alighting at 東門 for a 台北車站 query).
+  const originDistById = new Map(originStops.map((s) => [s.stopId, s.distanceM]));
+  const destDistById = new Map(destStops.map((s) => [s.stopId, s.distanceM]));
+
   const originBoardByTrip = new Map<string, StopEvent & { stopId: string }>();
   for (const r of originBoard) {
     if (!activeTripSet.has(r.tripId)) continue;
@@ -1207,7 +1235,11 @@ async function findOneTransferRoutes(
     if (isNaN(sec)) continue;
     if (!flexTripIds.has(r.tripId) && sec < afterSec) continue;
     const prev = originBoardByTrip.get(r.tripId);
-    if (!prev || r.stopSequence < prev.seq) {
+    if (
+      !prev ||
+      (originDistById.get(r.stopId) ?? Infinity) <
+        (originDistById.get(prev.stopId) ?? Infinity)
+    ) {
       originBoardByTrip.set(r.tripId, {
         tripId: r.tripId,
         seq: r.stopSequence,
@@ -1216,12 +1248,19 @@ async function findOneTransferRoutes(
       });
     }
   }
-  const originTripIds = [...originBoardByTrip.entries()]
-    .sort((a, b) => a[1].sec - b[1].sec)
+  const bestOriginByRouteDir = new Map<string, { tripId: string; sec: number }>();
+  for (const [tripId, ev] of originBoardByTrip) {
+    const rd = routeDirByTrip.get(tripId);
+    if (!rd) continue;
+    const prev = bestOriginByRouteDir.get(rd);
+    if (!prev || ev.sec < prev.sec) bestOriginByRouteDir.set(rd, { tripId, sec: ev.sec });
+  }
+  const originTripIds = [...bestOriginByRouteDir.values()]
+    .sort((a, b) => a.sec - b.sec)
     .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS)
-    .map(([tripId]) => tripId);
+    .map((v) => v.tripId);
 
-  // Dest trips → alight event (latest seq), soonest arrivals first, capped.
+  // Dest trips → alight event (nearest to destination), one rep per route|dir.
   const destAlightByTrip = new Map<string, StopEvent & { stopId: string }>();
   for (const r of destAlight) {
     if (!activeTripSet.has(r.tripId)) continue;
@@ -1229,7 +1268,11 @@ async function findOneTransferRoutes(
     if (isNaN(sec)) continue;
     if (!flexTripIds.has(r.tripId) && sec < afterSec) continue;
     const prev = destAlightByTrip.get(r.tripId);
-    if (!prev || r.stopSequence > prev.seq) {
+    if (
+      !prev ||
+      (destDistById.get(r.stopId) ?? Infinity) <
+        (destDistById.get(prev.stopId) ?? Infinity)
+    ) {
       destAlightByTrip.set(r.tripId, {
         tripId: r.tripId,
         seq: r.stopSequence,
@@ -1238,10 +1281,17 @@ async function findOneTransferRoutes(
       });
     }
   }
-  const destTripIds = [...destAlightByTrip.entries()]
-    .sort((a, b) => a[1].sec - b[1].sec)
-    .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS)
-    .map(([tripId]) => tripId);
+  const bestDestByRouteDir = new Map<string, { tripId: string; sec: number }>();
+  for (const [tripId, ev] of destAlightByTrip) {
+    const rd = routeDirByTrip.get(tripId);
+    if (!rd) continue;
+    const prev = bestDestByRouteDir.get(rd);
+    if (!prev || ev.sec < prev.sec) bestDestByRouteDir.set(rd, { tripId, sec: ev.sec });
+  }
+  const destTripIds = [...bestDestByRouteDir.values()]
+    .sort((a, b) => a.sec - b.sec)
+    .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS * 2)
+    .map((v) => v.tripId);
 
   // Downstream stops of origin trips (potential transfer hubs).
   const originDownstream = await GtfsStopTime.find({
@@ -1358,13 +1408,10 @@ async function findOneTransferRoutes(
           MIN_TRANSFER_WALK_SEC,
           Math.round((dist / WHEELCHAIR_SPEED_M_PER_MIN) * 60)
         );
-        // Time window only constrains schedule↔schedule pairs; headway trips
-        // repeat all day (anchor times) — build resolves their real times.
-        if (!flexTripIds.has(origTripId) && !flexTripIds.has(sl.tripId)) {
-          const readySec = leg1ArriveSec + transferWalkSec;
-          const wait = sl.sec - readySec;
-          if (wait < 0 || wait > MAX_TRANSFER_WAIT_SEC) continue;
-        }
+        // No time-window prefilter here: the events are per-ROUTE
+        // representatives whose clock times are arbitrary (often the day's
+        // first trip). buildTransferRoute resolves the actual next departure
+        // after leg 1's arrival and enforces the transfer-wait bound.
 
         const destEvt = destAlightByTrip.get(sl.tripId);
         if (!destEvt || destEvt.seq <= sl.seq) continue;
@@ -1373,7 +1420,18 @@ async function findOneTransferRoutes(
         const key = `${origTripId}|${hubStop.stopName}|${sl.tripId}`;
         if (usedRouteKeys.has(key)) continue;
         usedRouteKeys.add(key);
-        buildAttempts++;
+        // Each build costs a few DB round-trips — bound the total.
+        if (++buildAttempts > 30) {
+          debugLog("[1T] build budget exhausted");
+          return routes;
+        }
+        debugLog(
+          "[1T] build:",
+          `board=${board.stopId}`,
+          `hub=${hubStop.stopId}(${hubStop.stopName})`,
+          `sl=${sl.stopId}`,
+          `alight=${destEvt.stopId}`
+        );
 
         const route = await buildTransferRoute(
           origin,
@@ -1627,6 +1685,17 @@ async function findTwoTransferRoutes(
       : []
   );
 
+  // ONE representative trip per (route, direction) — see findOneTransferRoutes
+  // for the rationale: route diversity over trip multiplicity, and the
+  // representative's clock times are for hub DISCOVERY only (the build step
+  // re-resolves real departures with chained afterSec).
+  const routeDirByTrip = new Map(
+    trips.map((t) => [t.tripId, `${t.routeId}|${t.directionId ?? 0}`])
+  );
+  // Board/alight stop choice by proximity to the endpoint (see one-transfer).
+  const originDistById = new Map(originStops.map((s) => [s.stopId, s.distanceM]));
+  const destDistById = new Map(destStops.map((s) => [s.stopId, s.distanceM]));
+
   const originBoardByTrip = new Map<string, StopEvent & { stopId: string }>();
   for (const r of originBoard) {
     if (!activeTripSet.has(r.tripId)) continue;
@@ -1634,7 +1703,11 @@ async function findTwoTransferRoutes(
     if (isNaN(sec)) continue;
     if (!flexTripIds.has(r.tripId) && sec < afterSec) continue;
     const prev = originBoardByTrip.get(r.tripId);
-    if (!prev || r.stopSequence < prev.seq) {
+    if (
+      !prev ||
+      (originDistById.get(r.stopId) ?? Infinity) <
+        (originDistById.get(prev.stopId) ?? Infinity)
+    ) {
       originBoardByTrip.set(r.tripId, {
         tripId: r.tripId,
         seq: r.stopSequence,
@@ -1643,12 +1716,17 @@ async function findTwoTransferRoutes(
       });
     }
   }
-  // Soonest departures first — an arbitrary cap order lets a flood of
-  // intercity-rail trips crowd out the frequent metro trips that actually chain.
-  const originTripIds = [...originBoardByTrip.entries()]
-    .sort((a, b) => a[1].sec - b[1].sec)
+  const bestOriginRD = new Map<string, { tripId: string; sec: number }>();
+  for (const [tripId, ev] of originBoardByTrip) {
+    const rd = routeDirByTrip.get(tripId);
+    if (!rd) continue;
+    const prev = bestOriginRD.get(rd);
+    if (!prev || ev.sec < prev.sec) bestOriginRD.set(rd, { tripId, sec: ev.sec });
+  }
+  const originTripIds = [...bestOriginRD.values()]
+    .sort((a, b) => a.sec - b.sec)
     .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS)
-    .map(([tripId]) => tripId);
+    .map((v) => v.tripId);
 
   const destAlightByTrip = new Map<string, StopEvent & { stopId: string }>();
   for (const r of destAlight) {
@@ -1658,7 +1736,11 @@ async function findTwoTransferRoutes(
     // can't arrive before departure — except flexible (headway) trips
     if (!flexTripIds.has(r.tripId) && sec < afterSec) continue;
     const prev = destAlightByTrip.get(r.tripId);
-    if (!prev || r.stopSequence > prev.seq) {
+    if (
+      !prev ||
+      (destDistById.get(r.stopId) ?? Infinity) <
+        (destDistById.get(prev.stopId) ?? Infinity)
+    ) {
       destAlightByTrip.set(r.tripId, {
         tripId: r.tripId,
         seq: r.stopSequence,
@@ -1667,10 +1749,17 @@ async function findTwoTransferRoutes(
       });
     }
   }
-  const destTripIds = [...destAlightByTrip.entries()]
-    .sort((a, b) => a[1].sec - b[1].sec)
-    .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS)
-    .map(([tripId]) => tripId);
+  const bestDestRD = new Map<string, { tripId: string; sec: number }>();
+  for (const [tripId, ev] of destAlightByTrip) {
+    const rd = routeDirByTrip.get(tripId);
+    if (!rd) continue;
+    const prev = bestDestRD.get(rd);
+    if (!prev || ev.sec < prev.sec) bestDestRD.set(rd, { tripId, sec: ev.sec });
+  }
+  const destTripIds = [...bestDestRD.values()]
+    .sort((a, b) => a.sec - b.sec)
+    .slice(0, MAX_TWO_TRANSFER_SIDE_TRIPS * 2)
+    .map((v) => v.tripId);
   if (!originTripIds.length || !destTripIds.length) return [];
 
   const [originDownstream, destUpstream] = await Promise.all([
@@ -1877,21 +1966,8 @@ async function findTwoTransferRoutes(
   const activeMiddleIds = middleTrips
     .filter((t) => activeServiceIds.has(t.serviceId))
     .map((t) => t.tripId);
-  const middleFlexIds = new Set<string>(
-    activeMiddleIds.length
-      ? ((await GtfsFrequency.find({
-          tripId: { $in: activeMiddleIds },
-        }).distinct("tripId")) as string[])
-      : []
-  );
 
-  // ── 4. Time-chain validation, earliest-departure first ──
-  const walkSecBetween = (a: [number, number], b: [number, number]) =>
-    Math.max(
-      MIN_TRANSFER_WALK_SEC,
-      Math.round((haversineCoords(a, b) / WHEELCHAIR_SPEED_M_PER_MIN) * 60)
-    );
-
+  // ── 4. Chain assembly (hub proximity only), earliest middle-board first ──
   const chains: { leg1: HubEvent & { boardStopId: string }; mid: MiddleCand; midTripId: string; leg3: HubEvent & { alightStopId: string } }[] = [];
   const seenCombos = new Set<string>();
 
@@ -1900,33 +1976,21 @@ async function findTwoTransferRoutes(
   )) {
     const mid = middleByTrip.get(midTripId)!;
 
-    const midFlex = middleFlexIds.has(midTripId);
-
     const leg1 = leg1ByXKey.get(mid.board.name);
     if (!leg1) continue;
     // Same physical station check (key matched; verify proximity — looser
     // bound when the key is a cluster, since bus↔rail members sit apart).
+    // No time-window prefilter: events are per-route representatives with
+    // arbitrary clock times — buildTwoTransferRoute resolves the actual
+    // departures with chained afterSec and enforces the wait bounds.
     if (haversineCoords(leg1.coords, mid.board.coords) > hubDistBound(mid.board.name))
       continue;
-    // Time windows only constrain pairs of SCHEDULE-based trips: headway trips
-    // carry anchor times and repeat all day, so their windows are meaningless
-    // here — buildTwoTransferRoute resolves their real departures and enforces
-    // feasibility with chained afterSec.
-    if (!flexTripIds.has(leg1.tripId) && !midFlex) {
-      const wait1 =
-        mid.board.sec - (leg1.sec + walkSecBetween(leg1.coords, mid.board.coords));
-      if (wait1 < 0 || wait1 > MAX_TRANSFER_WAIT_SEC) continue;
-    }
 
     const leg3Cands = leg3ByYKey.get(mid.alight.name) ?? [];
-    const leg3 = leg3Cands.find((c) => {
-      if (haversineCoords(mid.alight.coords, c.coords) > hubDistBound(mid.alight.name))
-        return false;
-      if (flexTripIds.has(c.tripId) || midFlex) return true;
-      const wait2 =
-        c.sec - (mid.alight.sec + walkSecBetween(mid.alight.coords, c.coords));
-      return wait2 >= 0 && wait2 <= MAX_TRANSFER_WAIT_SEC;
-    });
+    const leg3 = leg3Cands.find(
+      (c) =>
+        haversineCoords(mid.alight.coords, c.coords) <= hubDistBound(mid.alight.name)
+    );
     if (!leg3) continue;
 
     // Dedupe by transfer-hub PAIR, not trip ids — consecutive trips of the
