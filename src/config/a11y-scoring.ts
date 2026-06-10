@@ -441,6 +441,126 @@ export function scoreLabel(score: number): ScoreLabel {
   return "critical";
 }
 
+// ─── Accessibility modes (Phase 11, spec §11.4) ───────────────────────────────
+
+export type AccessibilityMode =
+  | "wheelchair"
+  | "elderly"
+  | "visual_impaired"
+  | "normal";
+
+/**
+ * Per-mode scoring profile (spec §11.4).
+ *
+ * criticalWeights are the binary Tier-feature contributions to the
+ * criticalFeatureScore (normalized to 100). The default (wheelchair/normal)
+ * weights follow the literature ranking [Huang25, CHI25, Scoping]; the other
+ * modes re-rank features per their dominant need:
+ *  • elderly         — Tier 1 + Tier 2 lifted: accessible toilet weight doubled,
+ *                      a11y/time split raised to 70/30 (slower walking, rest needs)
+ *  • visual_impaired — tactile paving + audio signals promoted to critical
+ *                      [TW-MOI audio signals required; Scoping tactile routes]
+ */
+export interface ModeProfile {
+  /** Route-score split between accessibility and travel time. */
+  a11yWeight: number;
+  timeWeight: number;
+  /** Transfer penalty multiplier for route-cost ranking (spec §11.4). */
+  transferPenaltyMultiplier: number;
+  /** Whether missing Tier 1 features should exclude a route (spec §11.3). */
+  tier1Required: boolean;
+  criticalWeights: {
+    elevator: number;
+    flushKerb: number;
+    ramp: number;
+    wheelchairYes: number;
+    accessibleToilet: number;
+    audioSignal: number;
+    tactilePaving: number;
+  };
+}
+
+export const MODE_PROFILES: Record<AccessibilityMode, ModeProfile> = {
+  wheelchair: {
+    a11yWeight: 0.65,
+    timeWeight: 0.35,
+    transferPenaltyMultiplier: 2,
+    tier1Required: true,
+    criticalWeights: {
+      elevator: 35,
+      flushKerb: 30,
+      ramp: 15,
+      wheelchairYes: 10,
+      accessibleToilet: 6,
+      audioSignal: 4,
+      tactilePaving: 0,
+    },
+  },
+  elderly: {
+    a11yWeight: 0.7,
+    timeWeight: 0.3,
+    transferPenaltyMultiplier: 1.5,
+    tier1Required: false,
+    criticalWeights: {
+      elevator: 32,
+      flushKerb: 22,
+      ramp: 14,
+      wheelchairYes: 8,
+      accessibleToilet: 14, // Tier 2 lifted — long journeys, rest/toilet needs
+      audioSignal: 5,
+      tactilePaving: 5,
+    },
+  },
+  visual_impaired: {
+    a11yWeight: 0.65,
+    timeWeight: 0.35,
+    transferPenaltyMultiplier: 1,
+    tier1Required: false,
+    criticalWeights: {
+      elevator: 15,
+      flushKerb: 12,
+      ramp: 8,
+      wheelchairYes: 5,
+      accessibleToilet: 5,
+      audioSignal: 25, // promoted to critical (spec §5.4)
+      tactilePaving: 30, // promoted to critical (spec §5.4)
+    },
+  },
+  normal: {
+    a11yWeight: 0.65,
+    timeWeight: 0.35,
+    transferPenaltyMultiplier: 1,
+    tier1Required: false,
+    criticalWeights: {
+      elevator: 35,
+      flushKerb: 30,
+      ramp: 15,
+      wheelchairYes: 10,
+      accessibleToilet: 6,
+      audioSignal: 4,
+      tactilePaving: 0,
+    },
+  },
+};
+
+/**
+ * Route-ranking cost (spec §11.2) — lower is better. NOT the user-facing score:
+ *   cost = travelTime + transferCount × 5 × modePenalty + (100 − a11yScore) × 0.3
+ */
+export function routeCost(
+  totalMinutes: number,
+  transferCount: number,
+  accessibilityScore: number,
+  mode: AccessibilityMode = "normal"
+): number {
+  const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
+  return (
+    totalMinutes +
+    transferCount * 5 * profile.transferPenaltyMultiplier +
+    (100 - accessibilityScore) * 0.3
+  );
+}
+
 export interface RouteAccessibilityScore {
   /** Normalized 0–100 route-level accessibility score. */
   totalScore: number;
@@ -487,8 +607,10 @@ export function scoreRoute(
   facilityNodes: IOsmA11y[],
   totalMinutes: number,
   maxMinutes: number,
-  highlightCount: number
+  highlightCount: number,
+  mode: AccessibilityMode = "normal"
 ): RouteAccessibilityScore {
+  const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
   // ── Facility quality component (0–100 → contributes 40 of 65 a11y pts) ───
   const facilityScore = scoreFacilitySet(facilityNodes);
 
@@ -520,16 +642,23 @@ export function scoreRoute(
   const hasAudioSignal = facilityNodes.some(
     (n) => n.tags?.["traffic_signals:sound"] === "yes"
   );
+  const hasTactilePaving = facilityNodes.some(
+    (n) => n.tags?.["tactile_paving"] === "yes"
+  );
 
   // Critical feature score: weighted sum of binary flags, normalized to 100.
-  // Weights proportional to factor importance from literature.
+  // Weights come from the active mode profile (Phase 11) — defaults follow the
+  // literature ranking; visual_impaired promotes tactile/audio to critical,
+  // elderly lifts the accessible-toilet (Tier 2) weight.
+  const w = profile.criticalWeights;
   const criticalRaw =
-    (hasElevator ? 35 : 0) +      // [Huang25] facility type most impactful
-    (hasFlushKerb ? 30 : 0) +     // [CHI25] #1 barrier addressed
-    (hasRamp ? 15 : 0) +          // [Scoping] ramps 63%
-    (hasWheelchairYes ? 10 : 0) + // OSM confirmed accessible
-    (hasAccessibleToilet ? 6 : 0) + // Tier 3
-    (hasAudioSignal ? 4 : 0);       // Tier 3
+    (hasElevator ? w.elevator : 0) +
+    (hasFlushKerb ? w.flushKerb : 0) +
+    (hasRamp ? w.ramp : 0) +
+    (hasWheelchairYes ? w.wheelchairYes : 0) +
+    (hasAccessibleToilet ? w.accessibleToilet : 0) +
+    (hasAudioSignal ? w.audioSignal : 0) +
+    (hasTactilePaving ? w.tactilePaving : 0);
   const criticalFeatureScore = Math.min(criticalRaw, 100);
 
   // ── Time component (0–100) ────────────────────────────────────────────────
@@ -545,12 +674,14 @@ export function scoreRoute(
   const adjustedFacilityScore = Math.min(facilityScore + highlightBonus, 100);
 
   // ── Combine ───────────────────────────────────────────────────────────────
-  // a11yScore = 40% facility + 25% critical (both contributing to 65% total weight)
-  // Scaled so that a11y components together contribute 65 of 100 points.
+  // a11yScore = 40% facility + 25% critical (both contributing to the a11y share)
+  // The a11y/time split comes from the mode profile (default 65/35).
   const a11yScore =
     adjustedFacilityScore * (40 / 65) + criticalFeatureScore * (25 / 65);
 
-  const totalScore = Math.round(a11yScore * 0.65 + timeScore * 0.35);
+  const totalScore = Math.round(
+    a11yScore * profile.a11yWeight + timeScore * profile.timeWeight
+  );
 
   return {
     totalScore: Math.max(0, Math.min(100, totalScore)),

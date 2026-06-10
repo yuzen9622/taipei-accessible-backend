@@ -9,34 +9,72 @@ const CoordSchema = z.object({
   lng: z.number().openapi({ description: "Longitude" }),
 });
 
+const PointSchema = z.union([
+  z.string().openapi({ description: "Place name to geocode" }),
+  z
+    .object({
+      latitude: z.number(),
+      longitude: z.number(),
+    })
+    .openapi({ description: "Explicit coordinates" }),
+]);
+
 export const AccessibleRouteBodySchema = z
   .object({
-    origin: z
-      .union([
-        z.string().openapi({ description: "Place name to geocode" }),
-        z
-          .object({
-            latitude: z.number(),
-            longitude: z.number(),
-          })
-          .openapi({ description: "Explicit coordinates" }),
-      ])
-      .openapi({ description: "Origin — place name or {latitude, longitude}" }),
-    destination: z
-      .union([
-        z.string().openapi({ description: "Place name to geocode" }),
-        z
-          .object({
-            latitude: z.number(),
-            longitude: z.number(),
-          })
-          .openapi({ description: "Explicit coordinates" }),
-      ])
+    origin: PointSchema.optional().openapi({
+      description: "Origin — place name or {latitude, longitude}",
+    }),
+    destination: PointSchema.optional().openapi({
+      description: "Destination — place name or {latitude, longitude}",
+    }),
+    query: z
+      .string()
+      .min(1)
+      .optional()
       .openapi({
-        description: "Destination — place name or {latitude, longitude}",
+        description:
+          "Phase 9: natural-language query (e.g. \"我坐輪椅要從台中車站到高鐵新竹站\"). When provided and origin/destination are omitted, it is parsed via /ai/intent to derive origin, destination and mode. `current_location` resolves to userLocation.",
+        example: "我坐輪椅要從台中車站到高鐵新竹站",
+      }),
+    userLocation: z
+      .object({ latitude: z.number(), longitude: z.number() })
+      .optional()
+      .openapi({
+        description:
+          "User coordinates, used to resolve a `current_location` origin parsed from `query`.",
+      }),
+    mode: z
+      .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
+      .optional()
+      .openapi({
+        description:
+          "Phase 11: accessibility mode. Adjusts scoring weights (elderly lifts Tier 1+2; visual_impaired promotes tactile paving / audio signals to critical), transfer penalty (wheelchair ×2, elderly ×1.5) and wheelchair Tier-1 route exclusion. Falls back to the mode parsed from `query`, then \"normal\".",
+        example: "wheelchair",
+      }),
+    maxTransfers: z
+      .number()
+      .int()
+      .min(0)
+      .max(2)
+      .optional()
+      .openapi({
+        description:
+          "Phase 12: maximum transfers (0–2). Default 1. Two-transfer search runs only when fewer than 3 simpler routes are found.",
+        example: 1,
+      }),
+    departureTime: z
+      .string()
+      .optional()
+      .openapi({
+        description:
+          "ISO 8601 departure time. Defaults to now. Honoured by the GTFS router path.",
+        example: "2026-06-10T08:30:00+08:00",
       }),
   })
-  .strict();
+  .strict()
+  .refine((b) => (b.origin && b.destination) || b.query, {
+    message: "Provide either origin+destination, or a natural-language query",
+  });
 
 // ── Response component schemas ──────────────────────────────────────────────
 
@@ -268,7 +306,7 @@ const AccessibleRouteSchema = z
     totalMinutes: z.number().openapi({ example: 18 }),
     transferCount: z
       .number()
-      .openapi({ example: 0, description: "0=direct, 1=one transfer" }),
+      .openapi({ example: 0, description: "0=direct, 1=one transfer, 2=two transfers" }),
     legs: z
       .array(
         z.discriminatedUnion("type", [

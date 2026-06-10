@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { getCoordinates, sendResponse } from "../../config/lib";
 import { getCity } from "../../config/map";
 import { findAccessibleRoutes } from "./accessible-route.service";
+import { parseRouteIntent, RouteIntent } from "../ai";
 import { ApiResponse } from "../../types/response";
 import { TaiwanCityEn } from "../../types/transit";
 
@@ -9,7 +10,46 @@ export async function accessibleRoute(
   req: Request,
   res: Response<ApiResponse<any>>
 ) {
-  const { origin, destination } = req.body;
+  let { origin, destination } = req.body;
+  const { query, userLocation, maxTransfers, departureTime } = req.body;
+  let mode: RouteIntent["mode"] | undefined = req.body.mode;
+
+  // Phase 9 — optional intent switch: a natural-language `query` is parsed into
+  // origin/destination (+ mode) when explicit endpoints are not supplied.
+  let intent: RouteIntent | null = null;
+  if (query && (!origin || !destination)) {
+    try {
+      intent = await parseRouteIntent(query);
+    } catch (err) {
+      console.error("[accessible-route] intent parsing failed", err);
+      return sendResponse(res, false, "error", 500, "語意解析服務暫時無法使用，請稍後再試或直接提供 origin/destination");
+    }
+    if (!intent) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        400,
+        "無法解析您的查詢，請改用『從 A 到 B』的描述或直接提供 origin/destination"
+      );
+    }
+    origin =
+      intent.from === "current_location"
+        ? userLocation ?? undefined
+        : intent.from;
+    destination = intent.to;
+    // Explicit body mode wins; otherwise adopt the parsed intent's mode.
+    mode = mode ?? intent.mode;
+    if (!origin) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        400,
+        "查詢使用了『目前位置』，請一併提供 userLocation 座標"
+      );
+    }
+  }
 
   if (!origin || !destination) {
     return sendResponse(res, false, "error", 400, "缺少必要參數：origin, destination");
@@ -35,10 +75,20 @@ export async function accessibleRoute(
 
     const city = (await getCity(lat, lng)) as TaiwanCityEn;
 
+    // Phase 11/12: thread mode + transfer budget + departure time through.
+    const parsedDeparture = departureTime ? new Date(departureTime) : undefined;
     const routes = await findAccessibleRoutes(
       { lat, lng },
       { lat: destCoords.latitude, lng: destCoords.longitude },
-      city
+      city,
+      {
+        mode: mode ?? "normal",
+        maxTransfers: (maxTransfers ?? 1) as 0 | 1 | 2,
+        departureTime:
+          parsedDeparture && !isNaN(parsedDeparture.getTime())
+            ? parsedDeparture
+            : undefined,
+      }
     );
 
     if (!routes.length) {
@@ -56,6 +106,7 @@ export async function accessibleRoute(
       destination: { lat: destCoords.latitude, lng: destCoords.longitude },
       city,
       routes,
+      ...(intent ? { intent } : {}),
     });
   } catch (error: any) {
     console.error("[accessible-route]", error);

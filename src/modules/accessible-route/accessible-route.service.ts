@@ -8,7 +8,12 @@ import {
 } from "../../config/transit";
 import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
 import { orsWalkingRoute } from "../../config/ors";
-import { scoreRoute } from "../../config/a11y-scoring";
+import {
+  scoreRoute,
+  routeCost,
+  MODE_PROFILES,
+  AccessibilityMode,
+} from "../../config/a11y-scoring";
 import BusStopModel from "../../model/bus-stop.model";
 import MetroStationModel from "../../model/metro-station.model";
 import TrainStationModel from "../../model/train-station.model";
@@ -140,7 +145,7 @@ export interface AccessibleRoute {
   routeId: string;
   routeName: string;
   totalMinutes: number;
-  /** 0 = direct, 1 = one transfer */
+  /** 0 = direct, 1 = one transfer, 2 = two transfers (Phase 12) */
   transferCount: number;
   legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[];
   accessibilityHighlights: string[];
@@ -1389,7 +1394,10 @@ function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
 //     of continuous tag scores to ensure Tier 1 barriers are never diluted.
 //   • Time normalization: linear across candidates — fastest = 100, slowest = 0.
 
-export function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
+export function scoreAndRank(
+  routes: AccessibleRoute[],
+  mode: AccessibilityMode = "normal",
+): AccessibleRoute[] {
   const maxTime = Math.max(...routes.map((r) => r.totalMinutes), 1);
 
   return routes
@@ -1400,15 +1408,76 @@ export function scoreAndRank(routes: AccessibleRoute[]): AccessibleRoute[] {
         r.totalMinutes,
         maxTime,
         r.accessibilityHighlights.length,
+        mode,
       );
       // Attach score metadata to route for client consumption.
       r.accessibilityScore = result.totalScore;
       r.accessibilityLabel = result.label;
       r.scoreComponents = result.components;
-      return { route: r, score: result.totalScore };
+      // Ranking uses the mode-aware route COST (spec §11.2), not the display
+      // score: cost = time + transfers × 5 × modePenalty + (100 − score) × 0.3.
+      return {
+        route: r,
+        cost: routeCost(r.totalMinutes, r.transferCount, result.totalScore, mode),
+      };
     })
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => a.cost - b.cost)
     .map((s) => s.route);
+}
+
+// ─── Mode-based route exclusion (Phase 11, spec §11.3) ───────────────────────
+
+/** True when a walk leg passes a confirmed stairs-only barrier. */
+function walkLegHasStairsBarrier(leg: WalkLeg): boolean {
+  return leg.a11yFacilities.some(
+    (f) =>
+      f.tags?.["highway"] === "steps" &&
+      f.tags?.["ramp:wheelchair"] !== "yes" &&
+      f.tags?.["wheelchair"] !== "yes",
+  );
+}
+
+/**
+ * Tier-1 exclusion for wheelchair mode: a route is excluded when a rail leg has
+ * facility data but no elevator mention, or a walk leg passes a stairs-only
+ * barrier. Legs with NO facility data are tolerated (unknown ≠ inaccessible) —
+ * over-excluding on missing data would 404 most queries.
+ */
+function isRouteExcluded(
+  route: AccessibleRoute,
+  mode: AccessibilityMode,
+): boolean {
+  if (!(MODE_PROFILES[mode] ?? MODE_PROFILES.normal).tier1Required) return false;
+
+  for (const leg of route.legs) {
+    if (leg.type === "WALK") {
+      if (walkLegHasStairsBarrier(leg)) return true;
+      continue;
+    }
+    if (leg.type === "BUS") continue; // low-floor info not modelled yet
+    // Rail legs: only judge when facility data exists for the stations.
+    if (leg.facilityHighlights.length > 0) {
+      const text = leg.facilityHighlights.join("|");
+      // Known facilities but no elevator → Tier 1 missing.
+      if (!text.includes("電梯")) return true;
+      // Elevator known but flagged out of service (Phase 13 overlay).
+      if (/電梯[^|]*(維修|故障|暫停)/.test(text)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Apply wheelchair Tier-1 exclusion with a graceful fallback: when EVERY
+ * candidate would be excluded, return the originals (a risky route beats a
+ * 404) — the low accessibility score + warnings still signal the risk.
+ */
+function applyModeExclusion(
+  routes: AccessibleRoute[],
+  mode: AccessibilityMode,
+): AccessibleRoute[] {
+  const kept = routes.filter((r) => !isRouteExcluded(r, mode));
+  return kept.length ? kept : routes;
 }
 
 function transitLegKey(leg: BusLeg | MetroLeg | ThsrLeg | TraLeg): string {
@@ -1445,11 +1514,49 @@ function deduplicateRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+export interface FindAccessibleRoutesOptions {
+  /** Accessibility mode (Phase 11). Default "normal". */
+  mode?: AccessibilityMode;
+  /** Max transfers 0–2 (Phase 12). Default 1. GTFS router path only. */
+  maxTransfers?: 0 | 1 | 2;
+  /** Departure time. Default now. GTFS router path only. */
+  departureTime?: Date;
+}
+
+/**
+ * Shared finalization: dedupe → mode exclusion (spec §11.3) → mode-aware
+ * score + cost ranking (spec §11.2) → top 3 → realtime facility overlay
+ * (Phase 13, fail-soft).
+ */
+async function finalizeRoutes(
+  routes: AccessibleRoute[],
+  mode: AccessibilityMode,
+): Promise<AccessibleRoute[]> {
+  const ranked = scoreAndRank(
+    applyModeExclusion(deduplicateRoutes(routes), mode),
+    mode,
+  );
+  const top = ranked.slice(0, 3);
+  try {
+    const { overlayFacilityStatus } = await import(
+      "../../service/facility-status.service"
+    );
+    await overlayFacilityStatus(top, mode);
+  } catch (err) {
+    console.warn("[accessible-route] facility status overlay failed", err);
+  }
+  return top;
+}
+
 export async function findAccessibleRoutes(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
   city: TaiwanCityEn,
+  opts: FindAccessibleRoutesOptions = {},
 ): Promise<AccessibleRoute[]> {
+  const mode = opts.mode ?? "normal";
+  const maxTransfers = opts.maxTransfers ?? 1;
+
   const geoQuery = (coord: { lat: number; lng: number }, dist: number) =>
     nearQuery([coord.lng, coord.lat], dist);
 
@@ -1461,7 +1568,13 @@ export async function findAccessibleRoutes(
   if (process.env.USE_GTFS_ROUTER === "true") {
     const [gtfsRoutes, tdxRoutes] = await Promise.all([
       import("../../service/gtfs-router.service")
-        .then((m) => m.planGtfsRoute(origin, destination, { maxTransfers: 1 }))
+        .then((m) =>
+          m.planGtfsRoute(origin, destination, {
+            maxTransfers,
+            mode,
+            departureTime: opts.departureTime,
+          }),
+        )
         .catch((): AccessibleRoute[] => []),
       process.env.USE_TDX_ROUTING === "true"
         ? import("../../service/tdx-routing.service")
@@ -1471,7 +1584,7 @@ export async function findAccessibleRoutes(
     ]);
     const merged = [...gtfsRoutes, ...tdxRoutes];
     if (!merged.length) return [];
-    return scoreAndRank(deduplicateRoutes(merged)).slice(0, 3);
+    return finalizeRoutes(merged, mode);
   }
 
   // Bus search
@@ -1544,5 +1657,5 @@ export async function findAccessibleRoutes(
   const allRoutes = [...combined, ...transferRoutes];
   if (!allRoutes.length) return [];
 
-  return scoreAndRank(deduplicateRoutes(allRoutes)).slice(0, 3);
+  return finalizeRoutes(allRoutes, mode);
 }
