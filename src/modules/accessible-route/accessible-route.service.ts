@@ -35,6 +35,7 @@ import {
   TdxTraGeneralTimetableItem,
 } from "../../types/transit";
 import { TaiwanCityEn } from "../../types/transit";
+import { slimRoutes, compactRoutes, type SlimA11y } from "./facility-slim";
 
 // ─── Response types ──────────────────────────────────────────────────────────
 
@@ -52,6 +53,8 @@ export interface NearestBus {
 
 export interface WalkLeg {
   type: "WALK";
+  /** Phase 14 compact format only: osmId refs into route-level `facilities`. */
+  a11yRefs?: string[];
   from: string;
   to: string;
   distanceM: number;
@@ -72,6 +75,8 @@ export interface WalkLeg {
 
 export interface BusLeg {
   type: "BUS";
+  /** Phase 14 compact format only: osmId refs into route-level `facilities`. */
+  a11yRefs?: string[];
   routeName: string;
   departureStop: string;
   arrivalStop: string;
@@ -90,6 +95,8 @@ export interface BusLeg {
 
 export interface MetroLeg {
   type: "METRO";
+  /** Phase 14 compact format only: osmId refs into route-level `facilities`. */
+  a11yRefs?: string[];
   railSystem: string;
   lineName: string;
   lineUid: string;
@@ -114,6 +121,8 @@ export interface MetroLeg {
 
 export interface ThsrLeg {
   type: "THSR";
+  /** Phase 14 compact format only: osmId refs into route-level `facilities`. */
+  a11yRefs?: string[];
   trainNo: string;
   departureStation: string;
   arrivalStation: string;
@@ -132,6 +141,8 @@ export interface ThsrLeg {
 
 export interface TraLeg {
   type: "TRA";
+  /** Phase 14 compact format only: osmId refs into route-level `facilities`. */
+  a11yRefs?: string[];
   trainNo: string;
   trainTypeName: string; // e.g. "自強", "莒光", "區間車"
   departureStation: string;
@@ -163,6 +174,11 @@ export interface AccessibleRoute {
    * Undefined means the route departs today.
    */
   departureDate?: string;
+  /**
+   * Phase 14 compact format only: deduped facility dictionary keyed by osmId.
+   * Legs then carry `a11yRefs` (osmId references) and empty facility arrays.
+   */
+  facilities?: Record<string, SlimA11y>;
   /** 0–100 evidence-based accessibility score. Set by scoreAndRank(). */
   accessibilityScore?: number;
   /** Semantic label for the score. Set by scoreAndRank(). */
@@ -1529,16 +1545,24 @@ export interface FindAccessibleRoutesOptions {
   maxTransfers?: 0 | 1 | 2;
   /** Departure time. Default now. GTFS router path only. */
   departureTime?: Date;
+  /**
+   * Response shape (Phase 14). "standard" (default) returns slimmed facility
+   * objects inline per leg; "compact" additionally dedupes them into a
+   * route-level `facilities` dictionary with `a11yRefs` on each leg.
+   */
+  format?: "standard" | "compact";
 }
 
 /**
  * Shared finalization: dedupe → mode exclusion (spec §11.3) → mode-aware
  * score + cost ranking (spec §11.2) → top 3 → realtime facility overlay
- * (Phase 13, fail-soft).
+ * (Phase 13, fail-soft) → facility slimming (Phase 14; slimming runs LAST so
+ * scoring and the overlay see full documents).
  */
 async function finalizeRoutes(
   routes: AccessibleRoute[],
   mode: AccessibilityMode,
+  format: "standard" | "compact" = "standard",
 ): Promise<AccessibleRoute[]> {
   const ranked = scoreAndRank(
     applyModeExclusion(deduplicateRoutes(routes), mode),
@@ -1553,6 +1577,8 @@ async function finalizeRoutes(
   } catch (err) {
     console.warn("[accessible-route] facility status overlay failed", err);
   }
+  slimRoutes(top);
+  if (format === "compact") compactRoutes(top);
   return top;
 }
 
@@ -1592,7 +1618,7 @@ export async function findAccessibleRoutes(
     ]);
     const merged = [...gtfsRoutes, ...tdxRoutes];
     if (!merged.length) return [];
-    return finalizeRoutes(merged, mode);
+    return finalizeRoutes(merged, mode, opts.format);
   }
 
   // Bus search
@@ -1665,5 +1691,5 @@ export async function findAccessibleRoutes(
   const allRoutes = [...combined, ...transferRoutes];
   if (!allRoutes.length) return [];
 
-  return finalizeRoutes(allRoutes, mode);
+  return finalizeRoutes(allRoutes, mode, opts.format);
 }

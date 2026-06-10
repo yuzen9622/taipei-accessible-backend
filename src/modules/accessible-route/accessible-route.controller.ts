@@ -11,7 +11,7 @@ export async function accessibleRoute(
   res: Response<ApiResponse<any>>
 ) {
   let { origin, destination } = req.body;
-  const { query, userLocation, maxTransfers, departureTime } = req.body;
+  const { query, userLocation, maxTransfers, departureTime, format } = req.body;
   let mode: RouteIntent["mode"] | undefined = req.body.mode;
 
   // Phase 9 — optional intent switch: a natural-language `query` is parsed into
@@ -88,6 +88,8 @@ export async function accessibleRoute(
           parsedDeparture && !isNaN(parsedDeparture.getTime())
             ? parsedDeparture
             : undefined,
+        // Phase 14: "compact" dedupes facilities into route.facilities.
+        format: format === "compact" ? "compact" : "standard",
       }
     );
 

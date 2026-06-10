@@ -70,6 +70,14 @@ export const AccessibleRouteBodySchema = z
           "ISO 8601 departure time. Defaults to now. Honoured by the GTFS router path.",
         example: "2026-06-10T08:30:00+08:00",
       }),
+    format: z
+      .enum(["standard", "compact"])
+      .optional()
+      .openapi({
+        description:
+          "Phase 14 response shape. \"standard\" (default): slimmed facility objects inline per leg. \"compact\": facilities additionally deduped into a route-level `facilities` dictionary; legs carry `a11yRefs` (osmId references) and empty facility arrays.",
+        example: "standard",
+      }),
   })
   .strict()
   .refine((b) => (b.origin && b.destination) || b.query, {
@@ -91,7 +99,12 @@ const OsmA11ySchema = z
       .openapi({ example: "yes" }),
     tags: z
       .record(z.string(), z.string())
-      .openapi({ example: { wheelchair: "yes", highway: "elevator" } }),
+      .optional()
+      .openapi({
+        example: { wheelchair: "yes", highway: "elevator" },
+        description:
+          "Phase 14: whitelisted decision-relevant tags only (scoring keys + name/opening_hours/level/amenity). Omitted when none apply. Full OSM tags via GET /api/a11y/place?osmId=…",
+      }),
     location: z
       .object({
         type: z.literal("Point").openapi({ example: "Point" }),
@@ -100,16 +113,23 @@ const OsmA11ySchema = z
           .openapi({ example: [121.567, 25.041] }),
       })
       .openapi({ description: "GeoJSON Point [lng, lat]" }),
-    importedAt: z.string().openapi({
-      example: "2026-05-01T08:30:00.000Z",
-      description: "ISO date",
-    }),
   })
-  .openapi("OsmA11y");
+  .openapi("SlimOsmA11y");
+
+/** Phase 14 compact format: osmId references into route-level `facilities`. */
+const A11yRefsSchema = z
+  .array(z.string())
+  .optional()
+  .openapi({
+    example: ["12342946149"],
+    description:
+      "Phase 14 compact format only: osmId keys into the route-level `facilities` dictionary (facility arrays are then empty).",
+  });
 
 const WalkLegSchema = z
   .object({
     type: z.literal("WALK").openapi({ example: "WALK" }),
+    a11yRefs: A11yRefsSchema,
     from: z.string().openapi({ example: "起點" }),
     to: z.string().openapi({ example: "市政府站" }),
     distanceM: z.number().openapi({ example: 320 }),
@@ -168,6 +188,7 @@ const NearestBusSchema = z
 const BusLegSchema = z
   .object({
     type: z.literal("BUS").openapi({ example: "BUS" }),
+    a11yRefs: A11yRefsSchema,
     routeName: z.string().openapi({ example: "信義幹線" }),
     departureStop: z.string().openapi({ example: "市政府站" }),
     arrivalStop: z.string().openapi({ example: "台北101" }),
@@ -202,6 +223,7 @@ const BusLegSchema = z
 const MetroLegSchema = z
   .object({
     type: z.literal("METRO").openapi({ example: "METRO" }),
+    a11yRefs: A11yRefsSchema,
     railSystem: z.string().openapi({ example: "TRTC" }),
     lineName: z.string().openapi({ example: "TRTC-R" }),
     lineUid: z.string().openapi({ example: "TRTC-R" }),
@@ -239,6 +261,7 @@ const MetroLegSchema = z
 const ThsrLegSchema = z
   .object({
     type: z.literal("THSR").openapi({ example: "THSR" }),
+    a11yRefs: A11yRefsSchema,
     trainNo: z.string().openapi({ example: "0617" }),
     departureStation: z.string().openapi({ example: "台北" }),
     arrivalStation: z.string().openapi({ example: "台中" }),
@@ -267,6 +290,7 @@ const ThsrLegSchema = z
 const TraLegSchema = z
   .object({
     type: z.literal("TRA").openapi({ example: "TRA" }),
+    a11yRefs: A11yRefsSchema,
     trainNo: z.string().openapi({ example: "0131" }),
     trainTypeName: z.string().openapi({
       example: "自強",
@@ -357,6 +381,13 @@ const AccessibleRouteSchema = z
     scoreComponents: ScoreComponentsSchema.optional().openapi({
       description: "Breakdown of the accessibilityScore into sub-components",
     }),
+    facilities: z
+      .record(z.string(), OsmA11ySchema)
+      .optional()
+      .openapi({
+        description:
+          "Phase 14 compact format only: deduped facility dictionary keyed by osmId. Legs reference entries via `a11yRefs`.",
+      }),
   })
   .openapi("AccessibleRoute");
 
