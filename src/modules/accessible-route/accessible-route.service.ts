@@ -40,8 +40,34 @@ import { slimRoutes, compactRoutes, type SlimA11y } from "./facility-slim";
 // ─── Response types ──────────────────────────────────────────────────────────
 
 export interface WaitInfo {
-  minutes: number | null;
+  /**
+   * "realtime" → number: minutes until the vehicle reaches the board stop
+   *   (TDX live ETA).
+   * "schedule" → string "HH:mm": the timetable departure clock time. A number
+   *   appears only for headway-only services with no timetable clock (metro:
+   *   expected wait = headway / 2, from the TDX headway API — not hardcoded).
+   * "unavailable" → null (last bus gone / no service today).
+   */
+  time: number | string | null;
   source: "realtime" | "schedule" | "unavailable";
+}
+
+/**
+ * Numeric wait estimate from a WaitInfo, for duration arithmetic: realtime
+ * minutes pass through; a schedule "HH:mm" becomes (clock − now), midnight
+ * wrap handled; unavailable → 0.
+ */
+export function waitInfoMinutes(w: WaitInfo): number {
+  if (typeof w.time === "number") return w.time;
+  if (typeof w.time === "string") {
+    const [h, m] = w.time.split(":").map(Number);
+    if (isNaN(h) || isNaN(m)) return 0;
+    const now = new Date();
+    let diff = h * 60 + m - (now.getHours() * 60 + now.getMinutes());
+    if (diff < -720) diff += 1440; // schedule time is past midnight
+    return Math.max(0, diff);
+  }
+  return 0;
 }
 
 export interface NearestBus {
@@ -98,7 +124,7 @@ export interface BusLeg {
   /** "HH:mm" scheduled arrival, when the source timetable provides it. */
   arrivalTime?: string;
   waitInfo: WaitInfo;
-  estimatedWaitMinutes: number; // waitInfo.minutes ?? 0, kept for backwards compat
+  estimatedWaitMinutes: number; // numeric wait estimate, kept for backwards compat
   direction: 0 | 1;
   polyline: [number, number][];
   departureStopA11y: IOsmA11y[];
@@ -304,11 +330,11 @@ export async function fetchWaitInfo(
         const stopStatus: number = record.StopStatus ?? 0;
 
         if (estimateTime != null && estimateTime >= 0) {
-          return { minutes: Math.round(estimateTime / 60), source: "realtime" };
+          return { time: Math.round(estimateTime / 60), source: "realtime" };
         }
         // StopStatus 3 = 末班車已過, 4 = 今日未營運
         if (stopStatus === 3 || stopStatus === 4) {
-          return { minutes: null, source: "unavailable" };
+          return { time: null, source: "unavailable" };
         }
         // StopStatus 1 = 尚未發車, or other null → fall through to schedule
       }
@@ -319,9 +345,14 @@ export async function fetchWaitInfo(
 
   const scheduled = await fetchScheduledWait(subRouteId, city, direction);
   if (scheduled !== null) {
-    return { minutes: scheduled, source: "schedule" };
+    // Timetable lookup yields minutes-from-now — surface it as a clock time.
+    const dep = new Date(Date.now() + scheduled * 60000);
+    const hhmm = `${String(dep.getHours()).padStart(2, "0")}:${String(
+      dep.getMinutes(),
+    ).padStart(2, "0")}`;
+    return { time: hhmm, source: "schedule" };
   }
-  return { minutes: null, source: "unavailable" };
+  return { time: null, source: "unavailable" };
 }
 
 // ─── Real-time bus position ───────────────────────────────────────────────────
@@ -465,7 +496,7 @@ export async function buildCandidate(
     ]);
 
   // 6. Transit time estimate: 2 min per stop
-  const waitMinutes = waitInfo.minutes ?? 0;
+  const waitMinutes = waitInfoMinutes(waitInfo);
   const transitMinutes = (destIdx - originIdx) * 2;
   const totalMinutes = Math.round(
     walkTo.durationSec / 60 +
@@ -750,7 +781,8 @@ export async function buildMetroCandidate(
 
   const avgHeadway = await fetchMetroHeadway(railSystem, lineUid);
   const waitMinutes = Math.round(avgHeadway / 2);
-  const waitInfo: WaitInfo = { minutes: waitMinutes, source: "schedule" };
+  // Metro is headway-only (no timetable clock) — numeric expected wait.
+  const waitInfo: WaitInfo = { time: waitMinutes, source: "schedule" };
 
   const boardCoords = boardStation.location.coordinates as [number, number];
   const alightCoords = alightStation.location.coordinates as [number, number];
@@ -1076,7 +1108,7 @@ async function buildThsrCandidate(
   ]);
 
   const waitInfo: WaitInfo = {
-    minutes: trainInfo.waitMinutes,
+    time: trainInfo.departureTime,
     source: "schedule",
   };
   const totalMinutes = Math.round(
@@ -1311,7 +1343,7 @@ async function buildTraCandidate(
   ]);
 
   const waitInfo: WaitInfo = {
-    minutes: trainInfo.waitMinutes,
+    time: trainInfo.departureTime,
     source: "schedule",
   };
   const totalMinutes = Math.round(
@@ -1549,6 +1581,39 @@ function deduplicateRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
   });
 }
 
+/**
+ * Cross-planner normalization: the GTFS graph and the TDX hosted engine can
+ * emit the SAME bus line snapped to different stop pairs, which survives the
+ * stop-level dedup above as two near-identical candidates. Collapse routes
+ * whose transit-leg sequence matches at the line level (bus: routeName +
+ * direction; rail legs keep their stop-pair identity), keeping the fastest.
+ */
+function logicalLegKey(leg: BusLeg | MetroLeg | ThsrLeg | TraLeg): string {
+  return leg.type === "BUS"
+    ? `BUS|${leg.routeName}|${leg.direction}`
+    : transitLegKey(leg);
+}
+
+function collapseLogicalDuplicates(
+  routes: AccessibleRoute[],
+): AccessibleRoute[] {
+  const best = new Map<string, AccessibleRoute>();
+  const walkOnly: AccessibleRoute[] = [];
+  for (const r of routes) {
+    const transitLegs = r.legs.filter(
+      (l): l is BusLeg | MetroLeg | ThsrLeg | TraLeg => l.type !== "WALK",
+    );
+    if (!transitLegs.length) {
+      walkOnly.push(r);
+      continue;
+    }
+    const key = transitLegs.map(logicalLegKey).join("::");
+    const prev = best.get(key);
+    if (!prev || r.totalMinutes < prev.totalMinutes) best.set(key, r);
+  }
+  return [...best.values(), ...walkOnly];
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export interface FindAccessibleRoutesOptions {
@@ -1567,7 +1632,8 @@ export interface FindAccessibleRoutesOptions {
 }
 
 /**
- * Shared finalization: dedupe → mode exclusion (spec §11.3) → mode-aware
+ * Shared finalization: dedupe → cross-planner line-level collapse → mode
+ * exclusion (spec §11.3) → mode-aware
  * score + cost ranking (spec §11.2) → top 3 → realtime facility overlay
  * (Phase 13, fail-soft) → realtime transit overlay (Phase 15: bus ETA + TRA
  * delays, fail-soft) → facility slimming (Phase 14; slimming runs LAST so
@@ -1580,7 +1646,10 @@ async function finalizeRoutes(
   departureTime?: Date,
 ): Promise<AccessibleRoute[]> {
   const ranked = scoreAndRank(
-    applyModeExclusion(deduplicateRoutes(routes), mode),
+    applyModeExclusion(
+      collapseLogicalDuplicates(deduplicateRoutes(routes)),
+      mode,
+    ),
     mode,
   );
   const top = ranked.slice(0, 3);
@@ -1635,7 +1704,11 @@ export async function findAccessibleRoutes(
         .catch((): AccessibleRoute[] => []),
       process.env.USE_TDX_ROUTING === "true"
         ? import("../../service/tdx-routing.service")
-            .then((m) => m.planTdxRoute(origin, destination))
+            .then((m) =>
+              m.planTdxRoute(origin, destination, {
+                departureTime: opts.departureTime,
+              }),
+            )
             .catch((): AccessibleRoute[] => [])
         : Promise.resolve<AccessibleRoute[]>([]),
     ]);

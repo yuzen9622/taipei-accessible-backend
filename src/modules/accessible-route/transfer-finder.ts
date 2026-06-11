@@ -23,6 +23,7 @@ import {
   nearQuery,
   fetchTdxRoute,
   fetchWaitInfo,
+  waitInfoMinutes,
   fetchNearestBus,
   fetchMetroStationOfLine,
   fetchMetroTravelTimes,
@@ -498,7 +499,7 @@ async function buildBusSegment(
     fetchNearestBus(routeId, city, direction, boardCoords, boardIdx, dirStops),
   ]);
 
-  const waitMinutes = waitInfo.minutes ?? 0;
+  const waitMinutes = waitInfoMinutes(waitInfo);
   const rideMinutes = (alightIdx - boardIdx) * 2;
 
   const leg: BusLeg = {
@@ -610,7 +611,8 @@ async function buildMetroSegment(
   if (rideMinutes === 0) rideMinutes = Math.max(1, orderedSeq.length - 1) * 2;
 
   const waitMinutes = Math.round(avgHeadway / 2);
-  const waitInfo: WaitInfo = { minutes: waitMinutes, source: "schedule" };
+  // Metro is headway-only (no timetable clock) — numeric expected wait.
+  const waitInfo: WaitInfo = { time: waitMinutes, source: "schedule" };
 
   const facilityHighlights: string[] = [];
   for (const [facility, prefix] of [

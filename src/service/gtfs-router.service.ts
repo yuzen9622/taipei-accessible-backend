@@ -636,16 +636,33 @@ function systemFromId(id: string): string {
   return idx > 0 ? id.slice(0, idx) : id;
 }
 
+/** Line identity ignoring direction — metro naming is "A－B" / "B－A". */
+function lineKey(c: GtfsConnection): string {
+  return (c.routeShortName || c.routeLongName).split("－").sort().join("－");
+}
+
+/**
+ * Re-boarding the same line (same route, or the reverse-direction variant) is
+ * never a sensible transfer: same direction should be a direct route, reverse
+ * is backtracking.
+ */
+function sameLine(a: GtfsConnection, b: GtfsConnection): boolean {
+  return a.routeId === b.routeId || lineKey(a) === lineKey(b);
+}
+
 function waitFromConnection(
   conn: GtfsConnection,
   afterSec: number
 ): { waitInfo: WaitInfo; estimatedWaitMinutes: number } {
-  if (conn.isFrequency && conn.headwaySecs) {
-    const minutes = Math.round(conn.headwaySecs / 2 / 60);
-    return { waitInfo: { minutes, source: "schedule" }, estimatedWaitMinutes: minutes };
-  }
+  // Both fixed and headway trips derive the wait from the schedule clock:
+  // conn.departureSec is already the next departure at/after `afterSec`
+  // (nextFrequencyDeparture resolves headway trips), so the displayed
+  // departureTime and the numeric estimate can never disagree.
   const minutes = Math.max(0, Math.round((conn.departureSec - afterSec) / 60));
-  return { waitInfo: { minutes, source: "schedule" }, estimatedWaitMinutes: minutes };
+  return {
+    waitInfo: { time: conn.departureTime, source: "schedule" },
+    estimatedWaitMinutes: minutes,
+  };
 }
 
 /**
@@ -1461,6 +1478,12 @@ async function findOneTransferRoutes(
       for (const sl of secondLegs) {
         const slStop = hubById.get(sl.stopId);
         if (!slStop) continue;
+        // A line serving both origin and destination sits in BOTH trip pools;
+        // pairing it with itself yields "alight, wait, board the same line's
+        // next bus" — skip before spending the build budget.
+        const origRoute = routeDirByTrip.get(origTripId)?.split("|")[0];
+        const slRoute = routeDirByTrip.get(sl.tripId)?.split("|")[0];
+        if (origRoute && origRoute === slRoute) continue;
         // same physical station: key already matched, verify proximity —
         // looser bound for cluster members (bus↔rail can sit a few hundred
         // metres apart; walk time is computed from the actual distance).
@@ -1568,6 +1591,9 @@ async function buildTransferRoute(
   );
   const leg2 = leg2List.find((c) => c.tripId === sl.tripId) ?? leg2List[0];
   if (!leg2) return null;
+  // The fallback above may swap in a different trip than the paired one —
+  // re-check the degenerate same-line "transfer" here.
+  if (sameLine(leg1, leg2)) return null;
   if (
     leg2.departureSec < leg1.arrivalSec ||
     leg2.departureSec - leg1.arrivalSec > MAX_TRANSFER_WAIT_SEC + transferWalkSec
@@ -1576,6 +1602,16 @@ async function buildTransferRoute(
   // Overall journey must head toward the destination (rejects backwards rides).
   if (!ridesToward(leg1.fromCoords, leg2.toCoords, origin, destination))
     return null;
+  // Redundant transfer (catches same-line short-turn variants under different
+  // route ids): when leg 1's trip already serves leg 2's alight stop, the
+  // rider could simply have stayed on board.
+  const leg1Reach = await GtfsStopTime.findOne({
+    tripId: leg1.tripId,
+    stopId: leg2.toStopId,
+  })
+    .select("_id")
+    .lean();
+  if (leg1Reach) return null;
 
   const [t1, t2] = await Promise.all([
     connectionToLeg(leg1, afterSec),
@@ -2150,12 +2186,6 @@ async function buildTwoTransferRoute(
   const c3 = c3List.find((c) => c.tripId === chain.leg3.tripId) ?? c3List[0];
   if (!c3) return null;
 
-  // Re-boarding the same line (same route, or the reverse-direction variant —
-  // metro naming is "A－B" / "B－A") is never a sensible transfer chain.
-  const lineKey = (c: GtfsConnection) =>
-    (c.routeShortName || c.routeLongName).split("－").sort().join("－");
-  const sameLine = (a: GtfsConnection, b: GtfsConnection) =>
-    a.routeId === b.routeId || lineKey(a) === lineKey(b);
   if (sameLine(c1, c2) || sameLine(c2, c3)) return null;
 
   // Redundant-transfer check (catches same-line short-turn variants and

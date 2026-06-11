@@ -142,8 +142,8 @@ function transitSectionToLeg(
   s: TdxSection,
   waitMinutes: number
 ): BusLeg | MetroLeg | ThsrLeg | TraLeg {
-  const waitInfo: { minutes: number; source: "schedule" } = {
-    minutes: waitMinutes,
+  const waitInfo: { time: string; source: "schedule" } = {
+    time: hhmm(s.departure.time),
     source: "schedule",
   };
   const t = s.transport ?? {};

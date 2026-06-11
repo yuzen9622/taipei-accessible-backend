@@ -28,9 +28,11 @@ export const AccessibleRouteBodySchema = z
       description: "Destination — place name or {latitude, longitude}",
     }),
     query: z
-      .string()
-      .min(1)
-      .optional()
+      .preprocess(
+        // Clients send query: "" when using origin/destination — treat as absent
+        (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+        z.string().min(1).optional(),
+      )
       .openapi({
         description:
           "Phase 9: natural-language query (e.g. \"我坐輪椅要從台中車站到高鐵新竹站\"). When provided and origin/destination are omitted, it is parsed via /ai/intent to derive origin, destination and mode. `current_location` resolves to userLocation.",
@@ -159,14 +161,19 @@ const WalkLegSchema = z
 
 const WaitInfoSchema = z
   .object({
-    minutes: z
-      .number()
+    time: z
+      .union([z.number(), z.string()])
       .nullable()
-      .openapi({ example: 6, description: "null = no service today" }),
+      .openapi({
+        example: "14:34",
+        description:
+          'realtime → number（距離到站的分鐘數）；schedule → "HH:mm" 班表發車時間' +
+          "（捷運等純班距服務為 number 期望等待）；null = 今日無班次",
+      }),
     source: z.enum(["realtime", "schedule", "unavailable"]).openapi({
-      example: "realtime",
+      example: "schedule",
       description:
-        "realtime = TDX ETA, schedule = timetable lookup, unavailable = no data",
+        "realtime = TDX 即時 ETA, schedule = 班表, unavailable = 末班已過/未營運",
     }),
   })
   .openapi("WaitInfo");
@@ -217,7 +224,7 @@ const BusLegSchema = z
     waitInfo: WaitInfoSchema,
     estimatedWaitMinutes: z.number().openapi({
       example: 6,
-      description: "waitInfo.minutes ?? 0, kept for backwards compatibility",
+      description: "數值化的等待估計（分鐘），保留供向後相容與排序計算",
     }),
     direction: z
       .union([z.literal(0), z.literal(1)])

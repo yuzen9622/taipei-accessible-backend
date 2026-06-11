@@ -76,7 +76,15 @@ export async function accessibleRoute(
     const city = (await getCity(lat, lng)) as TaiwanCityEn;
 
     // Phase 11/12: thread mode + transfer budget + departure time through.
+    // A departureTime in the past (stale client state / clock skew) would make
+    // every planner return buses that already left — treat it as "now".
     const parsedDeparture = departureTime ? new Date(departureTime) : undefined;
+    const futureDeparture =
+      parsedDeparture &&
+      !isNaN(parsedDeparture.getTime()) &&
+      parsedDeparture.getTime() > Date.now()
+        ? parsedDeparture
+        : undefined;
     const routes = await findAccessibleRoutes(
       { lat, lng },
       { lat: destCoords.latitude, lng: destCoords.longitude },
@@ -84,10 +92,7 @@ export async function accessibleRoute(
       {
         mode: mode ?? "normal",
         maxTransfers: (maxTransfers ?? 1) as 0 | 1 | 2,
-        departureTime:
-          parsedDeparture && !isNaN(parsedDeparture.getTime())
-            ? parsedDeparture
-            : undefined,
+        departureTime: futureDeparture,
         // Phase 14: "compact" dedupes facilities into route.facilities.
         format: format === "compact" ? "compact" : "standard",
       }

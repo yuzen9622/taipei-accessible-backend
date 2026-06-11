@@ -7,7 +7,10 @@
  *  • BUS — the FIRST transit leg of each route gets its scheduled wait
  *    replaced by the TDX EstimatedTimeOfArrival for that stop (the rider is
  *    standing there NOW; later legs board in the future, where an ETA is
- *    meaningless and the timetable stays authoritative). The endpoint is
+ *    meaningless and the timetable stays authoritative). departureTime /
+ *    arrivalTime shift to now + ETA (scheduled ride duration preserved) so
+ *    the leg never mixes schedule clock times with a realtime wait; without
+ *    a live ETA the leg stays fully schedule-based. The endpoint is
  *    chosen by the TDX system code — GTFS legs carry it in the stop-id
  *    prefix ("TXG2646"), MaaS legs in cityCode (from agency_id): THB →
  *    intercity (公路客運), city codes (TPE/NWT/TXG/…) → per-city ETA.
@@ -38,6 +41,7 @@
 
 import { tdxFetch } from "../config/fetch";
 import { busUrl, trainUrl, traUrl } from "../config/transit";
+import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-router.service";
 import type {
   AccessibleRoute,
   BusLeg,
@@ -204,6 +208,25 @@ function recordForStop(
   );
 }
 
+/**
+ * Once the wait is live, the scheduled clock times no longer describe the bus
+ * the rider will actually board — shift departure to now + ETA and preserve
+ * the scheduled ride duration, so a leg is either fully schedule-based or
+ * fully realtime, never a mix of both.
+ */
+function shiftLegToLiveEta(leg: BusLeg, etaSec: number): void {
+  if (!leg.departureTime || !leg.arrivalTime) return;
+  const depSec = gtfsTimeToSeconds(leg.departureTime);
+  const arrSec = gtfsTimeToSeconds(leg.arrivalTime);
+  if (isNaN(depSec) || isNaN(arrSec)) return;
+  const rideSec = arrSec >= depSec ? arrSec - depSec : arrSec + 86400 - depSec;
+  const now = new Date();
+  const nowSec =
+    now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  leg.departureTime = secondsToHHmm(nowSec + etaSec);
+  leg.arrivalTime = secondsToHHmm(nowSec + etaSec + rideSec);
+}
+
 async function overlayBusEta(route: AccessibleRoute): Promise<void> {
   const leg = firstTransitLeg(route);
   if (!leg || leg.type !== "BUS") return;
@@ -238,9 +261,20 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
     // Both plausible (circular route / missing alight data): trust GTFS.
     const pick =
       candidates.find((c) => c.dir === leg.direction) ?? candidates[0];
+    const prevWait = leg.estimatedWaitMinutes;
     const minutes = Math.round(pick.est / 60);
-    leg.waitInfo = { minutes, source: "realtime" };
+    leg.waitInfo = { time: minutes, source: "realtime" };
     leg.estimatedWaitMinutes = minutes;
+    shiftLegToLiveEta(leg, pick.est);
+    // Single-leg routes end when this bus does, so the wait delta flows into
+    // the total. Transfer routes stay anchored to leg 2's schedule: arriving
+    // at the hub earlier just means waiting there longer.
+    if (route.transferCount === 0) {
+      route.totalMinutes = Math.max(
+        1,
+        route.totalMinutes - prevWait + minutes,
+      );
+    }
     return;
   }
 
@@ -251,7 +285,7 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
     boards.length &&
     boards.every((b) => b.StopStatus === 3 || b.StopStatus === 4)
   ) {
-    leg.waitInfo = { minutes: null, source: "unavailable" };
+    leg.waitInfo = { time: null, source: "unavailable" };
     leg.estimatedWaitMinutes = 0;
     pushUnique(
       route.accessibilityHighlights,
@@ -421,11 +455,9 @@ async function applyTraDelays(
     if (delay === undefined) continue; // not on the board (not running yet) — no signal
 
     if (delay > 0) {
-      leg.waitInfo = {
-        minutes: (leg.waitInfo.minutes ?? 0) + delay,
-        source: "realtime",
-      };
-      leg.estimatedWaitMinutes = leg.waitInfo.minutes ?? 0;
+      const minutes = leg.estimatedWaitMinutes + delay;
+      leg.waitInfo = { time: minutes, source: "realtime" };
+      leg.estimatedWaitMinutes = minutes;
       const note = `⚠️ 列車 ${leg.trainNo} 誤點約 ${delay} 分`;
       pushUnique(leg.facilityHighlights, note);
       pushUnique(route.accessibilityHighlights, note);
@@ -436,7 +468,7 @@ async function applyTraDelays(
       }
     } else {
       // On the board with zero delay: the schedule is live-confirmed.
-      leg.waitInfo = { ...leg.waitInfo, source: "realtime" };
+      leg.waitInfo = { time: leg.estimatedWaitMinutes, source: "realtime" };
     }
   }
 }
