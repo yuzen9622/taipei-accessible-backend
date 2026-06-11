@@ -1632,15 +1632,104 @@ export interface FindAccessibleRoutesOptions {
 }
 
 /**
+ * Phase 16 (§8.1/§8.3): unified a11y enrichment over the FINAL top routes.
+ * Planners that skip internal enrichment (OTP — clean implementation) get
+ * their transit legs' OsmA11y arrays, route highlights and rail-leg indoor
+ * guidance filled here, so per-request Mongo work is top-3 × stops instead of
+ * every-candidate × stops. Legs already enriched by their planner (GTFS/TDX
+ * until Phase 16.5) are left untouched. Best-effort and non-throwing.
+ */
+async function enrichTopRoutes(
+  routes: AccessibleRoute[],
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  mode: AccessibilityMode,
+): Promise<void> {
+  const { nearbyA11y, attachA11yToLeg, deriveHighlights, enrichLegIndoor } =
+    await import("../../service/gtfs-router.service");
+
+  const originCoords: [number, number] = [origin.lng, origin.lat];
+  const destCoords: [number, number] = [destination.lng, destination.lat];
+
+  const legA11y = (leg: BusLeg | MetroLeg | ThsrLeg | TraLeg) =>
+    leg.type === "BUS"
+      ? { board: leg.departureStopA11y, alight: leg.arrivalStopA11y }
+      : { board: leg.departureStationA11y, alight: leg.arrivalStationA11y };
+
+  await Promise.all(
+    routes.map(async (route) => {
+      const transitLegs = route.legs.filter(
+        (l): l is BusLeg | MetroLeg | ThsrLeg | TraLeg => l.type !== "WALK",
+      );
+      if (!transitLegs.length) return;
+
+      await Promise.all(
+        transitLegs.map(async (leg) => {
+          const { board, alight } = legA11y(leg);
+          // Polyline endpoints stand in for stop coords (all planners emit
+          // board → … → alight geometry).
+          const boardCoords = leg.polyline[0];
+          const alightCoords = leg.polyline[leg.polyline.length - 1];
+          if (
+            (!board.length || !alight.length) &&
+            boardCoords &&
+            alightCoords
+          ) {
+            const [boardA11y, alightA11y] = await Promise.all([
+              board.length ? Promise.resolve(board) : nearbyA11y(boardCoords),
+              alight.length
+                ? Promise.resolve(alight)
+                : nearbyA11y(alightCoords),
+            ]);
+            attachA11yToLeg(leg, boardA11y, alightA11y);
+          }
+
+          // Indoor step-free guidance for un-enriched rail legs (§8.3).
+          if (
+            leg.type !== "BUS" &&
+            leg.facilityHighlights.length === 0 &&
+            boardCoords &&
+            alightCoords
+          ) {
+            const legIdx = route.legs.indexOf(leg);
+            const prev = route.legs[legIdx - 1];
+            const next = route.legs[legIdx + 1];
+            await enrichLegIndoor(
+              leg,
+              prev?.type === "WALK" ? prev : null,
+              next?.type === "WALK" ? next : null,
+              originCoords,
+              destCoords,
+              boardCoords,
+              alightCoords,
+              mode,
+            );
+          }
+        }),
+      );
+
+      if (!route.accessibilityHighlights.length) {
+        const { board } = legA11y(transitLegs[0]);
+        const { alight } = legA11y(transitLegs[transitLegs.length - 1]);
+        route.accessibilityHighlights = deriveHighlights(board, alight);
+      }
+    }),
+  );
+}
+
+/**
  * Shared finalization: dedupe → cross-planner line-level collapse → mode
  * exclusion (spec §11.3) → mode-aware
- * score + cost ranking (spec §11.2) → top 3 → realtime facility overlay
+ * score + cost ranking (spec §11.2) → top 3 → unified a11y enrichment
+ * (Phase 16 §8.1, fail-soft) → realtime facility overlay
  * (Phase 13, fail-soft) → realtime transit overlay (Phase 15: bus ETA + TRA
  * delays, fail-soft) → facility slimming (Phase 14; slimming runs LAST so
  * scoring and the overlays see full documents).
  */
 async function finalizeRoutes(
   routes: AccessibleRoute[],
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
   mode: AccessibilityMode,
   format: "standard" | "compact" = "standard",
   departureTime?: Date,
@@ -1653,6 +1742,11 @@ async function finalizeRoutes(
     mode,
   );
   const top = ranked.slice(0, 3);
+  try {
+    await enrichTopRoutes(top, origin, destination, mode);
+  } catch (err) {
+    console.warn("[accessible-route] top-3 a11y enrichment failed", err);
+  }
   try {
     const { overlayFacilityStatus } = await import(
       "../../service/facility-status.service"
@@ -1674,6 +1768,31 @@ async function finalizeRoutes(
   return top;
 }
 
+/**
+ * R1 shadow-mode diff line (spec §10): one parseable log entry per request
+ * comparing OTP's candidates with the merged baseline (null baseline = legacy
+ * path, where only OTP's side is known). grep "[otp-shadow]" to collect.
+ */
+function logOtpShadowDiff(
+  otpRoutes: AccessibleRoute[],
+  baseline: AccessibleRoute[] | null,
+): void {
+  const summarize = (rs: AccessibleRoute[]) =>
+    rs.map(
+      (r) =>
+        `${r.routeId}|${r.routeName}|${r.totalMinutes}m|x${r.transferCount}${r.departureDate ? `|${r.departureDate}` : ""}`,
+    );
+  console.log(
+    "[otp-shadow]",
+    JSON.stringify({
+      otpCount: otpRoutes.length,
+      baselineCount: baseline?.length ?? null,
+      otp: summarize(otpRoutes),
+      baseline: baseline ? summarize(baseline) : null,
+    }),
+  );
+}
+
 export async function findAccessibleRoutes(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
@@ -1686,22 +1805,42 @@ export async function findAccessibleRoutes(
   const geoQuery = (coord: { lat: number; lng: number }, dist: number) =>
     nearQuery([coord.lng, coord.lat], dist);
 
-  // Phase 7: when USE_GTFS_ROUTER is enabled, transit planning uses the GTFS
-  // graph (accessible, polylines, local) PLUS the TDX hosted routing engine,
-  // which fills the systems GTFS lacks (TRA, intercity rail). Both are mapped to
-  // AccessibleRoute, merged, scored, and ranked — no legacy TDX leg-builders run.
-  // Both services import only TYPES from this file, so there is no runtime cycle.
-  if (process.env.USE_GTFS_ROUTER === "true") {
-    const [gtfsRoutes, tdxRoutes] = await Promise.all([
-      import("../../service/gtfs-router.service")
-        .then((m) =>
-          m.planGtfsRoute(origin, destination, {
-            maxTransfers,
-            mode,
-            departureTime: opts.departureTime,
-          }),
-        )
-        .catch((): AccessibleRoute[] => []),
+  // Phase 7/16: planner fan-out. USE_GTFS_ROUTER drives the local GTFS graph
+  // (plus TDX MaaS gap-filler when USE_TDX_ROUTING), USE_OTP_ROUTER the OTP2
+  // sidecar (Phase 16 rollout: "false" | "shadow" | "true"). All planners map
+  // to AccessibleRoute and merge in finalizeRoutes — no legacy TDX leg-builders
+  // run on this path. Shadow mode runs OTP in parallel but only logs a diff
+  // against the merged baseline; its results never reach the response.
+  // All services import only TYPES from this file, so there is no runtime cycle.
+  const otpFlag = (process.env.USE_OTP_ROUTER ?? "false").toLowerCase();
+  const otpMerged = otpFlag === "true";
+  const otpShadow = otpFlag === "shadow";
+  const otpPromise: Promise<AccessibleRoute[]> =
+    otpMerged || otpShadow
+      ? import("../../service/otp-routing.service")
+          .then((m) =>
+            m.planOtpRoute(origin, destination, {
+              maxTransfers,
+              mode,
+              departureTime: opts.departureTime,
+            }),
+          )
+          .catch((): AccessibleRoute[] => [])
+      : Promise.resolve<AccessibleRoute[]>([]);
+
+  if (process.env.USE_GTFS_ROUTER === "true" || otpMerged) {
+    const [gtfsRoutes, tdxRoutes, otpRoutes] = await Promise.all([
+      process.env.USE_GTFS_ROUTER === "true"
+        ? import("../../service/gtfs-router.service")
+            .then((m) =>
+              m.planGtfsRoute(origin, destination, {
+                maxTransfers,
+                mode,
+                departureTime: opts.departureTime,
+              }),
+            )
+            .catch((): AccessibleRoute[] => [])
+        : Promise.resolve<AccessibleRoute[]>([]),
       process.env.USE_TDX_ROUTING === "true"
         ? import("../../service/tdx-routing.service")
             .then((m) =>
@@ -1711,10 +1850,29 @@ export async function findAccessibleRoutes(
             )
             .catch((): AccessibleRoute[] => [])
         : Promise.resolve<AccessibleRoute[]>([]),
+      otpPromise,
     ]);
-    const merged = [...gtfsRoutes, ...tdxRoutes];
+    if (otpShadow) logOtpShadowDiff(otpRoutes, [...gtfsRoutes, ...tdxRoutes]);
+    const merged = [
+      ...gtfsRoutes,
+      ...tdxRoutes,
+      ...(otpMerged ? otpRoutes : []),
+    ];
     if (!merged.length) return [];
-    return finalizeRoutes(merged, mode, opts.format, opts.departureTime);
+    return finalizeRoutes(
+      merged,
+      origin,
+      destination,
+      mode,
+      opts.format,
+      opts.departureTime,
+    );
+  }
+
+  // Legacy path with OTP shadow: let the diff log land whenever OTP finishes —
+  // never block or alter the legacy response (R1 exit criteria, spec §10).
+  if (otpShadow) {
+    otpPromise.then((otpRoutes) => logOtpShadowDiff(otpRoutes, null));
   }
 
   // Bus search
@@ -1787,5 +1945,12 @@ export async function findAccessibleRoutes(
   const allRoutes = [...combined, ...transferRoutes];
   if (!allRoutes.length) return [];
 
-  return finalizeRoutes(allRoutes, mode, opts.format, opts.departureTime);
+  return finalizeRoutes(
+    allRoutes,
+    origin,
+    destination,
+    mode,
+    opts.format,
+    opts.departureTime,
+  );
 }

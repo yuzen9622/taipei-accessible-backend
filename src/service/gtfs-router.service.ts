@@ -877,7 +877,7 @@ function isRailLeg(leg: BusLeg | MetroLeg | ThsrLeg | TraLeg): leg is RailLeg {
  * Best-effort and non-throwing: stations without indoor data are left untouched.
  * Gated by env so the extra DB work can be disabled (USE_INDOOR_GRAPH=false).
  */
-async function enrichLegIndoor(
+export async function enrichLegIndoor(
   leg: RailLeg,
   walkIn: WalkLeg | null,
   walkOut: WalkLeg | null,
