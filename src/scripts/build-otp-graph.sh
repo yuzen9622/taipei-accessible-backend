@@ -49,6 +49,7 @@ TOKEN=$(curl -fsS -X POST \
   | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])") \
   || die "TDX token acquisition failed"
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 i=0
 for url in $OTP_GTFS_URLS; do
   i=$((i + 1))
@@ -57,6 +58,10 @@ for url in $OTP_GTFS_URLS; do
   curl -fsSL -H "Authorization: Bearer $TOKEN" -o "$out" "$url" \
     || die "GTFS download failed: $url"
   unzip -l "$out" >/dev/null 2>&1 || die "GTFS feed $i is not a valid zip"
+  # TDX feed quality fixes (duplicate ids, broken refs, self-loop pathways —
+  # the latter build a graph that NPEs on load). See clean-gtfs-feed.py.
+  log "cleaning feed $i"
+  python3 "$SCRIPT_DIR/clean-gtfs-feed.py" "$out" || die "feed cleaning failed: $out"
 done
 
 # ── 2. OSM extract (monthly refresh, spec §5) ──
