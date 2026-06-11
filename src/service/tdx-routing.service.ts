@@ -224,11 +224,16 @@ function transitSectionToLeg(
     };
   }
   // default: bus
+  // agency_id carries the TDX system code as its leading segment
+  // ("NWT_1104_1102" → "NWT", intercity → "THB"); MaaS gives no stop ids,
+  // so this is the realtime overlay's only endpoint hint (Phase 15).
+  const cityCode = agencyId.split("_")[0] || undefined;
   return {
     type: "BUS",
     routeName: lineName,
     departureStop: fromName,
     arrivalStop: toName,
+    cityCode,
     departureTime: depTime,
     arrivalTime: arrTime,
     waitInfo,

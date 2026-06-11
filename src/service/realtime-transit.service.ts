@@ -8,10 +8,14 @@
  *    replaced by the TDX EstimatedTimeOfArrival for that stop (the rider is
  *    standing there NOW; later legs board in the future, where an ETA is
  *    meaningless and the timetable stays authoritative). The endpoint is
- *    chosen by the GTFS stop-id prefix: THB_ → intercity (公路客運),
- *    city codes (TPE/NWT/TXG/…) → the per-city ETA endpoint.
+ *    chosen by the TDX system code — GTFS legs carry it in the stop-id
+ *    prefix ("TXG2646"), MaaS legs in cityCode (from agency_id): THB →
+ *    intercity (公路客運), city codes (TPE/NWT/TXG/…) → per-city ETA.
  *  • TRA — v3 TrainLiveBoard reports the delay of every currently-running
- *    train. Delays follow the train, so they apply to EVERY TRA leg whose
+ *    train. MaaS legs have no train number (only a line name) — their real
+ *    TrainNo is first recovered from the OD daily timetable (departure
+ *    station + scheduled "HH:mm", both cached) and backfilled onto the leg.
+ *    Delays follow the train, so they apply to EVERY TRA leg whose
  *    TrainNo is on the board: waitInfo gains the delay (source "realtime"),
  *    the leg and route get a「列車誤點」warning, and the route's totalMinutes
  *    absorbs the first delayed leg's delay (downstream legs ride the same
@@ -23,6 +27,7 @@
  * headway/2 and THSR is near-punctual; disruptions there surface via the
  * Phase 13 Alert overlay. Legacy-path BUS legs already carry a live ETA
  * (fetchWaitInfo) — legs whose waitInfo.source is "realtime" are skipped.
+ * MaaS THSR legs stay schedule-only (no realtime API to overlay anyway).
  *
  * Realtime only makes sense for "departing now": the overlay is skipped when
  * the requested departureTime is more than 15 minutes from now, and for
@@ -32,7 +37,7 @@
  */
 
 import { tdxFetch } from "../config/fetch";
-import { busUrl, trainUrl } from "../config/transit";
+import { busUrl, trainUrl, traUrl } from "../config/transit";
 import type {
   AccessibleRoute,
   BusLeg,
@@ -92,6 +97,31 @@ type CacheEntry<T> = { data: T; expiresAt: number };
 const etaCache = new Map<string, CacheEntry<TdxEtaRecord[]>>();
 let liveBoardCache: CacheEntry<Map<string, number>> | null = null;
 
+function cachedEntry<T>(
+  cache: Map<string, CacheEntry<T>>,
+  key: string
+): T | undefined {
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.data;
+}
+
+// Routes are overlaid in parallel and often share lookups (same OD pair, the
+// one live board, the one station list). TDX quota is tight — collapse
+// concurrent identical fetches into a single in-flight call.
+const inflight = new Map<string, Promise<unknown>>();
+function dedup<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const current = inflight.get(key);
+  if (current) return current as Promise<T>;
+  const p = fn().finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
 // ── BUS: first-leg ETA ───────────────────────────────────────────────────────
 
 /** Leading system code of a GTFS bus stop id — no separator ("TXG2646" → "TXG"). */
@@ -102,6 +132,14 @@ function stopPrefix(id: string | undefined): string | null {
 }
 
 /**
+ * TDX system code of a bus leg: GTFS legs carry it in the stop-id prefix,
+ * TDX MaaS legs in cityCode (derived from agency_id — MaaS has no stop ids).
+ */
+function busSystemCode(leg: BusLeg): string | null {
+  return stopPrefix(leg.departureStopId) ?? leg.cityCode ?? null;
+}
+
+/**
  * ETA endpoint for a GTFS-built bus leg, or null when it cannot be derived.
  * Queries BOTH stops and BOTH directions: GTFS direction_id does not reliably
  * map onto TDX Direction (verified live: 860 at 三芝 — GTFS says 0, the bus
@@ -109,7 +147,7 @@ function stopPrefix(id: string | undefined): string | null {
  * from the data instead (board ETA < alight ETA for the same run).
  */
 function etaUrl(leg: BusLeg): string | null {
-  const prefix = stopPrefix(leg.departureStopId);
+  const prefix = busSystemCode(leg);
   if (!prefix || !leg.routeName || !leg.departureStop || !leg.arrivalStop) {
     return null;
   }
@@ -126,20 +164,22 @@ function etaUrl(leg: BusLeg): string | null {
 }
 
 async function fetchEtaRecords(url: string): Promise<TdxEtaRecord[]> {
-  const hit = etaCache.get(url);
-  if (hit && Date.now() < hit.expiresAt) return hit.data;
-  let records: TdxEtaRecord[] = [];
-  try {
-    const resp = await tdxFetch(url);
-    if (resp.ok) {
-      const data = (await resp.json()) as TdxEtaRecord[];
-      if (Array.isArray(data)) records = data;
+  const hit = cachedEntry(etaCache, url);
+  if (hit) return hit;
+  return dedup(`eta|${url}`, async () => {
+    let records: TdxEtaRecord[] = [];
+    try {
+      const resp = await tdxFetch(url);
+      if (resp.ok) {
+        const data = (await resp.json()) as TdxEtaRecord[];
+        if (Array.isArray(data)) records = data;
+      }
+    } catch {
+      /* fail-soft: empty list */
     }
-  } catch {
-    /* fail-soft: empty list */
-  }
-  etaCache.set(url, { data: records, expiresAt: Date.now() + CACHE_TTL_MS });
-  return records;
+    etaCache.set(url, { data: records, expiresAt: Date.now() + CACHE_TTL_MS });
+    return records;
+  });
 }
 
 function pushUnique(arr: string[], text: string): void {
@@ -222,6 +262,123 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
   }
 }
 
+// ── TRA: MaaS trainNo recovery ───────────────────────────────────────────────
+//
+// MaaS-built TRA legs have no train number (transport.number is empty; trainNo
+// falls back to the line name, e.g. "潮州-七堵"). They DO carry station names
+// and the scheduled departure time, which identify the train uniquely in the
+// TRA OD daily timetable — recover the TrainNo from there.
+
+const STATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const OD_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+// An empty result usually means a TDX failure (429/outage) — cache it briefly
+// so one bad call doesn't blind TRA realtime for the full 6 h TTL.
+const FAILURE_CACHE_TTL_MS = 60 * 1000;
+
+interface TdxTraStation {
+  StationID: string;
+  StationName?: { Zh_tw?: string };
+}
+interface TdxTraOdItem {
+  DailyTrainInfo?: { TrainNo?: string };
+  OriginStopTime?: { DepartureTime?: string };
+}
+
+let traStationCache: CacheEntry<Map<string, string>> | null = null;
+const odCache = new Map<string, CacheEntry<TdxTraOdItem[]>>();
+
+/** "台中" and "臺中" must hit the same index entry. */
+function normStation(name: string): string {
+  return name.replace(/台/g, "臺").trim();
+}
+
+/** TRA station name → StationID (245 stations, one cached call). */
+async function traStationIndex(): Promise<Map<string, string>> {
+  if (traStationCache && Date.now() < traStationCache.expiresAt) {
+    return traStationCache.data;
+  }
+  return dedup("tra-stations", async () => {
+    const index = new Map<string, string>();
+    try {
+      const resp = await tdxFetch(
+        `${traUrl.stationUrl}?$format=JSON&$select=StationID,StationName`
+      );
+      if (resp.ok) {
+        const items = (await resp.json()) as TdxTraStation[];
+        if (Array.isArray(items)) {
+          for (const s of items) {
+            if (s.StationName?.Zh_tw) {
+              index.set(normStation(s.StationName.Zh_tw), s.StationID);
+            }
+          }
+        }
+      }
+    } catch {
+      /* fail-soft: empty index */
+    }
+    traStationCache = {
+      data: index,
+      expiresAt:
+        Date.now() + (index.size ? STATION_CACHE_TTL_MS : FAILURE_CACHE_TTL_MS),
+    };
+    return index;
+  });
+}
+
+async function fetchOdTimetable(
+  from: string,
+  to: string,
+  date: string
+): Promise<TdxTraOdItem[]> {
+  const key = `${from}|${to}|${date}`;
+  const hit = cachedEntry(odCache, key);
+  if (hit) return hit;
+  return dedup(`od|${key}`, async () => {
+    let items: TdxTraOdItem[] = [];
+    try {
+      const resp = await tdxFetch(
+        `${traUrl.dailyTimetableOdUrl(from, to, date)}?$format=JSON`
+      );
+      if (resp.ok) {
+        const data = (await resp.json()) as TdxTraOdItem[];
+        if (Array.isArray(data)) items = data;
+      }
+    } catch {
+      /* fail-soft: empty timetable */
+    }
+    odCache.set(key, {
+      data: items,
+      expiresAt:
+        Date.now() + (items.length ? OD_CACHE_TTL_MS : FAILURE_CACHE_TTL_MS),
+    });
+    return items;
+  });
+}
+
+/**
+ * Real TrainNo of a TRA leg: GTFS legs already carry it (numeric); MaaS legs
+ * are recovered via the OD timetable (departure station + "HH:mm"). Null when
+ * unresolvable — the leg then keeps its schedule untouched.
+ */
+async function resolveTraTrainNo(leg: TraLeg): Promise<string | null> {
+  if (/^\d+$/.test(leg.trainNo)) return leg.trainNo;
+  if (!leg.departureStation || !leg.arrivalStation || !leg.departureTime) {
+    return null;
+  }
+  const index = await traStationIndex();
+  const from = index.get(normStation(leg.departureStation));
+  const to = index.get(normStation(leg.arrivalStation));
+  if (!from || !to) return null;
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const timetable = await fetchOdTimetable(from, to, date);
+  const match = timetable.find(
+    (t) => t.OriginStopTime?.DepartureTime === leg.departureTime
+  );
+  return match?.DailyTrainInfo?.TrainNo ?? null;
+}
+
 // ── TRA: TrainLiveBoard delays ───────────────────────────────────────────────
 
 /** TrainNo → DelayTime (minutes) for every currently-running TRA train. */
@@ -229,33 +386,38 @@ async function fetchTrainDelays(): Promise<Map<string, number>> {
   if (liveBoardCache && Date.now() < liveBoardCache.expiresAt) {
     return liveBoardCache.data;
   }
-  const delays = new Map<string, number>();
-  try {
-    const resp = await tdxFetch(`${trainUrl.trainLiveBoardUrl}?$format=JSON`);
-    if (resp.ok) {
-      const data = (await resp.json()) as
-        | TdxTrainLiveBoardEnvelope
-        | TdxTrainLiveBoardItem[];
-      const items = Array.isArray(data) ? data : data?.TrainLiveBoards ?? [];
-      for (const item of items) {
-        if (item?.TrainNo) delays.set(item.TrainNo, item.DelayTime ?? 0);
+  return dedup("tra-live-board", async () => {
+    const delays = new Map<string, number>();
+    try {
+      const resp = await tdxFetch(`${trainUrl.trainLiveBoardUrl}?$format=JSON`);
+      if (resp.ok) {
+        const data = (await resp.json()) as
+          | TdxTrainLiveBoardEnvelope
+          | TdxTrainLiveBoardItem[];
+        const items = Array.isArray(data) ? data : data?.TrainLiveBoards ?? [];
+        for (const item of items) {
+          if (item?.TrainNo) delays.set(item.TrainNo, item.DelayTime ?? 0);
+        }
       }
+    } catch {
+      /* fail-soft: empty board */
     }
-  } catch {
-    /* fail-soft: empty board */
-  }
-  liveBoardCache = { data: delays, expiresAt: Date.now() + CACHE_TTL_MS };
-  return delays;
+    liveBoardCache = { data: delays, expiresAt: Date.now() + CACHE_TTL_MS };
+    return delays;
+  });
 }
 
-function applyTraDelays(
+async function applyTraDelays(
   route: AccessibleRoute,
   delays: Map<string, number>,
-): void {
+): Promise<void> {
   let totalAdjusted = false;
   for (const leg of route.legs) {
     if (leg.type !== "TRA") continue;
-    const delay = delays.get((leg as TraLeg).trainNo);
+    const trainNo = await resolveTraTrainNo(leg).catch(() => null);
+    if (!trainNo) continue; // unresolvable (MaaS line-name fallback) — no signal
+    leg.trainNo = trainNo; // backfill the real number on MaaS legs
+    const delay = delays.get(trainNo);
     if (delay === undefined) continue; // not on the board (not running yet) — no signal
 
     if (delay > 0) {
@@ -307,6 +469,8 @@ export async function overlayRealtimeTransit(
     ...live.map((r) => overlayBusEta(r).catch(() => undefined)),
   ]);
   if (delays?.size) {
-    for (const route of live) applyTraDelays(route, delays);
+    await Promise.all(
+      live.map((route) => applyTraDelays(route, delays).catch(() => undefined)),
+    );
   }
 }

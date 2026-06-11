@@ -201,6 +201,11 @@ const BusLegSchema = z
       example: "TXG3917",
       description: "System-prefixed GTFS stop id (GTFS router only)",
     }),
+    cityCode: z.string().optional().openapi({
+      example: "NWT",
+      description:
+        "TDX operator system code (TDX MaaS path only); THB = intercity",
+    }),
     departureTime: z.string().optional().openapi({
       example: "21:05",
       description: "HH:mm scheduled next departure (absent when unknown)",

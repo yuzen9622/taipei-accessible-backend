@@ -60,5 +60,9 @@ export const traUrl = {
   stationUrl:          `${RAIL_BASE}/TRA/Station`,
   generalTimetableUrl: `${RAIL_BASE}/TRA/GeneralTimetable`,
   dailyTimetableUrl:   `${RAIL_BASE}/TRA/DailyTrainTimetable/Today`,
+  // OD timetable: all trains from→to on a date — used to recover the TrainNo
+  // of MaaS-built TRA legs (station names + departure time, no train number).
+  dailyTimetableOdUrl: (from: string, to: string, date: string) =>
+    `${RAIL_BASE}/TRA/DailyTimetable/OD/${from}/to/${to}/${date}`,
   stationFacilityUrl:  `${RAIL_BASE}/TRA/StationFacility`,
 };

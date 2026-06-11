@@ -87,6 +87,12 @@ export interface BusLeg {
    */
   departureStopId?: string;
   arrivalStopId?: string;
+  /**
+   * TDX operator system code（"NWT"、"TXG"、"THB" 公路客運…）。Set by the TDX
+   * MaaS path (from agency_id), where stop ids are unavailable — the Phase 15
+   * overlay's fallback for picking the realtime ETA endpoint.
+   */
+  cityCode?: string;
   /** "HH:mm" scheduled next departure, when the source timetable provides it. */
   departureTime?: string;
   /** "HH:mm" scheduled arrival, when the source timetable provides it. */
