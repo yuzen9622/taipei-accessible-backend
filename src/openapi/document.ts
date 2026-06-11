@@ -4,7 +4,6 @@ import { registry } from "./registry";
 // Import schema files for side-effects — each file calls registry.registerPath()
 import "../modules/a11y/a11y.schema";
 import "../modules/accessible-route/accessible-route.schema";
-import "../modules/chatbot/chatbot.schema";
 import "../modules/transit/transit.schema";
 import "../modules/user/user.schema";
 import "../modules/air/air.schema";

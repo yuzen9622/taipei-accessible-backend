@@ -8,7 +8,6 @@ import type { ApiResponse } from "./types/response";
 import { ResponseCode } from "./types/code";
 import middleware from "./middleware/middleware";
 import { createA11yRouter } from "./modules/a11y";
-import { createChatbotRouter } from "./modules/chatbot";
 import { createAccessibleRouteRouter } from "./modules/accessible-route";
 import { createTransitRouter } from "./modules/transit";
 import { createUserRouter } from "./modules/user";
@@ -65,7 +64,6 @@ app.use(
 app.use("/api/v1/user", middleware, createUserRouter());
 app.use("/api/v1/transit", createTransitRouter());
 app.use("/api/v1/a11y", createA11yRouter());
-app.use("/api/v1/a11y", createChatbotRouter());
 app.use("/api/v1/a11y", createAccessibleRouteRouter());
 app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/ai", createAiRouter());
