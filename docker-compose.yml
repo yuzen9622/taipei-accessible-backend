@@ -1,0 +1,35 @@
+# Phase 16: OTP2 transit-engine sidecar (spec §4, §9).
+# The Node orchestrator talks to it over the internal network only; port 8080
+# is bound to localhost so it is never exposed publicly.
+#
+#   docker compose up -d otp        # serve the prebuilt graph (--load)
+#   src/scripts/build-otp-graph.sh  # weekly graph rebuild (cron, spec §5)
+services:
+  otp:
+    # Pin the minor version (spec §4.1) — never `latest`.
+    image: opentripplanner/opentripplanner:2.5.0
+    container_name: otp
+    # The official image's entrypoint hardcodes /var/opentripplanner as the
+    # data directory — pass flags only, never a path.
+    command: ["--load"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ${OTP_DATA_DIR:-/var/otp}:/var/opentripplanner
+    environment:
+      # Serve heap: national feed + full Taiwan OSM needs ~6–8 GB; a
+      # single-city clip runs in 2–4 GB.
+      JAVA_TOOL_OPTIONS: "-Xmx${OTP_SERVE_XMX:-6g}"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-fsS",
+          "http://localhost:8080/otp/actuators/health",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
