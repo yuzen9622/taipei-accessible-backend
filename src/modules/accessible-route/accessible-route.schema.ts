@@ -192,6 +192,15 @@ const BusLegSchema = z
     routeName: z.string().openapi({ example: "信義幹線" }),
     departureStop: z.string().openapi({ example: "市政府站" }),
     arrivalStop: z.string().openapi({ example: "台北101" }),
+    departureStopId: z.string().optional().openapi({
+      example: "TXG2646",
+      description:
+        "System-prefixed GTFS stop id (GTFS router only); THB… = intercity",
+    }),
+    arrivalStopId: z.string().optional().openapi({
+      example: "TXG3917",
+      description: "System-prefixed GTFS stop id (GTFS router only)",
+    }),
     departureTime: z.string().optional().openapi({
       example: "21:05",
       description: "HH:mm scheduled next departure (absent when unknown)",

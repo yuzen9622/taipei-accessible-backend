@@ -23,6 +23,9 @@ export const busUrl = {
 
 export const trainUrl = {
   liveBoardUrl: "https://tdx.transportdata.tw/api/basic/v2/Rail/TRA/LiveBoard",
+  // v3: realtime position + delay of every currently-running TRA train.
+  trainLiveBoardUrl:
+    "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/TrainLiveBoard",
 };
 
 const METRO_BASE = "https://tdx.transportdata.tw/api/basic/v2/Rail/Metro";

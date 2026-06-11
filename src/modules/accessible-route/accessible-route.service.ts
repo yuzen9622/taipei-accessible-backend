@@ -80,6 +80,13 @@ export interface BusLeg {
   routeName: string;
   departureStop: string;
   arrivalStop: string;
+  /**
+   * System-prefixed GTFS stop ids（"TXG2646" 城市公車、"THB…" 公路客運）。
+   * Set by the GTFS router only; Phase 15 realtime ETA overlay keys the TDX
+   * city/intercity endpoint choice off the leading letters.
+   */
+  departureStopId?: string;
+  arrivalStopId?: string;
   /** "HH:mm" scheduled next departure, when the source timetable provides it. */
   departureTime?: string;
   /** "HH:mm" scheduled arrival, when the source timetable provides it. */
@@ -1556,13 +1563,15 @@ export interface FindAccessibleRoutesOptions {
 /**
  * Shared finalization: dedupe → mode exclusion (spec §11.3) → mode-aware
  * score + cost ranking (spec §11.2) → top 3 → realtime facility overlay
- * (Phase 13, fail-soft) → facility slimming (Phase 14; slimming runs LAST so
- * scoring and the overlay see full documents).
+ * (Phase 13, fail-soft) → realtime transit overlay (Phase 15: bus ETA + TRA
+ * delays, fail-soft) → facility slimming (Phase 14; slimming runs LAST so
+ * scoring and the overlays see full documents).
  */
 async function finalizeRoutes(
   routes: AccessibleRoute[],
   mode: AccessibilityMode,
   format: "standard" | "compact" = "standard",
+  departureTime?: Date,
 ): Promise<AccessibleRoute[]> {
   const ranked = scoreAndRank(
     applyModeExclusion(deduplicateRoutes(routes), mode),
@@ -1576,6 +1585,14 @@ async function finalizeRoutes(
     await overlayFacilityStatus(top, mode);
   } catch (err) {
     console.warn("[accessible-route] facility status overlay failed", err);
+  }
+  try {
+    const { overlayRealtimeTransit } = await import(
+      "../../service/realtime-transit.service"
+    );
+    await overlayRealtimeTransit(top, { departureTime });
+  } catch (err) {
+    console.warn("[accessible-route] realtime transit overlay failed", err);
   }
   slimRoutes(top);
   if (format === "compact") compactRoutes(top);
@@ -1618,7 +1635,7 @@ export async function findAccessibleRoutes(
     ]);
     const merged = [...gtfsRoutes, ...tdxRoutes];
     if (!merged.length) return [];
-    return finalizeRoutes(merged, mode, opts.format);
+    return finalizeRoutes(merged, mode, opts.format, opts.departureTime);
   }
 
   // Bus search
@@ -1691,5 +1708,5 @@ export async function findAccessibleRoutes(
   const allRoutes = [...combined, ...transferRoutes];
   if (!allRoutes.length) return [];
 
-  return finalizeRoutes(allRoutes, mode, opts.format);
+  return finalizeRoutes(allRoutes, mode, opts.format, opts.departureTime);
 }

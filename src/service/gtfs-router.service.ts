@@ -671,6 +671,8 @@ export async function connectionToLeg(
       routeName: conn.routeShortName || conn.routeLongName,
       departureStop: conn.fromStopName,
       arrivalStop: conn.toStopName,
+      departureStopId: conn.fromStopId,
+      arrivalStopId: conn.toStopId,
       departureTime: conn.departureTime,
       arrivalTime: conn.arrivalTime,
       waitInfo,
@@ -711,12 +713,16 @@ export async function connectionToLeg(
 
   // Rail: distinguish THSR from TRA by agency / id prefix.
   if (conn.routeType === 2) {
+    // Rail tripIds embed the actual train number ("TRA_1003",
+    // "THSR_0108_1_…") — routeShortName is only the line description
+    // (e.g. "潮州-七堵"), useless as a TrainLiveBoard key (Phase 15).
+    const tripTrainNo = conn.tripId.match(/^(?:TRA|THSR)_(\d+)/)?.[1];
     const isThsr =
       conn.agencyId === "THSR" || conn.routeId.startsWith("THSR");
     if (isThsr) {
       const leg: ThsrLeg = {
         type: "THSR",
-        trainNo: conn.routeShortName || conn.tripId,
+        trainNo: tripTrainNo || conn.routeShortName || conn.tripId,
         departureStation: conn.fromStopName,
         arrivalStation: conn.toStopName,
         departureStationUID: conn.fromStopId,
@@ -735,7 +741,7 @@ export async function connectionToLeg(
     }
     const leg: TraLeg = {
       type: "TRA",
-      trainNo: conn.routeShortName || conn.tripId,
+      trainNo: tripTrainNo || conn.routeShortName || conn.tripId,
       trainTypeName: conn.routeLongName,
       departureStation: conn.fromStopName,
       arrivalStation: conn.toStopName,
