@@ -1,6 +1,5 @@
 import {
   detectBusApiType,
-  getBusFrontOfArrivalStop,
   getRouteDirectionImproved,
   sendResponse,
 } from "../../config/lib";
