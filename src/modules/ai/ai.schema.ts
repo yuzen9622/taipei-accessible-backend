@@ -135,6 +135,126 @@ registry.registerPath({
   },
 });
 
+// ─── Phase 17 — /ai/chat (Agent Streaming) ───────────────────────────────────
+
+export const ToolCallSchema = z
+  .object({
+    id: z.string(),
+    type: z.literal("function"),
+    function: z.object({
+      name: z.string(),
+      arguments: z.string().openapi({ description: "JSON 字串格式的工具參數" }),
+    }),
+  })
+  .openapi("ToolCall");
+
+export const ChatMessageSchema = z
+  .object({
+    role: z.enum(["system", "user", "assistant", "tool"]),
+    content: z.string().nullable().optional(),
+    name: z.string().optional().openapi({ description: "role 為 tool 時必填，對應工具名稱" }),
+    tool_calls: z.array(ToolCallSchema).optional(),
+    tool_call_id: z.string().optional().openapi({ description: "role 為 tool 時必填" }),
+  })
+  .openapi("ChatMessage");
+
+export const AgentChatRequestSchema = z
+  .object({
+    model: z
+      .string()
+      .optional()
+      .openapi({
+        description: "模型名稱，未設定時使用環境變數 GEMINI_MODEL 或 gemini-2.5-flash",
+        example: "gemini-2.5-flash",
+      }),
+    messages: z
+      .array(ChatMessageSchema)
+      .min(1)
+      .openapi({
+        description: "對話歷程，格式與 OpenAI Chat Completions API 一致",
+        example: [{ role: "user", content: "我坐輪椅，從台北車站到台北101怎麼去？" }],
+      }),
+    stream: z
+      .boolean()
+      .optional()
+      .default(false)
+      .openapi({ description: "是否啟用 SSE 串流回應", example: true }),
+    temperature: z.number().min(0).max(2).optional().default(0.2).openapi({ example: 0.2 }),
+    userLocation: z
+      .object({
+        latitude: z.number().openapi({ example: 25.0478 }),
+        longitude: z.number().openapi({ example: 121.517 }),
+      })
+      .optional()
+      .openapi({ description: "使用者目前位置，供路線規劃與無障礙設施查詢使用" }),
+  })
+  .openapi("AgentChatRequest");
+
+const AgentChatResponseSchema = z
+  .object({
+    ok: z.boolean().openapi({ example: true }),
+    status: z.enum(["success", "error"]).openapi({ example: "success" }),
+    code: z.number().openapi({ example: 200 }),
+    message: z.string().openapi({ example: "OK" }),
+    data: z
+      .object({
+        id: z.string(),
+        object: z.string(),
+        created: z.number(),
+        model: z.string(),
+        choices: z.array(z.record(z.string(), z.unknown())),
+        usage: z.record(z.string(), z.unknown()).optional(),
+      })
+      .optional(),
+  })
+  .openapi("AgentChatResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/ai/chat",
+  tags: ["AI"],
+  summary: "Agent Chat (OpenAI-Compatible, SSE Streaming)",
+  description:
+    `無障礙導航 AI 對話代理。後端擔任 **Agent Orchestrator**，負責工具呼叫迴圈：\n\n` +
+    `1. 收到使用者訊息後，後端以 OpenAI SDK 呼叫 LLM\n` +
+    `2. 若模型要求呼叫工具（planAccessibleRoute、findA11yPlaces 等），後端在本地執行工具並將結果送回模型\n` +
+    `3. 重複直到模型生成最終文字回答\n\n` +
+    `**stream: true** — 回應為 \`text/event-stream\` SSE 流，包含三種事件類型：\n` +
+    `- \`event: tool_call\` — 工具開始執行通知\n` +
+    `- \`event: tool_result\` — 工具執行結果\n` +
+    `- \`data: {...}\` (message 事件) — OpenAI 格式文字 delta chunks\n` +
+    `- \`data: [DONE]\` — 串流結束\n\n` +
+    `**stream: false** — 回應為標準 JSON（ApiResponse 格式）`,
+  request: {
+    body: {
+      content: { "application/json": { schema: AgentChatRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "SSE stream (stream=true) 或 JSON (stream=false)",
+      content: {
+        "application/json": { schema: AgentChatResponseSchema },
+        "text/event-stream": {
+          schema: z.string().openapi({
+            description:
+              "SSE 串流。每筆 data 為 OpenAI ChatCompletionChunk JSON；工具事件另以 event: tool_call / tool_result 發送",
+          }),
+        },
+      },
+    },
+    400: {
+      description: "請求參數驗證失敗",
+      content: { "application/json": { schema: IntentErrorSchema } },
+    },
+    500: {
+      description: "伺服器錯誤",
+      content: { "application/json": { schema: IntentErrorSchema } },
+    },
+  },
+});
+
 registry.registerPath({
   method: "post",
   path: "/ai/intent",

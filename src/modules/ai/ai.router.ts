@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { aiIntent, aiExplain } from "./ai.controller";
+import { aiChat } from "./ai.chat.controller";
 import { validateRequest } from "../../middleware/validate-request.middleware";
-import { IntentBodySchema, ExplainBodySchema } from "./ai.schema";
+import { IntentBodySchema, ExplainBodySchema, AgentChatRequestSchema } from "./ai.schema";
 
 export function createAiRouter(): Router {
   const router = Router();
@@ -11,5 +12,6 @@ export function createAiRouter(): Router {
     validateRequest({ body: ExplainBodySchema }),
     aiExplain
   );
+  router.post("/chat", validateRequest({ body: AgentChatRequestSchema }), aiChat);
   return router;
 }
