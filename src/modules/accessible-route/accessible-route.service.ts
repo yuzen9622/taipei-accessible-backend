@@ -1734,6 +1734,8 @@ async function finalizeRoutes(
   format: "standard" | "compact" = "standard",
   departureTime?: Date,
 ): Promise<AccessibleRoute[]> {
+  const t: Record<string, number> = {};
+  let t0 = Date.now();
   const ranked = scoreAndRank(
     applyModeExclusion(
       collapseLogicalDuplicates(deduplicateRoutes(routes)),
@@ -1742,11 +1744,15 @@ async function finalizeRoutes(
     mode,
   );
   const top = ranked.slice(0, 3);
+  t.rank = Date.now() - t0;
+  t0 = Date.now();
   try {
     await enrichTopRoutes(top, origin, destination, mode);
   } catch (err) {
     console.warn("[accessible-route] top-3 a11y enrichment failed", err);
   }
+  t.enrich = Date.now() - t0;
+  t0 = Date.now();
   try {
     const { overlayFacilityStatus } = await import(
       "../../service/facility-status.service"
@@ -1755,6 +1761,8 @@ async function finalizeRoutes(
   } catch (err) {
     console.warn("[accessible-route] facility status overlay failed", err);
   }
+  t.facilityOverlay = Date.now() - t0;
+  t0 = Date.now();
   try {
     const { overlayRealtimeTransit } = await import(
       "../../service/realtime-transit.service"
@@ -1763,8 +1771,10 @@ async function finalizeRoutes(
   } catch (err) {
     console.warn("[accessible-route] realtime transit overlay failed", err);
   }
+  t.realtimeOverlay = Date.now() - t0;
   slimRoutes(top);
   if (format === "compact") compactRoutes(top);
+  console.log("[route-timing] finalize", JSON.stringify(t));
   return top;
 }
 
@@ -1791,6 +1801,26 @@ function logOtpShadowDiff(
       baseline: baseline ? summarize(baseline) : null,
     }),
   );
+}
+
+/**
+ * City of a coordinate from the nearest imported bus stop (~10ms local Mongo
+ * lookup) instead of Google reverse geocoding (~200–800ms external call).
+ * Returns null when the DB has no stops (fresh install) — caller falls back
+ * to Google.
+ */
+export async function resolveCityFromStops(
+  lat: number,
+  lng: number,
+): Promise<string | null> {
+  try {
+    const stop = await BusStopModel.findOne(nearQuery([lng, lat], 50_000))
+      .select("city")
+      .lean<{ city?: string }>();
+    return stop?.city ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function findAccessibleRoutes(
@@ -1829,35 +1859,51 @@ export async function findAccessibleRoutes(
       : Promise.resolve<AccessibleRoute[]>([]);
 
   if (process.env.USE_GTFS_ROUTER === "true" || otpMerged) {
-    const [gtfsRoutes, tdxRoutes, otpRoutes] = await Promise.all([
+    const planT: Record<string, number> = {};
+    const timed = <T,>(label: string, p: Promise<T>): Promise<T> => {
+      const t0 = Date.now();
+      return p.finally(() => {
+        planT[label] = Date.now() - t0;
+      });
+    };
+    const [gtfsRoutes, tdxRoutes] = await Promise.all([
       process.env.USE_GTFS_ROUTER === "true"
-        ? import("../../service/gtfs-router.service")
-            .then((m) =>
-              m.planGtfsRoute(origin, destination, {
-                maxTransfers,
-                mode,
-                departureTime: opts.departureTime,
-              }),
-            )
-            .catch((): AccessibleRoute[] => [])
+        ? timed(
+            "gtfs",
+            import("../../service/gtfs-router.service")
+              .then((m) =>
+                m.planGtfsRoute(origin, destination, {
+                  maxTransfers,
+                  mode,
+                  departureTime: opts.departureTime,
+                }),
+              )
+              .catch((): AccessibleRoute[] => []),
+          )
         : Promise.resolve<AccessibleRoute[]>([]),
       process.env.USE_TDX_ROUTING === "true"
-        ? import("../../service/tdx-routing.service")
-            .then((m) =>
-              m.planTdxRoute(origin, destination, {
-                departureTime: opts.departureTime,
-              }),
-            )
-            .catch((): AccessibleRoute[] => [])
+        ? timed(
+            "tdx",
+            import("../../service/tdx-routing.service")
+              .then((m) =>
+                m.planTdxRoute(origin, destination, {
+                  departureTime: opts.departureTime,
+                }),
+              )
+              .catch((): AccessibleRoute[] => []),
+          )
         : Promise.resolve<AccessibleRoute[]>([]),
-      otpPromise,
     ]);
-    if (otpShadow) logOtpShadowDiff(otpRoutes, [...gtfsRoutes, ...tdxRoutes]);
-    const merged = [
-      ...gtfsRoutes,
-      ...tdxRoutes,
-      ...(otpMerged ? otpRoutes : []),
-    ];
+    const baseline = [...gtfsRoutes, ...tdxRoutes];
+    // Shadow never blocks the response: the diff line lands whenever OTP
+    // finishes (national cross-county plans can take seconds).
+    if (otpShadow) {
+      otpPromise.then((otpRoutes) => logOtpShadowDiff(otpRoutes, baseline));
+    }
+    const merged = otpMerged
+      ? [...baseline, ...(await timed("otp", otpPromise))]
+      : baseline;
+    console.log("[route-timing] planners", JSON.stringify(planT));
     if (!merged.length) return [];
     return finalizeRoutes(
       merged,

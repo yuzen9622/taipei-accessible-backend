@@ -1,7 +1,10 @@
 import type { Request, Response } from "express";
 import { getCoordinates, sendResponse } from "../../config/lib";
 import { getCity } from "../../config/map";
-import { findAccessibleRoutes } from "./accessible-route.service";
+import {
+  findAccessibleRoutes,
+  resolveCityFromStops,
+} from "./accessible-route.service";
 import { parseRouteIntent, RouteIntent } from "../ai";
 import { ApiResponse } from "../../types/response";
 import { TaiwanCityEn } from "../../types/transit";
@@ -73,7 +76,10 @@ export async function accessibleRoute(
     const lat = originCoords.latitude;
     const lng = originCoords.longitude;
 
-    const city = (await getCity(lat, lng)) as TaiwanCityEn;
+    // Local stop-based city lookup (~10ms) replaces the per-request Google
+    // reverse geocode; Google remains the fallback for stop-less areas.
+    const city = ((await resolveCityFromStops(lat, lng)) ??
+      (await getCity(lat, lng))) as TaiwanCityEn;
 
     // Phase 11/12: thread mode + transfer budget + departure time through.
     // A departureTime in the past (stale client state / clock skew) would make

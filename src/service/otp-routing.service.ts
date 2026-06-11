@@ -23,7 +23,13 @@ import type {
   WaitInfo,
 } from "../modules/accessible-route/accessible-route.service";
 
-const OTP_TIMEOUT_MS = 3000;
+// The timeout guards against HUNG connections only — a dead OTP container
+// rejects instantly (ECONNREFUSED) and trips the circuit breaker, so a
+// generous ceiling costs nothing on the fail-soft path. It must absorb
+// event-loop starvation too: when planGtfsRoute's CPU-heavy joins block the
+// loop, an expired abort timer runs BEFORE the already-arrived response's
+// I/O callback and would kill a successful query (observed with 12s).
+const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
 const OTP_NUM_ITINERARIES = 5;
 
 // Same set as gtfs-router.service.ts — OTP route gtfsIds carry the TDX system
