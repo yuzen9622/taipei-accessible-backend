@@ -117,3 +117,6 @@ graphify-out/
 /docs
 # GTFS source data (multi-GB, fetched from TDX — not committed)
 data/
+
+# OTP2 graph build artifacts and source data (binary, generated locally)
+otp-data/
