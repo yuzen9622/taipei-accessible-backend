@@ -10,13 +10,13 @@ export const IntentBodySchema = z
       .string()
       .min(1)
       .openapi({
-        description: "Natural-language travel query",
+        description: "自然語言的交通查詢",
         example: "我要從台中火車站坐到高鐵新竹站，我坐輪椅",
       }),
   })
   .strict();
 
-const RouteIntentSchema = z
+export const RouteIntentSchema = z
   .object({
     from: z.string().openapi({ example: "台中車站" }),
     to: z.string().openapi({ example: "高鐵新竹站" }),
@@ -25,7 +25,7 @@ const RouteIntentSchema = z
       .openapi({ example: "wheelchair" }),
     departureTime: z.string().openapi({
       example: "now",
-      description: "'now' or HH:mm / ISO8601",
+      description: "'now' 或 HH:mm／ISO8601",
     }),
     preferences: z.object({
       minimizeTransfers: z.boolean().openapi({ example: false }),
@@ -71,7 +71,7 @@ export const ExplainBodySchema = z
       .passthrough()
       .openapi({
         description:
-          "An AccessibleRoute object as returned by POST /a11y/accessible-route",
+          "由 POST /a11y/accessible-route 回傳的 AccessibleRoute 物件",
       }),
     mode: z
       .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
@@ -94,7 +94,7 @@ const RouteExplanationSchema = z
     warnings: z.array(z.string()).openapi({ example: [] }),
     alternatives: z.string().nullable().openapi({
       example: null,
-      description: "Fallback suggestion; null when there are no warnings",
+      description: "備援建議；無警告時為 null",
     }),
   })
   .openapi("RouteExplanation");
@@ -114,9 +114,9 @@ registry.registerPath({
   method: "post",
   path: "/ai/explain",
   tags: ["AI"],
-  summary: "Route explanation generation",
+  summary: "路線說明生成",
   description:
-    "Generates a human-readable RouteExplanation (summary, accessibility highlights, warnings, fallback suggestion) for a planned AccessibleRoute via a single structured Gemini call. Pass a route object from POST /a11y/accessible-route. Highlights are strictly grounded in the route data — the model is instructed not to invent facilities.",
+    "為規劃路線生成可讀說明：摘要、無障礙重點、警告與備援建議。",
   request: {
     body: {
       content: { "application/json": { schema: ExplainBodySchema } },
@@ -125,11 +125,11 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Generated RouteExplanation",
+      description: "生成的路線說明",
       content: { "application/json": { schema: ExplainResponseSchema } },
     },
     500: {
-      description: "Internal error or model produced no usable explanation",
+      description: "伺服器錯誤或模型未產生可用說明",
       content: { "application/json": { schema: IntentErrorSchema } },
     },
   },
@@ -213,17 +213,18 @@ registry.registerPath({
   method: "post",
   path: "/ai/chat",
   tags: ["AI"],
-  summary: "Agent Chat (OpenAI-Compatible, SSE Streaming)",
+  summary: "AI 對話代理（SSE 串流）",
   description:
     `無障礙導航 AI 對話代理。後端擔任 **Agent Orchestrator**，負責工具呼叫迴圈：\n\n` +
     `1. 收到使用者訊息後，後端以 OpenAI SDK 呼叫 LLM\n` +
     `2. 若模型要求呼叫工具（planAccessibleRoute、findA11yPlaces 等），後端在本地執行工具並將結果送回模型\n` +
     `3. 重複直到模型生成最終文字回答\n\n` +
-    `**stream: true** — 回應為 \`text/event-stream\` SSE 流，包含三種事件類型：\n` +
-    `- \`event: tool_call\` — 工具開始執行通知\n` +
-    `- \`event: tool_result\` — 工具執行結果\n` +
+    `**stream: true** — 回應為 \`text/event-stream\` SSE 流，包含四種事件類型：\n` +
+    `- \`event: tool_call\` — 工具開始執行通知 \`{ name, arguments }\`\n` +
+    `- \`event: tool_result\` — 工具執行結果 \`{ name, result }\`\n` +
     `- \`data: {...}\` (message 事件) — OpenAI 格式文字 delta chunks\n` +
-    `- \`data: [DONE]\` — 串流結束\n\n` +
+    `- \`data: [DONE]\` — 串流結束\n` +
+    `- \`event: error\` — 串流過程中發生錯誤 \`{ code: 500, message: string }\`；之後仍會發送 \`data: [DONE]\`\n\n` +
     `**stream: false** — 回應為標準 JSON（ApiResponse 格式）`,
   request: {
     body: {
@@ -259,9 +260,9 @@ registry.registerPath({
   method: "post",
   path: "/ai/intent",
   tags: ["AI"],
-  summary: "Natural-language intent parsing",
+  summary: "自然語言意圖解析",
   description:
-    "Parses a free-form travel query (e.g. \"我坐輪椅要從台中車站到高鐵新竹站\") into a structured RouteIntent: origin, destination, accessibility mode, departure time, and preferences. Powered by a single structured Gemini call. The same RouteIntent can be fed into POST /a11y/accessible-route via its optional `query` field.",
+    "將自由形式交通查詢解析為結構化 RouteIntent：起點、終點、模式、出發時間與偏好。",
   request: {
     body: {
       content: { "application/json": { schema: IntentBodySchema } },
@@ -270,15 +271,15 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Parsed RouteIntent",
+      description: "解析後的 RouteIntent",
       content: { "application/json": { schema: IntentResponseSchema } },
     },
     400: {
-      description: "Query could not be parsed into a route intent",
+      description: "查詢無法解析為路線意圖",
       content: { "application/json": { schema: IntentErrorSchema } },
     },
     500: {
-      description: "Internal error",
+      description: "伺服器錯誤",
       content: { "application/json": { schema: IntentErrorSchema } },
     },
   },

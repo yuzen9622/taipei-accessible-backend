@@ -1,31 +1,32 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import { RouteIntentSchema } from "../ai/ai.schema";
 
 extendZodWithOpenApi(z);
 
 const CoordSchema = z.object({
-  lat: z.number().openapi({ description: "Latitude" }),
-  lng: z.number().openapi({ description: "Longitude" }),
+  lat: z.number().openapi({ description: "緯度" }),
+  lng: z.number().openapi({ description: "經度" }),
 });
 
 const PointSchema = z.union([
-  z.string().openapi({ description: "Place name to geocode" }),
+  z.string().openapi({ description: "待地理編碼的地點名稱" }),
   z
     .object({
       latitude: z.number(),
       longitude: z.number(),
     })
-    .openapi({ description: "Explicit coordinates" }),
+    .openapi({ description: "明確的經緯度座標" }),
 ]);
 
 export const AccessibleRouteBodySchema = z
   .object({
     origin: PointSchema.optional().openapi({
-      description: "Origin — place name or {latitude, longitude}",
+      description: "起點 — 地點名稱或 {latitude, longitude}",
     }),
     destination: PointSchema.optional().openapi({
-      description: "Destination — place name or {latitude, longitude}",
+      description: "終點 — 地點名稱或 {latitude, longitude}",
     }),
     query: z
       .preprocess(
@@ -35,7 +36,7 @@ export const AccessibleRouteBodySchema = z
       )
       .openapi({
         description:
-          "Phase 9: natural-language query (e.g. \"我坐輪椅要從台中車站到高鐵新竹站\"). When provided and origin/destination are omitted, it is parsed via /ai/intent to derive origin, destination and mode. `current_location` resolves to userLocation.",
+          "自然語言查詢（如「我坐輪椅要從台中車站到高鐵新竹站」）。提供且省略起訖點時，會經 /ai/intent 解析出起點、終點與模式；current_location 對應 userLocation。",
         example: "我坐輪椅要從台中車站到高鐵新竹站",
       }),
     userLocation: z
@@ -43,14 +44,14 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "User coordinates, used to resolve a `current_location` origin parsed from `query`.",
+          "使用者座標，用於解析 query 中的 current_location 起點。",
       }),
     mode: z
       .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
       .optional()
       .openapi({
         description:
-          "Phase 11: accessibility mode. Adjusts scoring weights (elderly lifts Tier 1+2; visual_impaired promotes tactile paving / audio signals to critical), transfer penalty (wheelchair ×2, elderly ×1.5) and wheelchair Tier-1 route exclusion. Falls back to the mode parsed from `query`, then \"normal\".",
+          "無障礙模式。調整評分權重（elderly 提升 Tier 1+2；visual_impaired 將導盲磚／語音號誌列為關鍵）、轉乘懲罰（wheelchair ×2、elderly ×1.5）與輪椅 Tier-1 路線排除；未填時沿用 query 解析結果，再退回 normal。",
         example: "wheelchair",
       }),
     maxTransfers: z
@@ -61,7 +62,7 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "Phase 12: maximum transfers (0–2). Default 1. Two-transfer search runs only when fewer than 3 simpler routes are found.",
+          "最大轉乘次數（0–2），預設 1；少於 3 條較簡單路線時才啟動兩次轉乘搜尋。",
         example: 1,
       }),
     departureTime: z
@@ -69,7 +70,7 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "ISO 8601 departure time. Defaults to now. Honoured by the GTFS router path.",
+          "ISO 8601 出發時間，預設為現在；GTFS 路徑會採用，過去或無效時間視為現在。",
         example: "2026-06-10T08:30:00+08:00",
       }),
     format: z
@@ -77,13 +78,13 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "Phase 14 response shape. \"standard\" (default): slimmed facility objects inline per leg. \"compact\": facilities additionally deduped into a route-level `facilities` dictionary; legs carry `a11yRefs` (osmId references) and empty facility arrays.",
+          "回應格式。standard（預設）每段內嵌精簡設施物件；compact 另將設施去重為路線層級 facilities 字典，各段改帶 a11yRefs（osmId 參照）且設施陣列為空。",
         example: "standard",
       }),
   })
   .strict()
   .refine((b) => (b.origin && b.destination) || b.query, {
-    message: "Provide either origin+destination, or a natural-language query",
+    message: "請提供 origin+destination，或自然語言 query",
   });
 
 // ── Response component schemas ──────────────────────────────────────────────
@@ -105,7 +106,7 @@ const OsmA11ySchema = z
       .openapi({
         example: { wheelchair: "yes", highway: "elevator" },
         description:
-          "Phase 14: whitelisted decision-relevant tags only (scoring keys + name/opening_hours/level/amenity). Omitted when none apply. Full OSM tags via GET /api/a11y/place?osmId=…",
+          "僅保留與判斷相關的白名單標籤（評分鍵與 name/opening_hours/level/amenity），無適用時省略；完整 OSM 標籤見 GET /api/a11y/place?osmId=…",
       }),
     location: z
       .object({
@@ -114,7 +115,7 @@ const OsmA11ySchema = z
           .tuple([z.number(), z.number()])
           .openapi({ example: [121.567, 25.041] }),
       })
-      .openapi({ description: "GeoJSON Point [lng, lat]" }),
+      .openapi({ description: "GeoJSON 點位 [lng, lat]" }),
   })
   .openapi("SlimOsmA11y");
 
@@ -125,7 +126,7 @@ const A11yRefsSchema = z
   .openapi({
     example: ["12342946149"],
     description:
-      "Phase 14 compact format only: osmId keys into the route-level `facilities` dictionary (facility arrays are then empty).",
+      "僅 compact 格式：對應路線層級 facilities 字典的 osmId 鍵（此時各段設施陣列為空）。",
   });
 
 const WalkLegSchema = z
@@ -154,7 +155,7 @@ const WalkLegSchema = z
       .optional()
       .openapi({
         description:
-          "TRTC metro exit (elevator/ramp) used at this walk endpoint; only set on transfer routes",
+          "此步行端點使用的北捷出口（電梯／坡道），僅轉乘路線會設定",
       }),
   })
   .openapi("WalkLeg");
@@ -188,7 +189,7 @@ const NearestBusSchema = z
     stopsAway: z
       .number()
       .optional()
-      .openapi({ example: 2, description: "stops before departure stop" }),
+      .openapi({ example: 2, description: "距發車站的站數" }),
   })
   .openapi("NearestBus");
 
@@ -202,24 +203,24 @@ const BusLegSchema = z
     departureStopId: z.string().optional().openapi({
       example: "TXG2646",
       description:
-        "System-prefixed GTFS stop id (GTFS router only); THB… = intercity",
+        "含系統前綴的 GTFS 站牌 id（僅 GTFS 路徑）；THB… 為公路客運",
     }),
     arrivalStopId: z.string().optional().openapi({
       example: "TXG3917",
-      description: "System-prefixed GTFS stop id (GTFS router only)",
+      description: "含系統前綴的 GTFS 站牌 id（僅 GTFS 路徑）",
     }),
     cityCode: z.string().optional().openapi({
       example: "NWT",
       description:
-        "TDX operator system code (TDX MaaS path only); THB = intercity",
+        "TDX 業者系統代碼（僅 TDX MaaS 路徑）；THB 為公路客運",
     }),
     departureTime: z.string().optional().openapi({
       example: "21:05",
-      description: "HH:mm scheduled next departure (absent when unknown)",
+      description: "HH:mm 預定發車時間（未知時省略）",
     }),
     arrivalTime: z.string().optional().openapi({
       example: "21:32",
-      description: "HH:mm scheduled arrival (absent when unknown)",
+      description: "HH:mm 預定到站時間（未知時省略）",
     }),
     waitInfo: WaitInfoSchema,
     estimatedWaitMinutes: z.number().openapi({
@@ -228,7 +229,7 @@ const BusLegSchema = z
     }),
     direction: z
       .union([z.literal(0), z.literal(1)])
-      .openapi({ example: 0, description: "0 = outbound, 1 = inbound" }),
+      .openapi({ example: 0, description: "0 = 去程，1 = 返程" }),
     polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
       example: [
         [121.567, 25.041],
@@ -257,11 +258,11 @@ const MetroLegSchema = z
     rideMinutes: z.number().openapi({ example: 10 }),
     departureTime: z.string().optional().openapi({
       example: "21:05",
-      description: "HH:mm scheduled next departure (absent when unknown)",
+      description: "HH:mm 預定發車時間（未知時省略）",
     }),
     arrivalTime: z.string().optional().openapi({
       example: "21:15",
-      description: "HH:mm scheduled arrival (absent when unknown)",
+      description: "HH:mm 預定到站時間（未知時省略）",
     }),
     waitInfo: WaitInfoSchema,
     estimatedWaitMinutes: z.number().openapi({ example: 3 }),
@@ -298,7 +299,7 @@ const ThsrLegSchema = z
         [121.516, 25.013],
         [120.684, 24.178],
       ],
-      description: "[boardStation, alightStation] only — two-point line",
+      description: "僅 [上車站, 下車站] 兩點連線",
     }),
     departureStationA11y: z.array(OsmA11ySchema),
     arrivalStationA11y: z.array(OsmA11ySchema),
@@ -315,7 +316,7 @@ const TraLegSchema = z
     trainNo: z.string().openapi({ example: "0131" }),
     trainTypeName: z.string().openapi({
       example: "自強",
-      description: "Train type in Chinese, e.g. 自強, 莒光, 區間車",
+      description: "列車種類，如 自強、莒光、區間車",
     }),
     departureStation: z.string().openapi({ example: "台北" }),
     arrivalStation: z.string().openapi({ example: "基隆" }),
@@ -331,7 +332,7 @@ const TraLegSchema = z
         [121.516, 25.013],
         [121.74, 25.13],
       ],
-      description: "[boardStation, alightStation] only — two-point line",
+      description: "僅 [上車站, 下車站] 兩點連線",
     }),
     departureStationA11y: z.array(OsmA11ySchema),
     arrivalStationA11y: z.array(OsmA11ySchema),
@@ -346,16 +347,16 @@ const ScoreComponentsSchema = z
     facilityScore: z.number().openapi({
       example: 72,
       description:
-        "0–100: weighted quality of OSM accessibility facilities at all stops",
+        "0–100：各站 OSM 無障礙設施的加權品質",
     }),
     timeScore: z.number().openapi({
       example: 85,
-      description: "0–100: normalized travel time (100 = fastest candidate)",
+      description: "0–100：正規化的行程時間（100 = 最快候選）",
     }),
     criticalFeatureScore: z.number().openapi({
       example: 65,
       description:
-        "0–100: presence of Tier 1 critical features (elevator, flush kerb, ramp)",
+        "0–100：Tier 1 關鍵設施（電梯、平接緣石、坡道）的具備程度",
     }),
   })
   .openapi("ScoreComponents");
@@ -367,7 +368,7 @@ const AccessibleRouteSchema = z
     totalMinutes: z.number().openapi({ example: 18 }),
     transferCount: z
       .number()
-      .openapi({ example: 0, description: "0=direct, 1=one transfer, 2=two transfers" }),
+      .openapi({ example: 0, description: "0=直達，1=轉乘一次，2=轉乘兩次" }),
     legs: z
       .array(
         z.discriminatedUnion("type", [
@@ -378,7 +379,7 @@ const AccessibleRouteSchema = z
           TraLegSchema,
         ]),
       )
-      .openapi({ description: "Ordered legs: walk → transit → walk. Transit leg type is BUS, METRO, THSR, or TRA." }),
+      .openapi({ description: "依序的路段：步行 → 大眾運輸 → 步行；運輸段類型為 BUS、METRO、THSR 或 TRA。" }),
     accessibilityHighlights: z
       .array(z.string())
       .openapi({ example: ["全程低地板公車", "出入口設有電梯"] }),
@@ -388,26 +389,26 @@ const AccessibleRouteSchema = z
       .openapi({
         example: 74,
         description:
-          "0–100 evidence-based route accessibility score. " +
-          "65% accessibility (facility quality + critical features) + 35% travel time. " +
-          "≥80 Excellent, 60–79 Good, 40–59 Fair, 20–39 Poor, <20 Critical.",
+          "0–100 以實證為基礎的路線無障礙分數。" +
+          "65% 無障礙（設施品質＋關鍵設施）＋35% 行程時間。" +
+          "≥80 優、60–79 良、40–59 普通、20–39 差、<20 危險。",
       }),
     accessibilityLabel: z
       .enum(["excellent", "good", "fair", "poor", "critical"])
       .optional()
       .openapi({
         example: "good",
-        description: "Human-readable label for accessibilityScore",
+        description: "accessibilityScore 的可讀標籤",
       }),
     scoreComponents: ScoreComponentsSchema.optional().openapi({
-      description: "Breakdown of the accessibilityScore into sub-components",
+      description: "accessibilityScore 的子項目拆解",
     }),
     facilities: z
       .record(z.string(), OsmA11ySchema)
       .optional()
       .openapi({
         description:
-          "Phase 14 compact format only: deduped facility dictionary keyed by osmId. Legs reference entries via `a11yRefs`.",
+          "僅 compact 格式：以 osmId 為鍵、去重後的設施字典；各段透過 a11yRefs 參照。",
       }),
   })
   .openapi("AccessibleRoute");
@@ -420,6 +421,10 @@ const AccessibleRouteDataSchema = z
     }),
     city: z.string().openapi({ example: "Taipei" }),
     routes: z.array(AccessibleRouteSchema),
+    intent: RouteIntentSchema.optional().openapi({
+      description:
+        "僅當請求使用自然語言 query 時出現；包含由查詢解析出的 RouteIntent（起點、終點、模式、出發時間、偏好）。",
+    }),
   })
   .openapi("AccessibleRouteData");
 
@@ -428,7 +433,7 @@ export const AccessibleRouteResponseSchema = z
     ok: z.boolean().openapi({ example: true }),
     status: z.enum(["success", "error"]).openapi({ example: "success" }),
     code: z.number().openapi({ example: 200 }),
-    message: z.string().openapi({ example: "Accessible routes found" }),
+    message: z.string().openapi({ example: "已找到無障礙路線" }),
     data: AccessibleRouteDataSchema.optional(),
     accessToken: z.string().optional(),
   })
@@ -441,7 +446,7 @@ export const ErrorResponseSchema = z
     code: z.number().openapi({ example: 400 }),
     message: z
       .string()
-      .openapi({ example: "Missing params or unresolvable coordinates" }),
+      .openapi({ example: "缺少參數或座標無法解析" }),
     data: z.unknown().optional(),
     accessToken: z.string().optional(),
   })
@@ -453,9 +458,9 @@ registry.registerPath({
   method: "post",
   path: "/a11y/accessible-route",
   tags: ["Accessibility"],
-  summary: "Accessible transit route plan",
+  summary: "無障礙路線規劃",
   description:
-    "Finds wheelchair-accessible routes between an origin and destination. Searches bus (city/inter-city), MRT metro, THSR high-speed rail, and TRA Taiwan Railways concurrently. Each point can be a place name (geocoded via Google Maps) or explicit `{latitude, longitude}` coordinates. Returns up to 3 candidates ranked by a composite accessibility score (65% facility quality + 35% travel time). Transit leg type is one of `BUS`, `METRO`, `THSR`, or `TRA`.",
+    "規劃起訖點間無障礙路線，並行搜尋公車、捷運、高鐵與台鐵，回傳最多 3 筆。",
   request: {
     body: {
       content: { "application/json": { schema: AccessibleRouteBodySchema } },
@@ -465,21 +470,21 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        "Up to 3 accessible routes (BUS / METRO / THSR / TRA) ranked by accessibility score",
+        "依無障礙分數排序的最多 3 筆路線（公車／捷運／高鐵／台鐵）",
       content: {
         "application/json": { schema: AccessibleRouteResponseSchema },
       },
     },
     400: {
-      description: "Missing params or unresolvable coordinates",
+      description: "缺少參數或座標無法解析",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
-      description: "No connected bus, metro, THSR, or TRA routes found",
+      description: "查無相連的公車、捷運、高鐵或台鐵路線",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
-      description: "Internal error",
+      description: "伺服器錯誤",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

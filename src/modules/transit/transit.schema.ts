@@ -14,7 +14,7 @@ export const BusBodySchema = z
     language: z
       .enum(["Zh_tw", "En"])
       .default("Zh_tw")
-      .openapi({ description: "Response language" }),
+      .openapi({ description: "回應語言" }),
   })
   .strict();
 
@@ -47,7 +47,7 @@ const BilingualNameSchema = z
 
 const DirectionSchema = z
   .union([z.literal(0), z.literal(1)])
-  .openapi({ example: 0, description: "Travel direction (0 = outbound, 1 = inbound)" });
+  .openapi({ example: 0, description: "行駛方向（0 = 去程，1 = 返程）" });
 
 // ── Response data schemas ───────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ export const EstimatedTimeOfArrivalSchema = z
     EstimateTime: z
       .number()
       .nullable()
-      .openapi({ example: 180, description: "Estimated arrival time in seconds, null if unavailable" }),
+      .openapi({ example: 180, description: "預估到站秒數，無資料時為 null" }),
     StopStatus: z.number().openapi({ example: 0 }),
     MessageType: z.number().optional().openapi({ example: 1 }),
     PlateNumb: z.string().optional().openapi({ example: "KKA-1234" }),
@@ -114,8 +114,8 @@ registry.registerPath({
   method: "post",
   path: "/transit/bus",
   tags: ["Transit"],
-  summary: "Bus arrival estimates",
-  description: "Queries the TDX platform for estimated arrival times of a named bus route at a given stop. Route type (city vs. inter-city) is auto-detected from `route_name`.",
+  summary: "公車到站預估",
+  description: "查詢 TDX 指定路線在某站的到站預估，路線類型依 route_name 自動判別。",
   request: {
     body: {
       content: { "application/json": { schema: BusBodySchema } },
@@ -124,11 +124,11 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Real-time bus arrival data from TDX",
+      description: "TDX 即時公車到站資料",
       content: { "application/json": { schema: BusArrivalResponseSchema } },
     },
-    400: { description: "Missing parameters or unrecognised route direction" },
-    500: { description: "TDX API error" },
+    400: { description: "缺少參數或無法辨識路線方向" },
+    500: { description: "TDX API 錯誤" },
   },
 });
 
@@ -136,17 +136,17 @@ registry.registerPath({
   method: "get",
   path: "/transit/bus/realtime",
   tags: ["Transit"],
-  summary: "Real-time bus GPS position",
-  description: "Returns the live GPS location of a specific bus identified by plate number, along with its distance from the arrival stop.",
+  summary: "公車即時定位",
+  description: "依車牌回傳指定公車的即時 GPS 位置，並附與到站站牌的距離。",
   request: {
     query: BusRealtimeQuerySchema,
   },
   responses: {
     200: {
-      description: "Real-time bus location data",
+      description: "公車即時位置資料",
       content: { "application/json": { schema: BusRealtimeResponseSchema } },
     },
-    400: { description: "Missing or invalid parameters" },
-    500: { description: "TDX API error" },
+    400: { description: "缺少或無效的參數" },
+    500: { description: "TDX API 錯誤" },
   },
 });

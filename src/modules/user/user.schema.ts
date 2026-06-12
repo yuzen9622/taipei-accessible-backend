@@ -16,19 +16,19 @@ export const LoginBodySchema = z
     name: z.string().min(1).openapi({ example: "Jane Doe" }),
     email: z.string().email().openapi({ example: "jane@example.com" }),
     avatar: z.string().url().optional().openapi({ example: "https://example.com/avatar.png" }),
-    client_id: z.string().min(1).openapi({ description: "OAuth provider sub/uid" }),
+    client_id: z.string().min(1).openapi({ description: "OAuth 提供者的 sub/uid" }),
   })
   .strict();
 
 export const TokenBodySchema = z
   .object({
-    token: z.string().min(1).openapi({ description: "Existing access token to re-issue" }),
+    token: z.string().min(1).openapi({ description: "欲重新簽發的現有存取權杖" }),
   })
   .strict();
 
 export const ConfigBodySchema = z
   .object({
-    user_id: z.string().min(1).openapi({ description: "MongoDB user _id" }),
+    user_id: z.string().min(1).openapi({ description: "MongoDB 使用者 _id" }),
   })
   .strict();
 
@@ -77,7 +77,7 @@ const apiResponse = <T extends z.ZodTypeAny>(data?: T) =>
     code: z.number().openapi({ example: 200 }),
     message: z.string().openapi({ example: "OK" }),
     ...(data ? { data: data.optional() } : {}),
-    accessToken: z.string().optional().openapi({ description: "Short-lived JWT access token" }),
+    accessToken: z.string().optional().openapi({ description: "短期有效的 JWT 存取權杖" }),
   });
 
 // ── Response schemas ────────────────────────────────────────────────────────
@@ -122,8 +122,8 @@ registry.registerPath({
   method: "post",
   path: "/user/login",
   tags: ["User"],
-  summary: "OAuth login",
-  description: "Upserts a user from an OAuth provider (Google, etc.) and returns a short-lived access token in the response body. A `refreshToken` httpOnly cookie is also set.",
+  summary: "OAuth 登入",
+  description: "以 OAuth 提供者建立或更新使用者，回傳存取權杖並設定 refreshToken cookie。",
   request: {
     body: {
       content: { "application/json": { schema: LoginBodySchema } },
@@ -132,15 +132,15 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Access token in body, refresh token as httpOnly cookie",
+      description: "存取權杖於 body，refresh 權杖於 cookie",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
     400: {
-      description: "Missing required fields",
+      description: "缺少必填欄位",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
-      description: "Internal error",
+      description: "伺服器錯誤",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -150,8 +150,8 @@ registry.registerPath({
   method: "post",
   path: "/user/token",
   tags: ["User"],
-  summary: "Re-issue access token",
-  description: "Accepts an existing (possibly expired) access token and re-issues a new access token + refresh token pair, provided the token payload is still valid.",
+  summary: "重新簽發權杖",
+  description: "驗證未過期的存取權杖，重新簽發新的存取與 refresh 權杖。",
   request: {
     body: {
       content: { "application/json": { schema: TokenBodySchema } },
@@ -160,11 +160,11 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "New access + refresh tokens",
+      description: "新的存取與 refresh 權杖",
       content: { "application/json": { schema: TokenResponseSchema } },
     },
     401: {
-      description: "Invalid or expired token",
+      description: "權杖無效或已過期",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -174,15 +174,15 @@ registry.registerPath({
   method: "post",
   path: "/user/refresh",
   tags: ["User"],
-  summary: "Refresh via cookie",
-  description: "Reads the `refreshToken` httpOnly cookie and issues a new access token + refresh token pair. No request body required.",
+  summary: "Cookie 換發權杖",
+  description: "讀取 refreshToken cookie，簽發新的存取與 refresh 權杖，免請求內容。",
   responses: {
     200: {
-      description: "New access + refresh tokens",
+      description: "新的存取與 refresh 權杖",
       content: { "application/json": { schema: RefreshResponseSchema } },
     },
     401: {
-      description: "Invalid or missing refresh token cookie",
+      description: "refresh cookie 無效或不存在",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -192,24 +192,24 @@ registry.registerPath({
   method: "get",
   path: "/user/info",
   tags: ["User"],
-  summary: "Current user profile",
-  description: "Returns the authenticated user's profile and their stored config (language, theme, font size, notifications). Requires a valid Bearer token.",
+  summary: "目前使用者資料",
+  description: "回傳已驗證使用者的個資與偏好設定，需有效 Bearer 權杖。",
   security: [{ BearerAuth: [] }],
   responses: {
     200: {
-      description: "User and config objects",
+      description: "使用者與設定物件",
       content: { "application/json": { schema: UserInfoResponseSchema } },
     },
     401: {
-      description: "Unauthorized",
+      description: "未授權",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     403: {
-      description: "Forbidden",
+      description: "禁止存取",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
-      description: "Internal error",
+      description: "伺服器錯誤",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -219,8 +219,8 @@ registry.registerPath({
   method: "post",
   path: "/user/config",
   tags: ["User"],
-  summary: "Get user config",
-  description: "Fetches the preference config for the given `user_id`. Requires a valid Bearer token.",
+  summary: "取得使用者設定",
+  description: "依 user_id 取得偏好設定，需有效 Bearer 權杖。",
   security: [{ BearerAuth: [] }],
   request: {
     body: {
@@ -230,15 +230,15 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "User config object",
+      description: "使用者設定物件",
       content: { "application/json": { schema: ConfigResponseSchema } },
     },
     400: {
-      description: "Missing user_id",
+      description: "缺少 user_id",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
-      description: "Internal error",
+      description: "伺服器錯誤",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -248,8 +248,8 @@ registry.registerPath({
   method: "post",
   path: "/user/config/update",
   tags: ["User"],
-  summary: "Update user preferences",
-  description: "Partially updates the user's config. All fields except `user_id` are optional — only provided fields are changed.",
+  summary: "更新使用者偏好",
+  description: "部分更新使用者設定，除 user_id 外皆選填，只改傳入欄位。",
   security: [{ BearerAuth: [] }],
   request: {
     body: {
@@ -259,15 +259,15 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Updated config",
+      description: "更新後的設定",
       content: { "application/json": { schema: UpdateConfigResponseSchema } },
     },
     400: {
-      description: "Missing user_id or config not found",
+      description: "缺少 user_id 或查無設定",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
-      description: "Internal error",
+      description: "伺服器錯誤",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -277,15 +277,15 @@ registry.registerPath({
   method: "post",
   path: "/user/logout",
   tags: ["User"],
-  summary: "Logout",
-  description: "Clears the `refreshToken` httpOnly cookie. The client must discard its access token independently.",
+  summary: "使用者登出",
+  description: "清除 refreshToken cookie，用戶端須自行捨棄存取權杖。",
   responses: {
     200: {
-      description: "Logout successful",
+      description: "登出成功",
       content: { "application/json": { schema: LogoutResponseSchema } },
     },
     500: {
-      description: "Internal error",
+      description: "伺服器錯誤",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
