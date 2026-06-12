@@ -23,13 +23,9 @@ services:
       # single-city clip runs in 2–4 GB.
       JAVA_TOOL_OPTIONS: "-Xmx${OTP_SERVE_XMX:-6g}"
     healthcheck:
-      test:
-        [
-          "CMD",
-          "curl",
-          "-fsS",
-          "http://localhost:8080/otp/actuators/health",
-        ]
+      # The 2.9 image ships no curl/wget; bash /dev/tcp suffices — Grizzly only
+      # binds 8080 after the graph is loaded, so TCP-open ⇒ ready for routing.
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/8080"]
       interval: 30s
       timeout: 5s
       retries: 3
