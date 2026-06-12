@@ -1,0 +1,25 @@
+{
+  "routingDefaults": {
+    "wheelchairAccessibility": {
+      "trip": {
+        "onlyConsiderAccessible": false,
+        "inaccessibleCost": 3600
+      },
+      "stop": {
+        "onlyConsiderAccessible": false,
+        "inaccessibleCost": 600
+      },
+      "elevator": {
+        "onlyConsiderAccessible": false
+      },
+      "maxSlope": 0.083
+    },
+    "searchWindow": "2h",
+    "numItineraries": 5,
+    "accessEgress": {
+      "maxDuration": "20m"
+    },
+    "maxDirectStreetDuration": "30m",
+    "streetRoutingTimeout": "2s"
+  }
+}
