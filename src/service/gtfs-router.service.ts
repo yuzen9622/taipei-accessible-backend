@@ -38,6 +38,13 @@ import {
   haversineCoords,
   WHEELCHAIR_SPEED_M_PER_MIN,
 } from "../config/ors";
+import {
+  taipeiYmd,
+  taipeiYmdDash,
+  taipeiWeekday,
+  taipeiSecondsOfDay,
+  addTaipeiDays,
+} from "../config/taipei-time";
 import { getStationAccess, AccessibilityMode } from "./indoor-graph.service";
 import type { IOsmA11y } from "../types";
 
@@ -104,28 +111,14 @@ export function secondsToHHmm(sec: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-/** Local-date "YYYYMMDD" for calendar comparison. */
-function toYmd(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}${m}${d}`;
-}
+/** Taipei-date "YYYYMMDD" for calendar comparison. */
+const toYmd = taipeiYmd;
 
-/** Local-date "YYYY-MM-DD" for display / AccessibleRoute.departureDate. */
-function ymdDash(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+/** Taipei-date "YYYY-MM-DD" for display / AccessibleRoute.departureDate. */
+const ymdDash = taipeiYmdDash;
 
-/** A new Date n calendar days after the given date (local time). */
-function addDays(date: Date, n: number): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() + n);
-  return d;
-}
+/** A new Date n calendar days after the given date. */
+const addDays = addTaipeiDays;
 
 const WEEKDAY_FIELDS = [
   "sunday",
@@ -147,7 +140,7 @@ const WEEKDAY_FIELDS = [
  */
 export async function getActiveServiceIds(date: Date): Promise<Set<string>> {
   const ymd = toYmd(date);
-  const weekdayField = WEEKDAY_FIELDS[date.getDay()];
+  const weekdayField = WEEKDAY_FIELDS[taipeiWeekday(date)];
 
   // Candidate docs: either the date is in [start,end] range, OR an exception names it.
   const docs = await GtfsCalendar.find({
@@ -1078,11 +1071,7 @@ export async function planGtfsRoute(
   opts?: PlanGtfsRouteOptions
 ): Promise<AccessibleRoute[]> {
   const now = opts?.departureTime ?? new Date();
-  const nowSec = gtfsTimeToSeconds(
-    `${String(now.getHours()).padStart(2, "0")}:${String(
-      now.getMinutes()
-    ).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`
-  );
+  const nowSec = taipeiSecondsOfDay(now);
   const maxTransfers = opts?.maxTransfers ?? 0;
   const mode = opts?.mode ?? "wheelchair";
   const wheelchairWalk = mode === "wheelchair";

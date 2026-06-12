@@ -13,6 +13,7 @@
 import { decode } from "@googlemaps/polyline-codec";
 import { GtfsTrip } from "../model/gtfs-trip.model";
 import { haversineCoords, WHEELCHAIR_SPEED_M_PER_MIN } from "../config/ors";
+import { taipeiHHmm, taipeiYmdDash } from "../config/taipei-time";
 import type { AccessibilityMode } from "../config/a11y-scoring";
 import type {
   AccessibleRoute,
@@ -130,25 +131,10 @@ export interface PlanOtpRouteOptions {
 
 // ── Time formatting: OTP returns epoch ms; the feed runs on Asia/Taipei ──
 
-const TPE_TIME = new Intl.DateTimeFormat("en-GB", {
-  timeZone: "Asia/Taipei",
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-});
-const TPE_DATE = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Taipei",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
 function hhmm(epochMs: number): string {
-  return TPE_TIME.format(new Date(epochMs));
+  return taipeiHHmm(new Date(epochMs));
 }
-function ymdDash(d: Date): string {
-  return TPE_DATE.format(d);
-}
+const ymdDash = taipeiYmdDash;
 
 /** "1:TXG123" → "TXG123" — restore the TDX id the Phase 15 overlay keys on. */
 function stripFeedId(gtfsId: string | undefined): string {

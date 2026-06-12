@@ -9,6 +9,11 @@ import {
 import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
 import { orsWalkingRoute } from "../../config/ors";
 import {
+  taipeiMinutesOfDay,
+  taipeiWeekday,
+  taipeiHHmm,
+} from "../../config/taipei-time";
+import {
   scoreRoute,
   routeCost,
   MODE_PROFILES,
@@ -62,8 +67,7 @@ export function waitInfoMinutes(w: WaitInfo): number {
   if (typeof w.time === "string") {
     const [h, m] = w.time.split(":").map(Number);
     if (isNaN(h) || isNaN(m)) return 0;
-    const now = new Date();
-    let diff = h * 60 + m - (now.getHours() * 60 + now.getMinutes());
+    let diff = h * 60 + m - taipeiMinutesOfDay();
     if (diff < -720) diff += 1440; // schedule time is past midnight
     return Math.max(0, diff);
   }
@@ -281,8 +285,7 @@ async function fetchScheduledWait(
     const data = (await resp.json()) as any[];
     if (!Array.isArray(data) || !data.length) return null;
 
-    const now = new Date();
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const nowMinutes = taipeiMinutesOfDay();
     let nearest: number | null = null;
 
     for (const entry of data) {
@@ -296,7 +299,8 @@ async function fetchScheduledWait(
             .map(Number);
           if (isNaN(h) || isNaN(m)) continue;
           const depMinutes = h * 60 + m;
-          const diff = depMinutes - nowMinutes;
+          let diff = depMinutes - nowMinutes;
+          if (diff < -720) diff += 1440; // departure wraps past midnight
           if (diff >= 0 && (nearest === null || diff < nearest)) {
             nearest = diff;
           }
@@ -347,10 +351,7 @@ export async function fetchWaitInfo(
   if (scheduled !== null) {
     // Timetable lookup yields minutes-from-now — surface it as a clock time.
     const dep = new Date(Date.now() + scheduled * 60000);
-    const hhmm = `${String(dep.getHours()).padStart(2, "0")}:${String(
-      dep.getMinutes(),
-    ).padStart(2, "0")}`;
-    return { time: hhmm, source: "schedule" };
+    return { time: taipeiHHmm(dep), source: "schedule" };
   }
   return { time: null, source: "unavailable" };
 }
@@ -649,8 +650,7 @@ export async function fetchMetroHeadway(
     const records = (await resp.json()) as TdxMetroFrequencyRecord[];
     if (!Array.isArray(records) || !records.length) return 6;
 
-    const now = new Date();
-    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const nowMins = taipeiMinutesOfDay();
 
     // Collect all headway entries across records, find current time window
     const allHeadways = records.flatMap((r) => r.Headways ?? []);
@@ -995,8 +995,8 @@ async function findNextThsrTrain(
     if (!data.length) return null;
 
     const now = new Date();
-    const todayKey = DOW_KEYS[now.getDay()];
-    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const todayKey = DOW_KEYS[taipeiWeekday(now)];
+    const nowMins = taipeiMinutesOfDay(now);
 
     let best: {
       trainNo: string;
@@ -1229,8 +1229,8 @@ async function findNextTraTrain(
     if (!data.length) return null;
 
     const now = new Date();
-    const todayKey = DOW_KEYS[now.getDay()];
-    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const todayKey = DOW_KEYS[taipeiWeekday(now)];
+    const nowMins = taipeiMinutesOfDay(now);
 
     let best: {
       trainNo: string;

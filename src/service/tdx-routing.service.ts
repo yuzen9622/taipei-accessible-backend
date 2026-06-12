@@ -21,6 +21,12 @@
 
 import { tdxFetch } from "../config/fetch";
 import {
+  taipeiIsoLocal,
+  taipeiYmdDash,
+  taipeiWallClock,
+  addTaipeiDays,
+} from "../config/taipei-time";
+import {
   nearbyA11y,
   deriveHighlights,
   attachA11yToLeg,
@@ -258,21 +264,14 @@ function pedestrianToWalkLeg(s: TdxSection): WalkLeg {
   };
 }
 
-function toIsoLocal(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(
-    d.getHours()
-  )}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
+/** TDX expects feed-local (Asia/Taipei) datetimes, not server-local. */
+const toIsoLocal = taipeiIsoLocal;
 
 /**
  * Plan accessible routes via the TDX hosted routing engine, mapped into
  * AccessibleRoute objects and enriched with nearby OsmA11y facilities.
  */
-function ymdDash(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
+const ymdDash = taipeiYmdDash;
 
 export async function planTdxRoute(
   origin: { lat: number; lng: number },
@@ -383,11 +382,10 @@ export async function planTdxRoute(
   const todayRoutes = await runOnce(opts?.departureTime, false);
   if (todayRoutes.length) return todayRoutes;
 
-  const morning = new Date(base);
-  morning.setHours(5, 0, 0, 0);
+  let morning = taipeiWallClock(base, 5);
   let isNextDay = false;
   if (morning.getTime() <= base.getTime()) {
-    morning.setDate(morning.getDate() + 1);
+    morning = addTaipeiDays(morning, 1);
     isNextDay = true;
   }
   return runOnce(morning, isNextDay);

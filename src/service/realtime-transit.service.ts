@@ -42,6 +42,7 @@
 import { tdxFetch } from "../config/fetch";
 import { busUrl, trainUrl, traUrl } from "../config/transit";
 import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-router.service";
+import { taipeiSecondsOfDay, taipeiYmdDash } from "../config/taipei-time";
 import type {
   AccessibleRoute,
   BusLeg,
@@ -220,9 +221,7 @@ function shiftLegToLiveEta(leg: BusLeg, etaSec: number): void {
   const arrSec = gtfsTimeToSeconds(leg.arrivalTime);
   if (isNaN(depSec) || isNaN(arrSec)) return;
   const rideSec = arrSec >= depSec ? arrSec - depSec : arrSec + 86400 - depSec;
-  const now = new Date();
-  const nowSec =
-    now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  const nowSec = taipeiSecondsOfDay();
   leg.departureTime = secondsToHHmm(nowSec + etaSec);
   leg.arrivalTime = secondsToHHmm(nowSec + etaSec + rideSec);
 }
@@ -403,10 +402,7 @@ async function resolveTraTrainNo(leg: TraLeg): Promise<string | null> {
   const from = index.get(normStation(leg.departureStation));
   const to = index.get(normStation(leg.arrivalStation));
   if (!from || !to) return null;
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const timetable = await fetchOdTimetable(from, to, date);
+  const timetable = await fetchOdTimetable(from, to, taipeiYmdDash());
   const match = timetable.find(
     (t) => t.OriginStopTime?.DepartureTime === leg.departureTime
   );
