@@ -26,7 +26,7 @@ OTP_DATA_DIR="${OTP_DATA_DIR:-/var/otp}"
 OTP_OSM_PBF_URL="${OTP_OSM_PBF_URL:-https://download.geofabrik.de/asia/taiwan-latest.osm.pbf}"
 OTP_OSM_BBOX="${OTP_OSM_BBOX:-}" # empty = full Taiwan (no clipping)
 OTP_JAVA_XMX="${OTP_JAVA_XMX:-12g}"
-OTP_IMAGE="opentripplanner/opentripplanner:2.5.0"
+OTP_IMAGE="opentripplanner/opentripplanner:2.9.0"
 OSM_MAX_AGE_DAYS=30
 
 WORK_DIR="$(mktemp -d /tmp/otp-build.XXXXXX)"
