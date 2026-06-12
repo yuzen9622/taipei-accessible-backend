@@ -64,6 +64,21 @@ for url in $OTP_GTFS_URLS; do
   python3 "$SCRIPT_DIR/clean-gtfs-feed.py" "$out" || die "feed cleaning failed: $out"
 done
 
+# ── 1b. TRA timetable injection (Phase 16.5) — the national feed carries TRA
+# stops but no timetable, and TDX's rail GTFS endpoint only serves TRTC, so
+# the TRA schedule is converted from the v3 JSON API into feed-1. Fail-soft:
+# a build without TRA legs (MaaS planner covers them) beats no build at all.
+log "fetching TRA general timetable"
+if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
+  -o "$WORK_DIR/tra-timetable.json" \
+  "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/GeneralTrainTimetable?%24format=JSON"; then
+  python3 "$SCRIPT_DIR/inject-tra-gtfs.py" \
+    "$WORK_DIR/feed-1.gtfs.zip" "$WORK_DIR/tra-timetable.json" \
+    || log "WARN: TRA injection failed — continuing without TRA legs"
+else
+  log "WARN: TRA timetable download failed — continuing without TRA legs"
+fi
+
 # ── 2. OSM extract (monthly refresh, spec §5) ──
 OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"
 OSM_CLIPPED="$WORK_DIR/taiwan-clipped.osm.pbf"
