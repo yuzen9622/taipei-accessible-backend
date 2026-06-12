@@ -12,6 +12,7 @@
 
 import { decode } from "@googlemaps/polyline-codec";
 import { GtfsTrip } from "../model/gtfs-trip.model";
+import { haversineCoords, WHEELCHAIR_SPEED_M_PER_MIN } from "../config/ors";
 import type { AccessibilityMode } from "../config/a11y-scoring";
 import type {
   AccessibleRoute,
@@ -31,6 +32,16 @@ import type {
 // I/O callback and would kill a successful query (observed with 12s).
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
 const OTP_NUM_ITINERARIES = 5;
+
+// Snap-to-stop fallback: when plan() returns no itineraries, the usual cause is
+// the endpoint linking onto a disconnected street island (station plazas — the
+// OSM footways around e.g. 台中車站 don't connect back to the road grid), so
+// EVERY access leg dies. Retry once from the nearest stop that has at least one
+// route serving it — stops without routes (orphaned station entities, platforms
+// of feeds with no trips) often sit on the same island and can't board anyway.
+const SNAP_RADIUS_M = 500;
+const SNAP_CANDIDATES = 10;
+const WALK_SPEED_M_PER_MIN = 75;
 
 // Same set as gtfs-router.service.ts — OTP route gtfsIds carry the TDX system
 // code as their leading segment once the feed prefix is stripped.
@@ -188,6 +199,7 @@ query Plan(
     wheelchair: $wheelchair
     numItineraries: $numItineraries
     transportModes: [{ mode: WALK }, { mode: TRANSIT }]
+    locale: "zh-TW"
   ) {
     itineraries {
       duration
@@ -249,6 +261,108 @@ async function queryOtpPlan(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ── Snap-to-stop fallback ──
+
+const NEARBY_STOPS_QUERY = `
+query NearbyStops($lat: Float!, $lon: Float!, $radius: Int!, $first: Int!) {
+  stopsByRadius(lat: $lat, lon: $lon, radius: $radius, first: $first) {
+    edges {
+      node {
+        distance
+        stop { gtfsId name lat lon routes { gtfsId } }
+      }
+    }
+  }
+}`;
+
+interface SnapStop {
+  lat: number;
+  lng: number;
+  name: string;
+}
+
+/**
+ * Nearest stop within SNAP_RADIUS_M that has ≥1 route serving it (results come
+ * back distance-ascending). Fail-soft: null on any error or no candidate.
+ */
+async function findSnapStop(point: {
+  lat: number;
+  lng: number;
+}): Promise<SnapStop | null> {
+  const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OTP_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${baseUrl}/otp/gtfs/v1`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        query: NEARBY_STOPS_QUERY,
+        variables: {
+          lat: point.lat,
+          lon: point.lng,
+          radius: SNAP_RADIUS_M,
+          first: SNAP_CANDIDATES,
+        },
+      }),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      data?: {
+        stopsByRadius?: {
+          edges?: {
+            node?: {
+              stop?: {
+                name?: string;
+                lat?: number;
+                lon?: number;
+                routes?: unknown[];
+              } | null;
+            } | null;
+          }[];
+        };
+      };
+    };
+    for (const edge of json.data?.stopsByRadius?.edges ?? []) {
+      const stop = edge?.node?.stop;
+      if (!stop?.routes?.length) continue;
+      if (typeof stop.lat !== "number" || typeof stop.lon !== "number") continue;
+      return { lat: stop.lat, lng: stop.lon, name: stop.name ?? "鄰近站點" };
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Straight-line walk leg bridging a real endpoint to its snapped stop. */
+function snapWalkLeg(
+  from: { lng: number; lat: number; name: string },
+  to: { lng: number; lat: number; name: string },
+  wheelchair: boolean,
+): WalkLeg {
+  const distanceM = Math.round(
+    haversineCoords([from.lng, from.lat], [to.lng, to.lat]),
+  );
+  const speed = wheelchair ? WHEELCHAIR_SPEED_M_PER_MIN : WALK_SPEED_M_PER_MIN;
+  return {
+    type: "WALK",
+    from: from.name,
+    to: to.name,
+    distanceM,
+    minutesEst: Math.max(1, Math.round(distanceM / speed)),
+    polyline: [
+      [from.lng, from.lat],
+      [to.lng, to.lat],
+    ],
+    a11yFacilities: [],
+    exitInfo: null,
+  };
 }
 
 // ── Leg mapping (spec §7) ──
@@ -435,6 +549,52 @@ export async function planOtpRoute(
     return [];
   }
 
+  // Empty plan → snap endpoints to the nearest route-bearing stop and retry
+  // once (street-island linking failure; see SNAP_RADIUS_M comment).
+  let snapPre: WalkLeg | null = null;
+  let snapPost: WalkLeg | null = null;
+  if (!itineraries.length) {
+    const [originSnap, destSnap] = await Promise.all([
+      findSnapStop(origin),
+      findSnapStop(destination),
+    ]);
+    if (originSnap || destSnap) {
+      try {
+        itineraries = await queryOtpPlan(
+          originSnap ?? origin,
+          destSnap ?? destination,
+          departure,
+          wheelchair,
+        );
+      } catch (err) {
+        recordFailure();
+        console.warn("[otp-routing] snap retry failed (fail-soft to [])", err);
+        return [];
+      }
+      if (itineraries.length) {
+        console.info(
+          `[otp-routing] empty plan recovered by stop snap` +
+            (originSnap ? ` origin→${originSnap.name}` : "") +
+            (destSnap ? ` dest→${destSnap.name}` : ""),
+        );
+        if (originSnap) {
+          snapPre = snapWalkLeg(
+            { ...origin, name: "出發地" },
+            originSnap,
+            wheelchair,
+          );
+        }
+        if (destSnap) {
+          snapPost = snapWalkLeg(
+            destSnap,
+            { ...destination, name: "目的地" },
+            wheelchair,
+          );
+        }
+      }
+    }
+  }
+
   // OTP has no transfer cap — filter in Node (spec §6.2).
   const maxTransfers = opts?.maxTransfers;
   const queryDate = ymdDash(departure);
@@ -470,7 +630,13 @@ export async function planOtpRoute(
       if (!isTransitLeg(leg)) {
         // Drop zero-length transfer connectors, keep real walks.
         if ((leg.distance ?? 0) > 0) {
-          legs.push(walkLegFrom(leg, j === 0, j === it.legs.length - 1));
+          const wl = walkLegFrom(leg, j === 0, j === it.legs.length - 1);
+          // Snapped endpoints: the itinerary starts/ends at the snap stop, not
+          // the user's true origin/destination — those are covered by the
+          // synthetic legs added below.
+          if (j === 0 && snapPre) wl.from = snapPre.to;
+          if (j === it.legs.length - 1 && snapPost) wl.to = snapPost.from;
+          legs.push(wl);
         }
         clockMs = leg.endTime;
         continue;
@@ -498,10 +664,16 @@ export async function planOtpRoute(
     // Cross-midnight itineraries carry the service date (departureDate 慣例).
     const firstDepDate = ymdDash(new Date(transitOtpLegs[0].startTime));
 
+    // Bridge legs for snapped endpoints (cloned — enrichment mutates legs).
+    if (snapPre) legs.unshift({ ...snapPre });
+    if (snapPost) legs.push({ ...snapPost });
+    const snapMinutes =
+      (snapPre?.minutesEst ?? 0) + (snapPost?.minutesEst ?? 0);
+
     out.push({
       routeId: `otp-${i}-${stripFeedId(transitOtpLegs[0].trip?.gtfsId) || "unknown"}`,
       routeName: routeName || "OTP Route",
-      totalMinutes: Math.max(1, Math.round(it.duration / 60)),
+      totalMinutes: Math.max(1, Math.round(it.duration / 60)) + snapMinutes,
       transferCount: transitLegs.length - 1,
       legs,
       accessibilityHighlights: [],
