@@ -937,15 +937,8 @@ async function fetchWithCache<T>(
 ): Promise<T | null> {
   const cached = getCachedTimetable<T>(cacheKey);
   if (cached) return cached;
+  // 429 退避已集中在 tdxFetch()，此處不再重複重試。
   const resp = await tdxFetch(url);
-  if (resp.status === 429) {
-    await new Promise((r) => setTimeout(r, 1500));
-    const retry = await tdxFetch(url);
-    if (!retry.ok) return null;
-    const data = (await retry.json()) as T;
-    setCachedTimetable(cacheKey, data);
-    return data;
-  }
   if (!resp.ok) return null;
   const data = (await resp.json()) as T;
   setCachedTimetable(cacheKey, data);
