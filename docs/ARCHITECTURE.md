@@ -1,7 +1,24 @@
 # 程式碼架構文件
 
-> 版本：1.0　最後更新：2026-06-13  
+> 版本：1.1　最後更新：2026-06-13  
 > 說明：本文件描述現有架構的分層現況、已識別的耦合問題，以及建議的目標架構與重構路線圖。
+
+> **v1.1 變更（Opus 深度複查）**：v1.0（Sonnet）的分析遺漏了 `user` 模組——它被誤標為「正常」，
+> 實際上是全專案 DB 耦合最嚴重的檔案（已於 Phase 7 修正）。並新增了 v1.0 完全未提及的
+> **深層結構問題**：路由領域型別的「倒置依賴」與動態 `import()` 繞圈（見 §9，這才是「架構好亂」的真正根源）。
+
+## ✅ 已完成的重構（Phase 1–7）
+
+| Phase | 內容 | Commit |
+|---|---|---|
+| 1 | `a11y.service.ts` — controller + agent-tools 不再直接碰 MongoDB | `8443583` |
+| 2 | `transit.service.ts` — TDX URL 組裝移出 controller / agent-tools | `20036e2` |
+| 3 | `air.service.ts` — Google Geocoding + STA API 集中 | `aea514e` |
+| 4 | `adapters/google.adapter.ts` — 刪除 `config/map.ts`、移除 `config/lib.ts::getCoordinates` | `64e3181` |
+| 5 | `config/ors.ts` → `service/ors.service.ts` | `9992bee` |
+| 6 | `agent-tools.ts` 薄封裝化（534 → 365 行） | （併入 Phase 5） |
+| **7** | **`user.service.ts` — user 模組原本完全沒有 service 層（v1.0 遺漏）** | `b4a9fa9` |
+| 補 | transit 服務改回傳明確 HTTP status（移除字串比對 hack） | `fa24a65` |
 
 ---
 
@@ -15,6 +32,7 @@
 6. [目標目錄結構](#6-目標目錄結構)
 7. [重構路線圖](#7-重構路線圖)
 8. [各層職責定義](#8-各層職責定義)
+9. [深層結構問題：路由型別倒置依賴（Phase 8）](#9-深層結構問題路由型別倒置依賴phase-8)
 
 ---
 
@@ -78,7 +96,8 @@ src/
 │   │   └── index.ts
 │   └── user/
 │       ├── user.router.ts
-│       ├── user.controller.ts      # ✅ 透過 model 存取 DB
+│       ├── user.controller.ts      # ✎ Phase 7 已修：原本直接 findOne/save/findOneAndUpdate
+│       ├── user.service.ts         # ✦ Phase 7 新增：所有 User/Config DB 存取
 │       └── index.ts
 │
 ├── service/                        # 跨模組共用服務
@@ -544,3 +563,93 @@ Controller **禁止**：
 - API 客戶端初始化（`new GoogleGenerativeAI()`, `new OpenAI()`）
 - URL 前綴常數（`busUrl`, `metroUrl`）
 - **不含網路呼叫、不含業務邏輯**
+
+---
+
+## 9. 深層結構問題：路由型別倒置依賴（Phase 8）
+
+> 這是 v1.0 完全沒看到、也是你會覺得「架構好亂」的**真正結構性根源**。
+> 它不會造成 runtime 錯誤（目前用一個 workaround 撐著），但它讓整個路由子系統的依賴方向是「反的」。
+
+### 9.1 現象
+
+`src/modules/accessible-route/accessible-route.service.ts` 是一個 **1995 行的巨型協調器（orchestrator）**，
+它同時扮演三個角色：
+
+1. **定義整個領域模型**：`WaitInfo`, `NearestBus`, `WalkLeg`, `BusLeg`, `MetroLeg`, `ThsrLeg`, `TraLeg`, `AccessibleRoute` 八個型別
+2. **協調入口**：`findAccessibleRoutes()`
+3. **被所有 planner 反向依賴的型別來源**
+
+下層的各個 planner（位於 `src/service/`）需要這些型別，於是**向上 import**：
+
+| 下層 planner（`src/service/`） | 向上 import 的型別 | 行號 |
+|---|---|---|
+| `gtfs-router.service.ts` | AccessibleRoute, WalkLeg, BusLeg, …, WaitInfo | :53–61 |
+| `tdx-routing.service.ts` | AccessibleRoute, WalkLeg, … | :34–41 |
+| `otp-routing.service.ts` | AccessibleRoute, WalkLeg, …, WaitInfo | :18–26 |
+| `realtime-transit.service.ts` | AccessibleRoute, BusLeg, TraLeg | :46–50 |
+| `facility-status.service.ts` | AccessibleRoute, MetroLeg | :25–28 |
+| `a11y-exit.service.ts` | WalkLeg | :18 |
+
+### 9.2 依賴方向是反的（倒置）
+
+```
+        ┌─────────────────────────────────────────────┐
+        │  modules/accessible-route/                   │
+        │  accessible-route.service.ts (1995 行)       │
+        │  ① 定義 8 個領域型別                          │
+        │  ② findAccessibleRoutes() 協調器             │
+        └───────▲─────────────────────────┬───────────┘
+                │ import type             │ dynamic import()
+                │（向上，違反分層）         │（為了繞開靜態循環）
+        ┌───────┴─────────────────────────▼───────────┐
+        │  src/service/ 各 planner                     │
+        │  gtfs-router / tdx-routing / otp-routing …   │
+        └─────────────────────────────────────────────┘
+```
+
+協調器要呼叫下層 planner，但下層又向上 import 了協調器的型別 → **靜態循環依賴**。
+目前的 workaround 是：協調器改用**動態 `import()`** 在 runtime 才載入 planner
+（`accessible-route.service.ts:1843, 1866, 1880`），把靜態環打斷。
+
+程式碼裡甚至留了註解承認這件事：
+```ts
+// Leg/route types live in the accessible-route module. Import as TYPES only so
+// this service does not create a runtime circular dependency with the orchestrator.
+```
+
+> **這就是「亂」的來源**：領域模型（路由/leg 型別）的「家」放錯地方了——
+> 它住在一個 module 層的協調器檔案裡，逼得每個 planner 都得向上依賴，
+> 也逼得協調器只能用 lazy import 來避免循環。同時 `facility-slim.ts` 與
+> 協調器之間也有一個小的模組內型別環（`SlimA11y` ↔ leg 型別）。
+
+### 9.3 解法（Phase 8）— 把領域型別下沉到 `src/types/`
+
+```
+        ┌──────────────────────────────┐
+        │  src/types/route.ts ✦新       │
+        │  SlimA11y + 8 個領域型別       │
+        │  （只 import IOsmA11y，向下）  │
+        └───────▲───────────▲──────────┘
+                │           │  都是「向下」import，乾淨
+   ┌────────────┴──┐   ┌────┴─────────────────────┐
+   │ src/service/  │   │ modules/accessible-route/ │
+   │ 各 planner    │   │ accessible-route.service  │
+   └───────────────┘   │ （可改回靜態 import）      │
+                       └───────────────────────────┘
+```
+
+**改動清單（純型別搬移，零 runtime 行為改變，`tsc` 全程可驗證）：**
+
+1. 新建 `src/types/route.ts`，放入 `SlimA11y` + 8 個領域型別（只向下 import `IOsmA11y`）
+2. `accessible-route.service.ts`：移除型別定義，改 `import` + `export type {…}` re-export（向下相容 controller / transfer-finder / agent-tools）；`waitInfoMinutes()` 函式留在原地
+3. `facility-slim.ts`：型別改從 `../../types/route` import（打斷模組內環）
+4. 6 個 `src/service/*` planner：import 路徑改指 `../types/route`（**消除向上依賴**）
+5. （選用）協調器的動態 `import()` 可改回靜態 import——循環消失後不再需要 lazy load
+
+### 9.4 為何 Phase 8 需要你點頭
+
+Phase 1–7 動的都是中小型 controller / 新檔案，風險低。
+**Phase 8 要動到 `accessible-route.service.ts`——全 app 最核心的 1995 行路由引擎的檔頭**。
+雖然是純型別搬移、且 `tsc` 能完整驗證型別正確性，但這是路由功能的心臟，
+所以列為獨立 phase，需明確確認後再執行。
