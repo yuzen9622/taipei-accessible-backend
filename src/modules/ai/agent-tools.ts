@@ -2,11 +2,11 @@ import axios from "axios";
 import { getCoordinates } from "../../config/lib";
 import * as a11yService from "../a11y/a11y.service";
 import * as transitService from "../transit/transit.service";
+import * as airService from "../air/air.service";
 import { getCity } from "../../config/map";
 import { findAccessibleRoutes } from "../accessible-route/accessible-route.service";
 import type { AccessibleRoute, WalkLeg, BusLeg, MetroLeg, ThsrLeg, TraLeg } from "../accessible-route/accessible-route.service";
 import { TaiwanCityEn } from "../../types/transit";
-import type { STAApiResponse } from "../../types/air";
 
 const MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
@@ -301,75 +301,25 @@ export async function getBusPosition(args: {
 
 // ─── Tool 5: getAirQuality ────────────────────────────────────────────────────
 
-function classifyPm25(pm25: number): { quality: string; advice: string } {
-  if (pm25 <= 12) {
-    return { quality: "良好", advice: "空氣品質良好，適合戶外活動" };
-  }
-  if (pm25 <= 35.4) {
-    return { quality: "普通", advice: "空氣品質尚可，敏感族群可考慮減少長時間戶外活動" };
-  }
-  if (pm25 <= 55.4) {
-    return {
-      quality: "對敏感族群不健康",
-      advice: "輪椅使用者及呼吸道敏感者建議配戴口罩，減少戶外停留時間",
-    };
-  }
-  if (pm25 <= 150.4) {
-    return { quality: "不健康", advice: "建議所有人減少戶外活動，出門配戴口罩" };
-  }
-  return { quality: "非常不健康", advice: "強烈建議不要外出，若必須外出請配戴 N95 口罩" };
-}
-
 export async function getAirQuality(args: {
   latitude: number;
   longitude: number;
 }): Promise<string> {
-  const { latitude, longitude } = args;
-
   try {
-    const geocode = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${process.env.GOOGLE_MAPS_API_KEY}&language=zh-TW`
-    );
-    const geocodeData = (await geocode.json()) as any;
+    const data = await airService.getAirData(args.latitude, args.longitude);
+    if (!data) return JSON.stringify({ ok: false, message: "此區域無空氣品質監測數據" });
 
-    let city = "臺北市";
-    const cityComp = geocodeData?.results?.[0]?.address_components?.find((c: any) =>
-      c.types.includes("administrative_area_level_1")
-    );
-    if (cityComp) city = (cityComp.long_name as string).replace("台", "臺");
-
-    const staUrl =
-      `https://sta.ci.taiwan.gov.tw/STA_AirQuality_EPAIoT/v1.0/Datastreams` +
-      `?$expand=Thing,Observations($orderby=phenomenonTime desc;$top=1)` +
-      `&$filter=name eq 'PM2.5' and Thing/properties/areaType eq '${city}'`;
-
-    const staRes = await fetch(staUrl);
-    const staData = (await staRes.json()) as STAApiResponse;
-
-    const readings = staData.value
-      .map((item) => ({
-        area: item.Thing?.properties?.areaDescription ?? null,
-        pm25: item.Observations?.[0]?.result ?? null,
-        coordinates: item.observedArea?.coordinates,
-        city: item.Thing?.properties?.areaType ?? null,
-      }))
-      .filter((v) => v.pm25 !== null);
-
-    if (!readings.length) {
-      return JSON.stringify({ ok: false, message: "此區域無空氣品質監測數據" });
-    }
-
-    const pm25 = readings[0].pm25 as number;
-    const { quality, advice } = classifyPm25(pm25);
+    const pm25 = data.readings[0].pm25;
+    const { quality, advice } = airService.classifyPm25(pm25);
 
     return JSON.stringify({
       ok: true,
-      city,
-      area: readings[0].area,
+      city: data.city,
+      area: data.readings[0].area,
       pm25,
       quality,
       advice,
-      coordinates: readings[0].coordinates,
+      coordinates: data.readings[0].coordinates,
     });
   } catch (error: any) {
     console.error("[agent-tool:getAirQuality]", error);
