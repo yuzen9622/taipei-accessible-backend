@@ -17,6 +17,19 @@ export const NearbyA11yQuerySchema = z
   })
   .strict();
 
+export const A11yPlaceQuerySchema = z
+  .object({
+    osmId: z
+      .string()
+      .min(1)
+      .openapi({
+        example: "12342946149",
+        description:
+          "OSM 設施 id，可用逗號分隔做批次查詢（如「123,456」）",
+      }),
+  })
+  .strict();
+
 // ── Domain schemas ──────────────────────────────────────────────────────────
 
 const GeoPointSchema = z
@@ -130,14 +143,14 @@ registry.registerPath({
   method: "get",
   path: "/a11y/all-places",
   tags: ["Accessibility"],
-  summary: "List all A11y places",
-  description: "Returns every MRT elevator and ramp entry stored in the database (no pagination). Useful for bulk client-side filtering or map rendering.",
+  summary: "所有無障礙地點",
+  description: "回傳資料庫中所有捷運電梯與坡道資料，不分頁。",
   responses: {
     200: {
-      description: "List of A11y places",
+      description: "無障礙地點清單",
       content: { "application/json": { schema: AllPlacesResponseSchema } },
     },
-    500: { description: "Server error" },
+    500: { description: "伺服器錯誤" },
   },
 });
 
@@ -145,14 +158,14 @@ registry.registerPath({
   method: "get",
   path: "/a11y/all-bathrooms",
   tags: ["Accessibility"],
-  summary: "List all accessible bathrooms",
-  description: "Returns every accessible bathroom entry stored in the database (no pagination).",
+  summary: "所有無障礙廁所",
+  description: "回傳資料庫中所有無障礙廁所資料，不分頁。",
   responses: {
     200: {
-      description: "List of accessible bathrooms",
+      description: "無障礙廁所清單",
       content: { "application/json": { schema: AllBathroomsResponseSchema } },
     },
-    500: { description: "Server error" },
+    500: { description: "伺服器錯誤" },
   },
 });
 
@@ -160,17 +173,43 @@ registry.registerPath({
   method: "get",
   path: "/a11y/nearby-a11y",
   tags: ["Accessibility"],
-  summary: "Nearby accessibility facilities",
-  description: "Returns MRT A11y exits, accessible bathrooms, and OSM wheelchair nodes within 150 m of the supplied coordinates.",
+  summary: "鄰近無障礙設施",
+  description: "回傳指定座標 150 公尺內的捷運無障礙出口、廁所與 OSM 節點。",
   request: {
     query: NearbyA11yQuerySchema,
   },
   responses: {
     200: {
-      description: "Nearby MRT A11y, bathrooms, and OSM data",
+      description: "鄰近無障礙、廁所與 OSM 資料",
       content: { "application/json": { schema: NearbyA11yResponseSchema } },
     },
-    400: { description: "Missing or invalid lat/lng" },
-    500: { description: "Server error" },
+    400: { description: "缺少或無效的經緯度" },
+    500: { description: "伺服器錯誤" },
+  },
+});
+
+export const A11yPlaceResponseSchema = ApiResponseSchema(
+  z.array(OsmA11ySchema),
+  "A11yPlaceResponse"
+);
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/place",
+  tags: ["Accessibility"],
+  summary: "OSM 設施完整詳情",
+  description:
+    "依 osmId 回傳完整 OsmA11y 文件（含所有標籤），支援逗號分隔批次查詢。",
+  request: {
+    query: A11yPlaceQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "完整設施文件",
+      content: { "application/json": { schema: A11yPlaceResponseSchema } },
+    },
+    400: { description: "缺少 osmId" },
+    404: { description: "查無對應設施" },
+    500: { description: "伺服器錯誤" },
   },
 });

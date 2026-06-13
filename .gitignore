@@ -114,4 +114,14 @@ logs
 *.log
 
 graphify-out/
-/docs
+
+# GTFS source data (multi-GB, fetched from TDX — not committed)
+data/gtfs/
+
+# OTP2 graph build artifacts and source data (binary, generated locally) —
+# the three hand-tuned config JSONs are the recipe and DO get committed
+otp-data/*
+!otp-data/*.json
+
+
+/reports

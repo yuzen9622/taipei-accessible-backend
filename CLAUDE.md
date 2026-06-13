@@ -26,6 +26,10 @@ Copy `.env.example` to `.env`. Required variables:
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | JWT signing |
 | `DATABASE_URL` | MongoDB connection URI |
 | `TDX_CLIENT_ID` / `TDX_CLIENT_SECRET` | Taiwan transport data API credentials |
+| `USE_OTP_ROUTER` | Phase 16 OTP2 planner rollout: `false` \| `shadow` (log diff only) \| `true` (merge) |
+| `OTP_BASE_URL` | OTP2 sidecar GraphQL server (default `http://localhost:8080`, internal only) |
+| `GEMINI_API_URL` | OpenAI-compatible base URL for the AI API (default: Gemini's `/v1beta/openai` endpoint) |
+| `GEMINI_MODEL` | Model name used by all AI features (default: `gemini-2.5-flash`) |
 
 ## Architecture
 
@@ -54,6 +58,16 @@ All controllers use `sendResponse()` from `src/config/lib.ts`. The shape is:
 ```
 
 The refresh token is set as an `httpOnly` cookie (not in the JSON body).
+
+### Agent Chat flow (`POST /api/v1/ai/chat`)
+
+The `aiChat` controller in `ai.chat.controller.ts` implements an **OpenAI-compatible streaming Agent**:
+
+1. **Request** — `{ model?, messages, stream?, temperature?, userLocation? }` (OpenAI Chat Completions format).
+2. **Tool loop (non-streaming)** — backend calls LLM with 7 local tools defined in `src/config/ai/tool.ts`. If the model returns `finish_reason: "tool_calls"`, the backend executes the matching function in `agent-tools.ts` and feeds results back. Loop repeats up to 5 times.
+3. **Streaming response** — after all tools are resolved, the final answer is streamed as SSE (`event: tool_call`, `event: tool_result`, then OpenAI delta chunks, ending with `data: [DONE]`).
+
+The 7 tools: `findGooglePlaces`, `findA11yPlaces` (upgraded with OsmA11y), `planAccessibleRoute` (calls `findAccessibleRoutes`), `getBusArrivalEstimate`, `getBusPosition`, `getAirQuality`, `getA11yFacilityDetails`.
 
 ### AI chatbot flow (`POST /api/a11y/chatbot`)
 

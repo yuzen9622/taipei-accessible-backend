@@ -14,7 +14,17 @@
         "import:tdx-stops": "npx dotenvx run -- ts-node src/scripts/import-tdx-stops.ts",
         "import:tdx-metro": "npx dotenvx run -- ts-node src/scripts/import-tdx-metro.ts",
         "import:tdx-thsr": "npx dotenvx run -- ts-node src/scripts/import-tdx-thsr.ts",
-        "import:tdx-tra": "npx dotenvx run -- ts-node src/scripts/import-tdx-tra.ts"
+        "import:tdx-tra": "npx dotenvx run -- ts-node src/scripts/import-tdx-tra.ts",
+        "import:gtfs-stops": "npx dotenvx run -- ts-node src/scripts/import-gtfs-stops.ts",
+        "import:gtfs-routes": "npx dotenvx run -- ts-node src/scripts/import-gtfs-routes.ts",
+        "import:gtfs-trips": "npx dotenvx run -- ts-node src/scripts/import-gtfs-trips.ts",
+        "import:gtfs-calendar": "npx dotenvx run -- ts-node src/scripts/import-gtfs-calendar.ts",
+        "import:gtfs-pathways": "npx dotenvx run -- ts-node src/scripts/import-gtfs-pathways.ts",
+        "import:gtfs-levels": "npx dotenvx run -- ts-node src/scripts/import-gtfs-levels.ts",
+        "import:gtfs-frequencies": "npx dotenvx run -- ts-node src/scripts/import-gtfs-frequencies.ts",
+        "import:gtfs-stop-times": "npx dotenvx run -- node --max-old-space-size=2048 -r ts-node/register src/scripts/import-gtfs-stop-times.ts",
+        "import:gtfs-shapes": "npx dotenvx run -- node --max-old-space-size=2048 -r ts-node/register src/scripts/import-gtfs-shapes.ts",
+        "import:gtfs-all": "npx dotenvx run -- node --max-old-space-size=2048 -r ts-node/register src/scripts/import-gtfs-all.ts"
     },
     "keywords": [
         "express",
@@ -39,10 +49,12 @@
         "dotenv": "^16.3.1",
         "express": "^4.18.2",
         "helmet": "^7.0.0",
+        "ioredis": "^5.11.1",
         "jsonwebtoken": "^9.0.2",
         "mime": "^4.1.0",
         "mongoose": "^8.18.1",
         "morgan": "^1.10.0",
+        "openai": "^6.42.0",
         "rimraf": "^6.0.1",
         "zod": "^4.4.3"
     },

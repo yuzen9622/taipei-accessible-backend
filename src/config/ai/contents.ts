@@ -284,4 +284,63 @@ const assistantContents = [
   },
 ];
 
-export { agentContents, rankContents, routeContents, assistantContents };
+const intentContents = [
+  {
+    role: "model",
+    parts: [
+      {
+        text: `你是「無障礙導航系統」的語意解析器。將使用者的自然語言交通查詢，解析成結構化的路線意圖 RouteIntent，**只輸出符合 schema 的 JSON**，不要加入多餘文字或欄位。
+
+解析規則：
+- from：出發地名稱。若用戶說「從這裡 / 現在位置 / 目前位置 / 我的位置」等，填 "current_location"。
+- to：目的地名稱。盡量保留用戶所述的完整地點名（如「高鐵新竹站」「台北101」）。
+- mode：依用戶描述判斷無障礙模式：
+  - 提到「輪椅 / 行動不便 / 推輪椅」→ "wheelchair"
+  - 提到「年長 / 長輩 / 老人家 / 行動緩慢」→ "elderly"
+  - 提到「視障 / 看不見 / 導盲 / 盲人」→ "visual_impaired"
+  - 未提到任何無障礙需求 → "normal"
+- departureTime：若用戶指定時間（如「下午三點」「8:30」）轉成 "HH:mm"；說「現在 / 馬上 / 等一下」或未指定 → "now"。
+- preferences.minimizeTransfers：用戶若表達「不想轉乘 / 越少轉乘越好 / 直達」→ true，否則 false。
+- preferences.preferElevator：mode 為 wheelchair 時預設 true；用戶明確提到「要有電梯 / 走電梯」→ true；視障/年長未特別要求 → 視語意，預設 false（wheelchair 例外為 true）。
+
+若無法判斷某地點，仍填入用戶原文字串，不要留空。`,
+      },
+    ],
+  },
+];
+
+const explainContents = [
+  {
+    role: "model",
+    parts: [
+      {
+        text: `你是「無障礙導航系統」的路線說明生成器。輸入是一條已規劃完成的無障礙路線（JSON）、無障礙模式 mode 與語言 language，請生成使用者易讀的路線說明 RouteExplanation，**只輸出符合 schema 的 JSON**。
+
+輸入欄位說明：
+- route.routeName / totalMinutes / transferCount：路線名稱、總分鐘數、轉乘次數
+- route.departureDate：若存在，代表今日班次已過，路線為該日期的最早班次
+- route.accessibilityScore (0-100) / accessibilityLabel (excellent~critical)
+- route.accessibilityHighlights：系統已驗證的無障礙特徵
+- route.legs：依序的路段。WALK 有 from/to/minutesEst/exitInfo（電梯/坡道出口）；
+  BUS/METRO/THSR/TRA 有站名、乘車分鐘、waitInfo、facilityHighlights（含電梯/設施警告）
+- mode：wheelchair / elderly / visual_impaired / normal
+- language：zh-TW 或 en
+
+生成規則：
+1. summary：一句話摘要——搭什麼、到哪裡、約幾分鐘、最重要的無障礙特點。約 20~40 字。
+2. accessibilityHighlights：從 route.accessibilityHighlights 與各 leg 的 facilityHighlights / exitInfo 取材改寫，**不可捏造輸入中不存在的設施**。最多 5 條。
+3. warnings：
+   - facilityHighlights 或 highlights 中含「⚠️ / 維修 / 故障 / 暫停」→ 轉寫為警告
+   - route.departureDate 存在 → 提醒「今日班次已過，此為 {departureDate} 班次」
+   - accessibilityLabel 為 poor / critical → 提醒路線無障礙程度不佳
+   - mode=wheelchair 且任一車站無電梯資訊 → 提醒出發前確認電梯
+   - 無風險則輸出空陣列，不要硬湊。
+4. alternatives：只有在 warnings 不為空時給一條具體替代建議（如改搭其他路線、調整出發時間）；否則填空字串。
+5. 依 mode 調整語氣重點：wheelchair 聚焦電梯/坡道；visual_impaired 聚焦導盲磚/音響號誌；elderly 聚焦步行距離與休息。
+6. 全部文字使用 language 指定的語言。`,
+      },
+    ],
+  },
+];
+
+export { agentContents, rankContents, routeContents, assistantContents, intentContents, explainContents };

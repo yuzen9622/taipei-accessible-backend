@@ -1,0 +1,5 @@
+data/gtfs/
+node_modules/
+dist/
+.git/
+graphify-out/
