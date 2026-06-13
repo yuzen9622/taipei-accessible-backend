@@ -24,7 +24,7 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
     });
 
     if (!result.ok) {
-      return sendResponse(res, false, "error", result.error === "無法辨識路線方向，請確認站牌名稱是否正確" ? 400 : 500, result.error);
+      return sendResponse(res, false, "error", result.status, result.error);
     }
 
     return sendResponse(res, true, "success", 200, "OK", result.etaData);
@@ -53,7 +53,7 @@ async function getRealtimeBusPosition(req: Request, res: Response<ApiResponse<an
     });
 
     if (!result.ok) {
-      return sendResponse(res, false, "error", 400, result.error);
+      return sendResponse(res, false, "error", result.status, result.error);
     }
 
     return sendResponse(res, true, "success", 200, "OK", result.positionData);

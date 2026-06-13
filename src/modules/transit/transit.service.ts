@@ -8,11 +8,11 @@ type Lang = "Zh_tw" | "En";
 
 export type BusEtaResult =
   | { ok: true; routeId: string; direction: number; city: TaiwanCityEn; etaData: any }
-  | { ok: false; error: string };
+  | { ok: false; error: string; status: 400 | 500 };
 
 export type BusPositionResult =
   | { ok: true; positionData: any }
-  | { ok: false; error: string };
+  | { ok: false; error: string; status: 400 | 500 };
 
 export async function getBusEta(params: {
   routeName: string;
@@ -31,11 +31,11 @@ export async function getBusEta(params: {
       : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=SubRouteName/${lang} eq '${fmt.routeId}'`;
 
   const stopRes = await tdxFetch(stopUrl);
-  if (!stopRes.ok) return { ok: false, error: "TDX 公車路線資料查詢失敗" };
+  if (!stopRes.ok) return { ok: false, error: "TDX 公車路線資料查詢失敗", status: 500 };
 
   const stopJson = (await stopRes.json()) as BusRoute[];
   if (!stopJson || stopJson.length < 2) {
-    return { ok: false, error: `找不到路線 ${routeName} 的站點資料` };
+    return { ok: false, error: `找不到路線 ${routeName} 的站點資料`, status: 500 };
   }
 
   const direction = getRouteDirectionImproved(
@@ -44,7 +44,9 @@ export async function getBusEta(params: {
     arrivalStop,
     lang,
   );
-  if (direction === -1) return { ok: false, error: "無法辨識路線方向，請確認站牌名稱是否正確" };
+  if (direction === -1) {
+    return { ok: false, error: "無法辨識路線方向，請確認站牌名稱是否正確", status: 400 };
+  }
 
   const etaUrl =
     fmt.type === "City"
@@ -53,7 +55,7 @@ export async function getBusEta(params: {
 
   const etaRes = await tdxFetch(etaUrl);
   const etaJson = (await etaRes.json()) as any;
-  if (etaJson?.message) return { ok: false, error: etaJson.message };
+  if (etaJson?.message) return { ok: false, error: etaJson.message, status: 500 };
 
   return { ok: true, routeId: fmt.routeId, direction, city, etaData: etaJson };
 }
@@ -72,7 +74,7 @@ export async function getBusRealtimePosition(params: {
       : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=PlateNumb eq '${plateNumber}'`;
 
   const res = await tdxFetch(url);
-  if (!res.ok) return { ok: false, error: "TDX 公車位置查詢失敗" };
+  if (!res.ok) return { ok: false, error: "TDX 公車位置查詢失敗", status: 400 };
 
   return { ok: true, positionData: await res.json() };
 }
