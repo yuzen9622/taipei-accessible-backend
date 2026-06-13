@@ -17,7 +17,7 @@ import {
   orsWalkingMatrix,
   haversineCoords,
   WHEELCHAIR_SPEED_M_PER_MIN,
-} from "../config/ors";
+} from "./ors.service";
 import { setWalkCache } from "./walk-cache.service";
 
 const GEO_QUERY_RADIUS_M = 2000;

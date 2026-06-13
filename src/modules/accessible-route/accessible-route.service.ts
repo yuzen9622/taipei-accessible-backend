@@ -7,7 +7,7 @@ import {
   CITY_METRO_SYSTEMS,
 } from "../../config/transit";
 import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
-import { orsWalkingRoute } from "../../config/ors";
+import { orsWalkingRoute } from "../../service/ors.service";
 import {
   taipeiMinutesOfDay,
   taipeiWeekday,

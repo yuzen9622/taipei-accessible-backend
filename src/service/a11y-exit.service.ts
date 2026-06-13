@@ -14,7 +14,7 @@
 
 import A11y from "../model/a11y.model";
 import { IA11y } from "../types";
-import { orsWalkingRoute, haversineCoords } from "../config/ors";
+import { orsWalkingRoute, haversineCoords } from "./ors.service";
 import { WalkLeg } from "../modules/accessible-route/accessible-route.service";
 import { getStationAccess } from "./indoor-graph.service";
 

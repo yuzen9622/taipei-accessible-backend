@@ -47,7 +47,7 @@ import {
   orsWalkingRoute,
   orsWalkingMatrix,
   WHEELCHAIR_SPEED_M_PER_MIN,
-} from "../../config/ors";
+} from "../../service/ors.service";
 
 import { CITY_METRO_SYSTEMS } from "../../config/transit";
 import { TaiwanCityEn } from "../../types/transit";

@@ -37,7 +37,7 @@ import {
   orsWalkingRoute,
   haversineCoords,
   WHEELCHAIR_SPEED_M_PER_MIN,
-} from "../config/ors";
+} from "./ors.service";
 import {
   taipeiYmd,
   taipeiYmdDash,
