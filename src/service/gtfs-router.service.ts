@@ -1203,13 +1203,33 @@ export async function planGtfsRoute(
     return routes;
   };
 
-  // Today from now; if nothing left today, roll forward to the next service day
-  // (earliest departures) instead of returning empty.
+  // Today from now.
   const todayRoutes = await searchDay(now, nowSec, false);
-  if (todayRoutes.length) return todayRoutes;
 
-  const tomorrow = addDays(now, 1);
-  return searchDay(tomorrow, 0, true);
+  // Pre-dawn carry-over: a late trip like a 00:40 bus is encoded as "24:40"
+  // under *yesterday's* service_id, so today's active-service set never holds
+  // it and the small-hours query would skip straight to today's daytime trips
+  // (hours away). Also scan yesterday with the clock shifted past midnight
+  // (afterSec + 24h): both the in-memory `departureSec >= afterSec` filter
+  // (direct legs) and the zero-padded "HH:MM:SS" $gte query (transfer hubs)
+  // then keep only trips encoded >= 24:00 — daytime trips can never satisfy a
+  // bound >= 86400s — and secondsToHHmm wraps the display to the real clock.
+  // The window guard is only an optimisation (skip the extra search by day);
+  // it spans the feed's dominant 24:00–~28:00 carry-over band.
+  let carryOver: AccessibleRoute[] = [];
+  if (nowSec < 5 * 3600) {
+    carryOver = await searchDay(
+      addDays(now, -1),
+      nowSec + SECONDS_PER_DAY,
+      false
+    );
+  }
+
+  const sameDay = [...carryOver, ...todayRoutes];
+  if (sameDay.length) return sameDay;
+
+  // Nothing left today — roll forward to the next service day's earliest trips.
+  return searchDay(addDays(now, 1), 0, true);
 }
 
 /** Assemble an AccessibleRoute from legs and a precomputed total duration. */
