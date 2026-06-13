@@ -1,8 +1,6 @@
 import axios from "axios";
-import A11y from "../../model/a11y.model";
-import BathroomModel from "../../model/bathroom.model";
-import OsmA11y from "../../model/osm-a11y.model";
 import { getCoordinates, detectBusApiType, getRouteDirectionImproved } from "../../config/lib";
+import * as a11yService from "../a11y/a11y.service";
 import { getCity } from "../../config/map";
 import { busUrl } from "../../config/transit";
 import { tdxFetch } from "../../config/fetch";
@@ -96,32 +94,11 @@ export async function findA11yPlaces(args: {
   }
 
   try {
-    const geoQuery = {
-      $near: {
-        $geometry: { type: "Point", coordinates: [Number(searchLng), Number(searchLat)] },
-        $maxDistance: searchRange,
-      },
-    };
-    const bathroomQuery = {
-      type: "無障礙廁所",
-      location: {
-        $near: {
-          $geometry: { type: "Point", coordinates: [Number(searchLng), Number(searchLat)] },
-          $maxDistance: 150,
-        },
-      },
-    };
-
-    const [nearbyMetroA11y, nearbyBathroom, nearbyOsm] = await Promise.all([
-      A11y.find({ location: geoQuery }).limit(10).lean(),
-      BathroomModel.find(bathroomQuery).limit(5).lean(),
-      OsmA11y.find({ location: geoQuery }).limit(15).lean(),
-    ]);
-
+    const places = await a11yService.findNearbyLimited(searchLat, searchLng, searchRange);
     return JSON.stringify({
       ok: true,
       searchLocation: { lat: searchLat, lng: searchLng, query: args.query },
-      places: { nearbyMetroA11y, nearbyBathroom, nearbyOsm },
+      places,
     });
   } catch (error) {
     console.error("[agent-tool:findA11yPlaces]", error);
@@ -454,20 +431,14 @@ export async function getAirQuality(args: {
 
 export async function getA11yFacilityDetails(args: { osmId: string }): Promise<string> {
   try {
-    const ids = args.osmId
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
+    const ids = args.osmId.split(",").map((s) => s.trim()).filter(Boolean);
     if (!ids.length) {
       return JSON.stringify({ ok: false, error: "缺少 osmId 參數" });
     }
-
-    const places = await OsmA11y.find({ osmId: { $in: ids } }).lean();
+    const places = await a11yService.findByOsmIds(ids);
     if (!places.length) {
       return JSON.stringify({ ok: false, error: `找不到 osmId: ${ids.join(", ")} 的設施` });
     }
-
     return JSON.stringify({ ok: true, count: places.length, facilities: places });
   } catch (error: any) {
     console.error("[agent-tool:getA11yFacilityDetails]", error);
