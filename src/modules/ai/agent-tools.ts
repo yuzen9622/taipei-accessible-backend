@@ -1,12 +1,10 @@
 import axios from "axios";
-import { getCoordinates, detectBusApiType, getRouteDirectionImproved } from "../../config/lib";
+import { getCoordinates } from "../../config/lib";
 import * as a11yService from "../a11y/a11y.service";
+import * as transitService from "../transit/transit.service";
 import { getCity } from "../../config/map";
-import { busUrl } from "../../config/transit";
-import { tdxFetch } from "../../config/fetch";
 import { findAccessibleRoutes } from "../accessible-route/accessible-route.service";
 import type { AccessibleRoute, WalkLeg, BusLeg, MetroLeg, ThsrLeg, TraLeg } from "../accessible-route/accessible-route.service";
-import type { BusRoute } from "../../types/transit";
 import { TaiwanCityEn } from "../../types/transit";
 import type { STAApiResponse } from "../../types/air";
 
@@ -250,60 +248,22 @@ export async function getBusArrivalEstimate(args: {
   longitude?: number;
 }): Promise<string> {
   const { routeName, departureStop, arrivalStop } = args;
-  const lat = args.latitude ?? 25.0478; // fallback: Taipei
+  const lat = args.latitude ?? 25.0478;
   const lng = args.longitude ?? 121.517;
 
   try {
     const city = (await getCity(lat, lng)) as TaiwanCityEn;
-    const fmt = detectBusApiType(routeName);
-    const lang = "Zh_tw";
-
-    const stopUrl =
-      fmt.type === "City"
-        ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=SubRouteName/${lang} eq '${fmt.routeId}'`
-        : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=SubRouteName/${lang} eq '${fmt.routeId}'`;
-
-    const stopRes = await tdxFetch(stopUrl);
-    if (!stopRes.ok) {
-      return JSON.stringify({ ok: false, error: "TDX 公車路線資料查詢失敗" });
-    }
-
-    const stopJson = (await stopRes.json()) as BusRoute[];
-    if (!stopJson || stopJson.length < 2) {
-      return JSON.stringify({ ok: false, error: `找不到路線 ${routeName} 的站點資料` });
-    }
-
-    const direction = getRouteDirectionImproved(
-      { 0: stopJson[0].Stops, 1: stopJson[1].Stops },
-      departureStop,
-      arrivalStop,
-      lang
-    );
-
-    if (direction === -1) {
-      return JSON.stringify({ ok: false, error: "無法辨識路線方向，請確認站牌名稱是否正確" });
-    }
-
-    const etaUrl =
-      fmt.type === "City"
-        ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${fmt.routeId}?$format=JSON&$filter=Direction eq ${direction} and contains(StopName/${lang},'${departureStop}') and RouteName/${lang} eq '${fmt.routeId}'`
-        : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${fmt.routeId}?$format=JSON&$filter=Direction eq ${direction} and contains(StopName/${lang},'${departureStop}') and contains(SubRouteName/${lang},'${fmt.routeId}')`;
-
-    const etaRes = await tdxFetch(etaUrl);
-    const etaJson = (await etaRes.json()) as any;
-
-    if (etaJson?.message) {
-      return JSON.stringify({ ok: false, error: etaJson.message });
-    }
+    const result = await transitService.getBusEta({ routeName, departureStop, arrivalStop, city });
+    if (!result.ok) return JSON.stringify({ ok: false, error: result.error });
 
     return JSON.stringify({
       ok: true,
-      routeName: fmt.routeId,
+      routeName: result.routeId,
       departureStop,
       arrivalStop,
-      direction,
-      city,
-      etaData: Array.isArray(etaJson) ? etaJson.slice(0, 5) : etaJson,
+      direction: result.direction,
+      city: result.city,
+      etaData: Array.isArray(result.etaData) ? result.etaData.slice(0, 5) : result.etaData,
     });
   } catch (error: any) {
     console.error("[agent-tool:getBusArrivalEstimate]", error);
@@ -329,20 +289,10 @@ export async function getBusPosition(args: {
 
   try {
     const city = (await getCity(lat, lng)) as TaiwanCityEn;
-    const fmt = detectBusApiType(routeName);
+    const result = await transitService.getBusRealtimePosition({ plateNumber, routeName, city });
+    if (!result.ok) return JSON.stringify({ ok: false, error: result.error });
 
-    const url =
-      fmt.type === "City"
-        ? `${busUrl.cityRealtimeByFrequencyUrl}/${city}?$format=JSON&$filter=PlateNumb eq '${plateNumber}'`
-        : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=PlateNumb eq '${plateNumber}'`;
-
-    const res = await tdxFetch(url);
-    if (!res.ok) {
-      return JSON.stringify({ ok: false, error: "TDX 公車位置查詢失敗" });
-    }
-
-    const data = (await res.json()) as any;
-    return JSON.stringify({ ok: true, plateNumber, routeName, city, positionData: data });
+    return JSON.stringify({ ok: true, plateNumber, routeName, city, positionData: result.positionData });
   } catch (error: any) {
     console.error("[agent-tool:getBusPosition]", error);
     return JSON.stringify({ ok: false, error: "公車位置查詢失敗" });
