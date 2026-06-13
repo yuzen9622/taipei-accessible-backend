@@ -25,7 +25,7 @@ import type { AccessibilityMode } from "../config/a11y-scoring";
 import type {
   AccessibleRoute,
   MetroLeg,
-} from "../modules/accessible-route/accessible-route.service";
+} from "../types/route";
 
 const OUTAGE_RE = /維修|故障|暫停|停用/;
 const ALERT_CACHE_TTL_MS = 5 * 60 * 1000;

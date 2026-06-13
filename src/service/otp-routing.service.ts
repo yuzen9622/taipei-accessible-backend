@@ -23,7 +23,7 @@ import type {
   ThsrLeg,
   TraLeg,
   WaitInfo,
-} from "../modules/accessible-route/accessible-route.service";
+} from "../types/route";
 
 // The timeout guards against HUNG connections only — a dead OTP container
 // rejects instantly (ECONNREFUSED) and trips the circuit breaker, so a

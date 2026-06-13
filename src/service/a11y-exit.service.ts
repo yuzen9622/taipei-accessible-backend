@@ -15,7 +15,7 @@
 import A11y from "../model/a11y.model";
 import { IA11y } from "../types";
 import { orsWalkingRoute, haversineCoords } from "./ors.service";
-import { WalkLeg } from "../modules/accessible-route/accessible-route.service";
+import type { WalkLeg } from "../types/route";
 import { getStationAccess } from "./indoor-graph.service";
 
 /** Raw lean()'d A11y document — the stored DB shape, before parsing. */

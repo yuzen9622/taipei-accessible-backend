@@ -58,7 +58,7 @@ import type {
   ThsrLeg,
   TraLeg,
   WaitInfo,
-} from "../modules/accessible-route/accessible-route.service";
+} from "../types/route";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tunables

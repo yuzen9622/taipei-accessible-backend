@@ -47,7 +47,7 @@ import type {
   AccessibleRoute,
   BusLeg,
   TraLeg,
-} from "../modules/accessible-route/accessible-route.service";
+} from "../types/route";
 
 const CACHE_TTL_MS = 30 * 1000;
 const MAX_DEPARTURE_SKEW_MS = 15 * 60 * 1000;

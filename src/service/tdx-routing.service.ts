@@ -38,7 +38,7 @@ import type {
   MetroLeg,
   ThsrLeg,
   TraLeg,
-} from "../modules/accessible-route/accessible-route.service";
+} from "../types/route";
 
 const ROUTING_URL = "https://tdx.transportdata.tw/api/maas/routing";
 const METRO_AGENCIES = new Set([

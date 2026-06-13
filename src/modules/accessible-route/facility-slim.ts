@@ -25,18 +25,12 @@ import type {
   MetroLeg,
   ThsrLeg,
   TraLeg,
-} from "./accessible-route.service";
+  SlimA11y,
+} from "../../types/route";
 
-/** Slimmed facility shape returned by /accessible-route. */
-export interface SlimA11y {
-  osmId: string;
-  category: IOsmA11y["category"];
-  name?: string;
-  wheelchair?: IOsmA11y["wheelchair"];
-  location: IOsmA11y["location"];
-  /** Whitelisted tags only; omitted entirely when none survive. */
-  tags?: Record<string, string>;
-}
+// SlimA11y now lives in the neutral types layer; re-exported here so existing
+// importers of this module continue to resolve it.
+export type { SlimA11y } from "../../types/route";
 
 /**
  * Tags that survive slimming.
