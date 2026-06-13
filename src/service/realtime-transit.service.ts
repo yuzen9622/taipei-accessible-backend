@@ -115,6 +115,29 @@ function cachedEntry<T>(
   return entry.data;
 }
 
+// Entries are only lazily expired on read (cachedEntry above), so a key that is
+// written once and never read again would live forever — over a long-running
+// process the high-cardinality caches (etaCache keyed by route×stop URL,
+// odCache by from|to|date) grow without bound. Cap the size and evict the
+// oldest on write; Map keeps insertion order, and deleting-then-setting an
+// existing key moves it to the most-recent slot (LRU-ish).
+const MAX_CACHE_ENTRIES = 5_000;
+
+function cacheSet<T>(
+  cache: Map<string, CacheEntry<T>>,
+  key: string,
+  entry: CacheEntry<T>
+): void {
+  cache.delete(key);
+  cache.set(key, entry);
+  if (cache.size > MAX_CACHE_ENTRIES) {
+    for (const oldest of cache.keys()) {
+      cache.delete(oldest);
+      if (cache.size <= MAX_CACHE_ENTRIES) break;
+    }
+  }
+}
+
 // Routes are overlaid in parallel and often share lookups (same OD pair, the
 // one live board, the one station list). TDX quota is tight — collapse
 // concurrent identical fetches into a single in-flight call.
@@ -182,7 +205,10 @@ async function fetchEtaRecords(url: string): Promise<TdxEtaRecord[]> {
     } catch {
       /* fail-soft: empty list */
     }
-    etaCache.set(url, { data: records, expiresAt: Date.now() + CACHE_TTL_MS });
+    cacheSet(etaCache, url, {
+      data: records,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
     return records;
   });
 }
@@ -379,7 +405,7 @@ async function fetchOdTimetable(
     } catch {
       /* fail-soft: empty timetable */
     }
-    odCache.set(key, {
+    cacheSet(odCache, key, {
       data: items,
       expiresAt:
         Date.now() + (items.length ? OD_CACHE_TTL_MS : FAILURE_CACHE_TTL_MS),
