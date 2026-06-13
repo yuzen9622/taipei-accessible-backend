@@ -19,6 +19,7 @@
 | 6 | `agent-tools.ts` 薄封裝化（534 → 365 行） | （併入 Phase 5） |
 | **7** | **`user.service.ts` — user 模組原本完全沒有 service 層（v1.0 遺漏）** | `b4a9fa9` |
 | 補 | transit 服務改回傳明確 HTTP status（移除字串比對 hack） | `fa24a65` |
+| **8** | **`src/types/route.ts` — 路由領域型別下沉，根治倒置依賴（見 §9）** | `1a5658b` |
 
 ---
 
@@ -647,9 +648,15 @@ Controller **禁止**：
 4. 6 個 `src/service/*` planner：import 路徑改指 `../types/route`（**消除向上依賴**）
 5. （選用）協調器的動態 `import()` 可改回靜態 import——循環消失後不再需要 lazy load
 
-### 9.4 為何 Phase 8 需要你點頭
+### 9.4 ✅ Phase 8 已執行（commit `1a5658b`）
 
-Phase 1–7 動的都是中小型 controller / 新檔案，風險低。
-**Phase 8 要動到 `accessible-route.service.ts`——全 app 最核心的 1995 行路由引擎的檔頭**。
-雖然是純型別搬移、且 `tsc` 能完整驗證型別正確性，但這是路由功能的心臟，
-所以列為獨立 phase，需明確確認後再執行。
+已完成，`tsc --noEmit` 全綠、零 runtime 行為改變：
+
+- 8 個領域型別 + `SlimA11y` 移入 `src/types/route.ts`（只向下 import `IOsmA11y`）
+- 6 個 planner 全部改為**向下** import `../types/route`——已驗證 `src/service/*` 再也沒有任何檔案向上 import 協調器
+- `facility-slim.ts` 也改指 `route.ts`，模組內型別環一併打斷
+- `accessible-route.service.ts` 保留 import + `export type` re-export，向下相容 controller / transfer-finder / agent-tools / debug script（皆無需改動）
+
+**關於動態 `import()`**：循環消失後，協調器的動態 import 已非必要、可改回靜態。
+但我們**保留**它，因為它同時提供了「延遲載入笨重 planner 模組（含大量 model 依賴）」的效果——
+這是效能取捨，與分層無關，故不在此 phase 一併變更。
