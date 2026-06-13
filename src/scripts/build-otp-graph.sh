@@ -18,6 +18,12 @@
 #                    Taichung-only example: 120.40,23.95,121.05,24.45
 #   OTP_JAVA_XMX     build heap (default 12g — national feed + full Taiwan OSM;
 #                    a single-city clip builds fine with 8g)
+#   OTP_METRO_SYSTEMS  space-separated TDX metro systems to gap-fill (default
+#                    "TRTC NTMC TMRT TYMC TRTCMG" — the feed's 0-trips systems
+#                    that the TDX Metro API accepts. 淡海/安坑輕軌 (feed prefix
+#                    NTDLRT/NTALRT) are NOT valid Metro RailSystem codes and
+#                    stay 0-trips until their real codes are known. See
+#                    inject-metro-gtfs.py.
 #
 # Suggested cron (spec §9):  0 4 * * 0  /path/to/build-otp-graph.sh
 set -euo pipefail
@@ -78,6 +84,37 @@ if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
 else
   log "WARN: TRA timetable download failed — continuing without TRA legs"
 fi
+
+# ── 1c. Metro/LRT frequency injection — same gap as TRA, one tier down: the
+# national feed defines these lines' routes + stops but ships ZERO trips for
+# 文湖線(TRTC BR)、環狀線(NTMC Y)、台中綠線(TMRT G)、機捷一方向、淡海/安坑輕軌、
+# 貓空纜車, so OTP can't board them and the leg falls back to the MaaS planner
+# (which returns bus). TDX has no per-train metro timetable — it runs on
+# headways — so the schedule is synthesised from S2STravelTime (ride pattern)
+# + Frequency (headway) into a frequency-based GTFS, injected into feed-1.
+# Calls are spaced (TDX 429s on bursts); each is fail-soft and the injector
+# skips any line whose TDX data is absent — a build missing some metro lines
+# beats no build at all.
+METRO_DIR="$WORK_DIR/metro"
+mkdir -p "$METRO_DIR"
+METRO_SYSTEMS="${OTP_METRO_SYSTEMS:-TRTC NTMC TMRT TYMC TRTCMG}"
+METRO_BASE="https://tdx.transportdata.tw/api/basic/v2/Rail/Metro"
+log "fetching metro S2STravelTime + Frequency: $METRO_SYSTEMS"
+for sys in $METRO_SYSTEMS; do
+  curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
+    -o "$METRO_DIR/$sys.s2s.json" \
+    "$METRO_BASE/S2STravelTime/$sys?%24format=JSON" \
+    || log "WARN: metro S2STravelTime fetch failed for $sys"
+  sleep 3
+  curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
+    -o "$METRO_DIR/$sys.freq.json" \
+    "$METRO_BASE/Frequency/$sys?%24format=JSON" \
+    || log "WARN: metro Frequency fetch failed for $sys"
+  sleep 3
+done
+python3 "$SCRIPT_DIR/inject-metro-gtfs.py" \
+  "$WORK_DIR/feed-1.gtfs.zip" "$METRO_DIR" \
+  || log "WARN: metro injection failed — continuing without metro gap-fill"
 
 # ── 2. OSM extract (monthly refresh, spec §5) ──
 OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"
