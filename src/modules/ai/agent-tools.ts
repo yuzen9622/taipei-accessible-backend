@@ -1,14 +1,10 @@
-import axios from "axios";
-import { getCoordinates } from "../../config/lib";
 import * as a11yService from "../a11y/a11y.service";
 import * as transitService from "../transit/transit.service";
 import * as airService from "../air/air.service";
-import { getCity } from "../../config/map";
+import { getCity, getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { findAccessibleRoutes } from "../accessible-route/accessible-route.service";
 import type { AccessibleRoute, WalkLeg, BusLeg, MetroLeg, ThsrLeg, TraLeg } from "../accessible-route/accessible-route.service";
 import { TaiwanCityEn } from "../../types/transit";
-
-const MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
 // ─── Tool 7: findGooglePlaces ─────────────────────────────────────────────────
 
@@ -17,48 +13,13 @@ export async function findGooglePlaces(args: {
   latitude?: number;
   longitude?: number;
 }): Promise<string> {
-  const { query, latitude, longitude } = args;
-  if (!MAPS_API_KEY) return JSON.stringify({ error: "Google Places API Key is not set." });
-
-  const headers = {
-    "Content-Type": "application/json",
-    "X-Goog-Api-Key": MAPS_API_KEY,
-    "X-Goog-FieldMask":
-      "places.id,places.displayName,places.formattedAddress,places.rating,places.location",
-  };
-  const body: Record<string, unknown> = {
-    textQuery: query,
-    languageCode: "zh-TW",
-    maxResultCount: 3,
-  };
-  if (latitude !== undefined && longitude !== undefined) {
-    body.locationBias = {
-      circle: { center: { latitude, longitude }, radius: 1000.0 },
-    };
-  }
-
   try {
-    const response = await axios.post(
-      "https://places.googleapis.com/v1/places:searchText",
-      body,
-      { headers }
-    );
-    const { places } = response.data;
-    if (!places?.length) return JSON.stringify({ status: "ZERO_RESULTS", places: [] });
-
-    return JSON.stringify({
-      status: "OK",
-      places: places.map((p: any) => ({
-        name: p.displayName?.text ?? "未知名稱",
-        place_id: p.id,
-        formatted_address: p.formattedAddress,
-        rating: p.rating,
-        location: p.location,
-      })),
-    });
+    const places = await searchPlaces(args.query, { latitude: args.latitude, longitude: args.longitude });
+    if (!places.length) return JSON.stringify({ status: "ZERO_RESULTS", places: [] });
+    return JSON.stringify({ status: "OK", places });
   } catch (error: any) {
-    console.error("[agent-tool:findGooglePlaces]", error.response?.data ?? error.message);
-    return JSON.stringify({ error: "Google Places API 查詢失敗", details: error.response?.data?.error?.message ?? error.message });
+    console.error("[agent-tool:findGooglePlaces]", error.message);
+    return JSON.stringify({ error: "Google Places API 查詢失敗" });
   }
 }
 

@@ -1,5 +1,5 @@
 import { detectBusApiType, sendResponse } from "../../config/lib";
-import { getCity } from "../../config/map";
+import { getCity } from "../../adapters/google.adapter";
 import { ApiResponse } from "../../types/response";
 import type { Response, Request } from "express";
 import { TaiwanCityEn } from "../../types/transit";

@@ -122,3 +122,6 @@ data/gtfs/
 # the three hand-tuned config JSONs are the recipe and DO get committed
 otp-data/*
 !otp-data/*.json
+
+
+/reports

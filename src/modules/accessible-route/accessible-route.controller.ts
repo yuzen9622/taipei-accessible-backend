@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import { getCoordinates, sendResponse } from "../../config/lib";
-import { getCity } from "../../config/map";
+import { sendResponse } from "../../config/lib";
+import { getCity, getCoordinates } from "../../adapters/google.adapter";
 import {
   findAccessibleRoutes,
   resolveCityFromStops,

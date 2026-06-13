@@ -1,4 +1,5 @@
 import type { STAApiResponse } from "../../types/air";
+import { getCityZh } from "../../adapters/google.adapter";
 
 export interface AirReading {
   area: string | null;
@@ -13,16 +14,7 @@ export interface AirData {
 }
 
 export async function getAirData(lat: number, lng: number): Promise<AirData | null> {
-  const geocode = await fetch(
-    `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${process.env.GOOGLE_MAPS_API_KEY}&language=zh-TW`,
-  );
-  const geocodeData = (await geocode.json()) as any;
-
-  let city = "臺北市";
-  const cityComp = geocodeData?.results?.[0]?.address_components?.find((c: any) =>
-    c.types.includes("administrative_area_level_1"),
-  );
-  if (cityComp) city = (cityComp.long_name as string).replace("台", "臺");
+  const city = await getCityZh(lat, lng);
 
   const staUrl =
     `https://sta.ci.taiwan.gov.tw/STA_AirQuality_EPAIoT/v1.0/Datastreams` +
