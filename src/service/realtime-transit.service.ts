@@ -41,7 +41,7 @@
 
 import { tdxFetch } from "../config/fetch";
 import { busUrl, trainUrl, traUrl } from "../config/transit";
-import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-router.service";
+import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-time";
 import { taipeiSecondsOfDay, taipeiYmdDash } from "../config/taipei-time";
 import type {
   AccessibleRoute,

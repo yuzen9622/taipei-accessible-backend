@@ -102,11 +102,12 @@ src/
 │       └── index.ts
 │
 ├── service/                        # 跨模組共用服務
-│   ├── accessible-route.service.ts # 路線規劃主引擎
+│   ├── accessible-route.service.ts # 路線規劃主引擎（編排 OTP + TDX）
 │   ├── realtime-transit.service.ts # TDX 即時資料 overlay
-│   ├── gtfs-router.service.ts      # GTFS 時刻表查詢
-│   ├── otp-routing.service.ts      # OTP2 sidecar
-│   ├── tdx-routing.service.ts      # TDX 路線規劃
+│   ├── otp-routing.service.ts      # OTP2 sidecar（主路由引擎）
+│   ├── tdx-routing.service.ts      # TDX MaaS 補位（覆蓋 OTP 缺口）
+│   ├── route-a11y.service.ts       # leg 無障礙 / 室內導引強化（OTP+TDX 共用）
+│   ├── gtfs-time.ts                # GTFS 時間字串工具（realtime overlay 用）
 │   ├── a11y-exit.service.ts
 │   ├── facility-status.service.ts
 │   ├── indoor-graph.service.ts
@@ -119,7 +120,7 @@ src/
 │   ├── a11y.model.ts
 │   ├── bathroom.model.ts
 │   ├── osm-a11y.model.ts
-│   └── ...（共 15 個）
+│   └── ...（共 12 個）
 │
 ├── config/                         # ⚠️ 部分檔案超出 config 範疇
 │   ├── fetch.ts                    # ✅ tdxFetch wrapper
@@ -148,7 +149,7 @@ Request
   → accessible-route.controller.ts  (parse / validate)
   → accessible-route.service.ts     (業務邏輯)
     → config/ors.ts                 (外部 ORS API)
-    → service/gtfs-router.service.ts
+    → service/otp-routing.service.ts / tdx-routing.service.ts
     → model/bus-stop.model.ts
   → sendResponse()
 ```
@@ -585,7 +586,6 @@ Controller **禁止**：
 
 | 下層 planner（`src/service/`） | 向上 import 的型別 | 行號 |
 |---|---|---|
-| `gtfs-router.service.ts` | AccessibleRoute, WalkLeg, BusLeg, …, WaitInfo | :53–61 |
 | `tdx-routing.service.ts` | AccessibleRoute, WalkLeg, … | :34–41 |
 | `otp-routing.service.ts` | AccessibleRoute, WalkLeg, …, WaitInfo | :18–26 |
 | `realtime-transit.service.ts` | AccessibleRoute, BusLeg, TraLeg | :46–50 |
@@ -605,7 +605,7 @@ Controller **禁止**：
                 │（向上，違反分層）         │（為了繞開靜態循環）
         ┌───────┴─────────────────────────▼───────────┐
         │  src/service/ 各 planner                     │
-        │  gtfs-router / tdx-routing / otp-routing …   │
+        │  tdx-routing / otp-routing / route-a11y …    │
         └─────────────────────────────────────────────┘
 ```
 

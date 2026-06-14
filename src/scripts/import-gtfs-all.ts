@@ -1,17 +1,16 @@
 /**
- * Run all GTFS import scripts in dependency order.
+ * Run the GTFS Mongo import scripts in dependency order.
  * Recommended to run individual scripts first to verify, then use this for a full refresh.
  *
- * Order:
- *   1. levels        (no deps)
- *   2. stops         (refs levels)
- *   3. routes        (no deps)
- *   4. trips         (refs routes, calendar)
- *   5. calendar      (no deps)
- *   6. pathways      (refs stops)
- *   7. frequencies   (refs trips)
- *   8. stop-times    (refs trips, stops — slowest)
- *   9. shapes        (refs trips — slowest)
+ * Only the collections the live server still reads are imported:
+ *   1. levels    (no deps)        — indoor graph
+ *   2. stops     (refs levels)    — indoor graph (station/entrance/platform nodes)
+ *   3. trips     (no runtime deps)— OTP direction_id lookup
+ *   4. pathways  (refs stops)     — indoor graph
+ *
+ * The schedule tables (routes/calendar/frequencies/stop_times/shapes) backed the
+ * retired in-Mongo GTFS router and are no longer imported — OTP reads the GTFS
+ * feed files (data/gtfs) directly.
  *
  * Run: npx ts-node --max-old-space-size=2048 src/scripts/import-gtfs-all.ts
  */
@@ -25,13 +24,8 @@ const execFileAsync = promisify(execFile);
 const SCRIPTS = [
   "import-gtfs-levels.ts",
   "import-gtfs-stops.ts",
-  "import-gtfs-routes.ts",
-  "import-gtfs-calendar.ts",
   "import-gtfs-trips.ts",
   "import-gtfs-pathways.ts",
-  "import-gtfs-frequencies.ts",
-  "import-gtfs-stop-times.ts",
-  "import-gtfs-shapes.ts",
 ];
 
 async function runScript(scriptName: string): Promise<void> {
@@ -58,7 +52,6 @@ async function runScript(scriptName: string): Promise<void> {
 async function main() {
   console.log("=== GTFS Full Import ===");
   console.log(`Scripts: ${SCRIPTS.length}`);
-  console.log("Warning: stop_times and shapes will take 10-20 min each\n");
 
   const overallStart = Date.now();
 
