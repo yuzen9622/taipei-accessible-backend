@@ -178,7 +178,7 @@ docker compose restart otp || docker restart otp || die "container restart faile
 
 log "waiting for healthcheck"
 for attempt in $(seq 1 30); do
-  if curl -fsS "http://localhost:8080/otp/actuators/health" >/dev/null 2>&1; then
+  if curl -fsS "http://localhost:18080/otp/actuators/health" >/dev/null 2>&1; then
     log "OTP healthy — build complete"
     rm -f "$OTP_DATA_DIR/graph.obj.prev"
     exit 0
