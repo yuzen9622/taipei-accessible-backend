@@ -38,6 +38,8 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
     volumes:
       - mongo-data:/data/db
+    ports:
+      - "127.0.0.1:27018:27017"
     # No host port published — only the backend (same network) reaches it.
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
@@ -57,7 +59,9 @@ services:
     # data directory — pass flags only, never a path.
     command: ["--load"]
     ports:
-      - "127.0.0.1:8080:8080"
+      # "主機埠:容器埠" — 主機 8080 已被佔用，改用 18080 對外；容器內仍是
+      # 8080，backend 走內網 otp:8080 連，不受影響。
+      - "127.0.0.1:18080:8080"
     volumes:
       - ${OTP_DATA_DIR:-/var/otp}:/var/opentripplanner
     environment:
