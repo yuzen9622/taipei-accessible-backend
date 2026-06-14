@@ -38,6 +38,8 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
     volumes:
       - mongo-data:/data/db
+    ports:
+      - "127.0.0.1:27018:27017"
     # No host port published — only the backend (same network) reaches it.
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
