@@ -1,7 +1,8 @@
 # Routing Pipeline 異常診斷報告
 
 > 日期：2026-06-11 ｜ Branch：`feat/hybrid-transit-routing`
-> 狀態：草稿（待修訂）
+> 狀態：🗑️ **已過時（2026-06）**——本報告診斷的本地 GTFS planner（`gtfs-router.service.ts`）已退役並刪除，
+> 全面改用 OTP2 + TDX MaaS。文中 `gtfs-router.service.ts:NNN` 行號參照已失效，保留為歷史紀錄。
 
 ## TL;DR
 

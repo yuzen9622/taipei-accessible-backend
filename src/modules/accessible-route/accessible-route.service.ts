@@ -1491,7 +1491,7 @@ async function enrichTopRoutes(
   mode: AccessibilityMode,
 ): Promise<void> {
   const { nearbyA11y, attachA11yToLeg, deriveHighlights, enrichLegIndoor } =
-    await import("../../service/gtfs-router.service");
+    await import("../../service/route-a11y.service");
 
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -1680,13 +1680,12 @@ export async function findAccessibleRoutes(
   const geoQuery = (coord: { lat: number; lng: number }, dist: number) =>
     nearQuery([coord.lng, coord.lat], dist);
 
-  // Phase 7/16: planner fan-out. USE_GTFS_ROUTER drives the local GTFS graph
-  // (plus TDX MaaS gap-filler when USE_TDX_ROUTING), USE_OTP_ROUTER the OTP2
-  // sidecar (Phase 16 rollout: "false" | "shadow" | "true"). All planners map
-  // to AccessibleRoute and merge in finalizeRoutes — no legacy TDX leg-builders
-  // run on this path. Shadow mode runs OTP in parallel but only logs a diff
-  // against the merged baseline; its results never reach the response.
-  // All services import only TYPES from this file, so there is no runtime cycle.
+  // Phase 16: planner fan-out. USE_OTP_ROUTER drives the OTP2 sidecar (rollout:
+  // "false" | "shadow" | "true"); USE_TDX_ROUTING adds the TDX MaaS gap-filler.
+  // Both map to AccessibleRoute and merge in finalizeRoutes — no legacy TDX
+  // leg-builders run on this path. Shadow mode runs OTP in parallel but only
+  // logs a diff against the baseline; its results never reach the response.
+  // (The retired local GTFS planner formerly lived behind USE_GTFS_ROUTER.)
   const otpFlag = (process.env.USE_OTP_ROUTER ?? "false").toLowerCase();
   const otpMerged = otpFlag === "true";
   const otpShadow = otpFlag === "shadow";
@@ -1703,7 +1702,7 @@ export async function findAccessibleRoutes(
           .catch((): AccessibleRoute[] => [])
       : Promise.resolve<AccessibleRoute[]>([]);
 
-  if (process.env.USE_GTFS_ROUTER === "true" || otpMerged) {
+  if (otpMerged) {
     const planT: Record<string, number> = {};
     const timed = <T,>(label: string, p: Promise<T>): Promise<T> => {
       const t0 = Date.now();
@@ -1711,23 +1710,9 @@ export async function findAccessibleRoutes(
         planT[label] = Date.now() - t0;
       });
     };
-    const [gtfsRoutes, tdxRoutes] = await Promise.all([
-      process.env.USE_GTFS_ROUTER === "true"
-        ? timed(
-            "gtfs",
-            import("../../service/gtfs-router.service")
-              .then((m) =>
-                m.planGtfsRoute(origin, destination, {
-                  maxTransfers,
-                  mode,
-                  departureTime: opts.departureTime,
-                }),
-              )
-              .catch((): AccessibleRoute[] => []),
-          )
-        : Promise.resolve<AccessibleRoute[]>([]),
+    const tdxRoutes =
       process.env.USE_TDX_ROUTING === "true"
-        ? timed(
+        ? await timed(
             "tdx",
             import("../../service/tdx-routing.service")
               .then((m) =>
@@ -1737,17 +1722,8 @@ export async function findAccessibleRoutes(
               )
               .catch((): AccessibleRoute[] => []),
           )
-        : Promise.resolve<AccessibleRoute[]>([]),
-    ]);
-    const baseline = [...gtfsRoutes, ...tdxRoutes];
-    // Shadow never blocks the response: the diff line lands whenever OTP
-    // finishes (national cross-county plans can take seconds).
-    if (otpShadow) {
-      otpPromise.then((otpRoutes) => logOtpShadowDiff(otpRoutes, baseline));
-    }
-    const merged = otpMerged
-      ? [...baseline, ...(await timed("otp", otpPromise))]
-      : baseline;
+        : [];
+    const merged = [...tdxRoutes, ...(await timed("otp", otpPromise))];
     console.log("[route-timing] planners", JSON.stringify(planT));
     if (!merged.length) return [];
     return finalizeRoutes(

@@ -301,8 +301,8 @@ OTP planner 不感知。
 | R0 架設 | `USE_OTP_ROUTER=false` | OTP 起服務，僅手動測試 | §11 冒煙全過 |
 | R1 影子 | `USE_OTP_ROUTER=shadow` | OTP 平行跑、結果只記 log 不進 response，與現行結果 diff | 兩週 diff 無 OTP 端缺路線/壞資料 |
 | R2 合流 | `USE_OTP_ROUTER=true` ＋ GTFS/TDX 照舊 | 三 planner 合流，靠 `collapseLogicalDuplicates` 收斂 | 評分排序穩定、無新類型客訴 |
-| R3 主引擎 | `USE_GTFS_ROUTER=false` | 自製 graph router 退役（程式保留一版） | 一個月穩定 |
-| R4 清理 | — | 刪自製 transit graph 程式與相關 Mongo collections（stop 查詢用的留下） | — |
+| R3 主引擎 ✅ | 移除 `USE_GTFS_ROUTER`（OTP 為主、TDX 補位） | 自製 graph router 退役 | ✅ 2026-06 完成 |
+| R4 清理 ✅ | — | 已刪 `gtfs-router.service.ts` 等程式碼；排程表 collections（`gtfs_routes/calendar/stop_times/shapes/frequencies` + `station_clusters`）待手動 drop，`gtfs_stops/trips/pathways/levels` 保留 | ✅ 2026-06（程式）｜DB drop 待執行 |
 
 每一階段都可單獨回退（改 env 重啟即可），無資料遷移。
 

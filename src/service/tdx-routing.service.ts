@@ -1,12 +1,11 @@
 /**
- * TDX MaaS Routing API client (hybrid coverage for Phase 7).
+ * TDX MaaS Routing API client (hybrid coverage gap-filler).
  *
- * The GTFS router (gtfs-router.service.ts) only covers systems whose schedules
- * exist in the imported GTFS feed (TRTC/KRTC/THSR/TYMC/KLRT + bus). TRA (台鐵),
- * intercity rail, and other gaps are not in that feed. This service calls TDX's
- * hosted multimodal routing engine to fill those gaps, then maps its itineraries
- * into the same AccessibleRoute shape and enriches stops with OsmA11y so the
- * results compete fairly in scoreAndRank().
+ * The OTP2 planner can miss systems/itineraries that TDX's hosted engine covers
+ * (e.g. TRA 台鐵, intercity rail, some operator-specific services). When
+ * USE_TDX_ROUTING is on, this service calls TDX's hosted multimodal routing
+ * engine, maps its itineraries into the same AccessibleRoute shape, and enriches
+ * stops with OsmA11y so the results compete fairly in scoreAndRank().
  *
  * Endpoint (verified live):
  *   GET https://tdx.transportdata.tw/api/maas/routing
@@ -30,7 +29,7 @@ import {
   nearbyA11y,
   deriveHighlights,
   attachA11yToLeg,
-} from "./gtfs-router.service";
+} from "./route-a11y.service";
 import type {
   AccessibleRoute,
   WalkLeg,

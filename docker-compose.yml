@@ -1,10 +1,52 @@
-# Phase 16: OTP2 transit-engine sidecar (spec §4, §9).
-# The Node orchestrator talks to it over the internal network only; port 8080
-# is bound to localhost so it is never exposed publicly.
+# Full stack: Node API + MongoDB + OTP2 transit-engine sidecar.
 #
-#   docker compose up -d otp        # serve the prebuilt graph (--load)
+#   docker compose up -d            # build + start everything
+#   docker compose up -d otp        # OTP only (serve prebuilt graph)
 #   src/scripts/build-otp-graph.sh  # weekly graph rebuild (cron, spec §5)
+#
+# Services reach each other by name on the default compose network:
+#   backend → mongo:27017, otp:8080  (so OTP_BASE_URL/DATABASE_URL are overridden
+#   below to those, regardless of the localhost values in .env).
 services:
+  backend:
+    build: .
+    container_name: taipei-backend
+    # env_file injects the whole .env into the container environment, so
+    # `node dist/server.js` sees the vars WITHOUT needing dotenv. The two
+    # host-centric values are overridden for the compose network below.
+    env_file: .env
+    environment:
+      OTP_BASE_URL: http://otp:8080
+      DATABASE_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin
+    ports:
+      # Publish the API. Prefix 127.0.0.1: to keep it host-only.
+      - "${PORT:-8000}:${PORT:-8000}"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      otp:
+        condition: service_started
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: mongo
+    # Root creds enable auth on first init; the API connects as root with
+    # authSource=admin (internal single-app DB). MONGO_ROOT_* come from .env.
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+    # No host port published — only the backend (same network) reaches it.
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
   otp:
     # Pin the minor version (spec §4.1) — never `latest`.
     # 2.9.0 (Java 25): planConnection supports stop-location origins, which
@@ -31,3 +73,6 @@ services:
       retries: 3
       start_period: 120s
     restart: unless-stopped
+
+volumes:
+  mongo-data:
