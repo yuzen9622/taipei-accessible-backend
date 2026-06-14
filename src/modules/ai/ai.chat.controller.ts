@@ -163,11 +163,11 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
         useModel,
         useTemp,
         userLocation,
-        (name, args) => sendSse(res, "tool_call", { name, arguments: args }),
+        (name, args) => sendSse(res, "tool_call", { name, args }),
         (name, result) => sendSse(res, "tool_result", { name, result })
       );
 
-      // Phase 2: final answer as SSE text chunks
+      // Phase 2: final answer streamed token-by-token (flat { text } payload)
       const finalStream = await openai.chat.completions.create({
         model: useModel,
         messages,
@@ -176,10 +176,11 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       });
 
       for await (const chunk of finalStream) {
-        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        const text = chunk.choices[0]?.delta?.content;
+        if (text) sendSse(res, "token", { text });
       }
 
-      res.write("data: [DONE]\n\n");
+      res.write("event: done\ndata: done\n\n");
       res.end();
     } catch (error: any) {
       console.error("[ai/chat stream]", error);
@@ -187,7 +188,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
         code: 500,
         message: error?.message ?? "Internal server error",
       });
-      res.write("data: [DONE]\n\n");
+      res.write("event: done\ndata: done\n\n");
       res.end();
     }
     return;
