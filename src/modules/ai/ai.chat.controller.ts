@@ -3,7 +3,7 @@ import { openai, model as defaultModel } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
-import { runToolLoop, type OAIMessage } from "./ai.service";
+import { runToolLoop, type OAIMessage } from "./ai-chat.service";
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
 

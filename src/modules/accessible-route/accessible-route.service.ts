@@ -42,6 +42,13 @@ import {
 } from "../../types/transit";
 import { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
+import { getCity, getCoordinates } from "../../adapters/google.adapter";
+// Import the AI service file directly (not the ../ai barrel): the barrel pulls
+// in the router → chat controller → ai-chat.service → agent-tools → back here,
+// which would be a cycle. ai.service itself only depends on the Gemini config.
+import { parseRouteIntent, type RouteIntent } from "../ai/ai.service";
+import { ResponseCode } from "../../types/code";
+import { ERROR_MESSAGE } from "../../constants/messages";
 
 // ─── Response types ──────────────────────────────────────────────────────────
 // The route/leg domain model now lives in src/types/route.ts (the neutral types
@@ -1676,6 +1683,160 @@ export async function resolveCityFromStops(
   } catch {
     return null;
   }
+}
+
+// ─── Request orchestration ───────────────────────────────────────────────────
+// The controller-free part of POST /accessible-route: resolve a natural-language
+// query into endpoints (optional intent switch), geocode them, pick the city,
+// normalize departureTime, then plan. Returns a tagged result the controller
+// maps straight onto sendResponse — no req/res in here.
+
+export interface PlanRouteRequest {
+  origin?: unknown;
+  destination?: unknown;
+  query?: string;
+  userLocation?: { latitude: number; longitude: number };
+  maxTransfers?: number;
+  departureTime?: string;
+  format?: string;
+  mode?: RouteIntent["mode"];
+}
+
+export type PlanRouteResult =
+  | {
+      ok: true;
+      data: {
+        origin: { lat: number; lng: number };
+        destination: { lat: number; lng: number };
+        city: TaiwanCityEn;
+        routes: AccessibleRoute[];
+        intent?: RouteIntent;
+      };
+    }
+  | { ok: false; status: ResponseCode; error: string };
+
+export async function planAccessibleRouteFromRequest(
+  body: PlanRouteRequest,
+): Promise<PlanRouteResult> {
+  let { origin, destination } = body;
+  const { query, userLocation, maxTransfers, departureTime, format } = body;
+  let mode = body.mode;
+
+  // Phase 9 — optional intent switch: a natural-language `query` is parsed into
+  // origin/destination (+ mode) when explicit endpoints are not supplied.
+  let intent: RouteIntent | null = null;
+  if (query && (!origin || !destination)) {
+    try {
+      intent = await parseRouteIntent(query);
+    } catch (err) {
+      console.error("[accessible-route] intent parsing failed", err);
+      return {
+        ok: false,
+        status: ResponseCode.INTERNAL_ERROR,
+        error:
+          "語意解析服務暫時無法使用，請稍後再試或直接提供 origin/destination",
+      };
+    }
+    if (!intent) {
+      return {
+        ok: false,
+        status: ResponseCode.INVALID_INPUT,
+        error: ERROR_MESSAGE.INTENT_PARSE_FAILED,
+      };
+    }
+    origin =
+      intent.from === "current_location"
+        ? userLocation ?? undefined
+        : intent.from;
+    destination = intent.to;
+    // Explicit body mode wins; otherwise adopt the parsed intent's mode.
+    mode = mode ?? intent.mode;
+    if (!origin) {
+      return {
+        ok: false,
+        status: ResponseCode.INVALID_INPUT,
+        error: "查詢使用了『目前位置』，請一併提供 userLocation 座標",
+      };
+    }
+  }
+
+  if (!origin || !destination) {
+    return {
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      error: `${ERROR_MESSAGE.MISSING_PARAMS}：origin, destination`,
+    };
+  }
+
+  // Resolve coordinates for both ends
+  const [originCoords, destCoords] = await Promise.all([
+    typeof origin === "string"
+      ? getCoordinates(origin)
+      : Promise.resolve(origin as { latitude: number; longitude: number }),
+    typeof destination === "string"
+      ? getCoordinates(destination)
+      : Promise.resolve(destination as { latitude: number; longitude: number }),
+  ]);
+
+  if (!originCoords || !destCoords) {
+    return {
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      error: "無法解析出發地或目的地座標",
+    };
+  }
+
+  const lat = originCoords.latitude;
+  const lng = originCoords.longitude;
+
+  // Local stop-based city lookup (~10ms) replaces the per-request Google
+  // reverse geocode; Google remains the fallback for stop-less areas.
+  const city = ((await resolveCityFromStops(lat, lng)) ??
+    (await getCity(lat, lng))) as TaiwanCityEn;
+
+  // Phase 11/12: thread mode + transfer budget + departure time through.
+  // A departureTime in the past (stale client state / clock skew) would make
+  // every planner return buses that already left — treat it as "now".
+  const parsedDeparture = departureTime ? new Date(departureTime) : undefined;
+  const futureDeparture =
+    parsedDeparture &&
+    !isNaN(parsedDeparture.getTime()) &&
+    parsedDeparture.getTime() > Date.now()
+      ? parsedDeparture
+      : undefined;
+
+  const routes = await findAccessibleRoutes(
+    { lat, lng },
+    { lat: destCoords.latitude, lng: destCoords.longitude },
+    city,
+    {
+      mode: mode ?? "normal",
+      maxTransfers: (maxTransfers ?? 1) as 0 | 1 | 2,
+      departureTime: futureDeparture,
+      // Phase 14: "compact" dedupes facilities into route.facilities.
+      format: format === "compact" ? "compact" : "standard",
+    },
+  );
+
+  if (!routes.length) {
+    return {
+      ok: false,
+      status: ResponseCode.NOT_FOUND,
+      error:
+        "找不到連通的公車或捷運路線，請嘗試擴大搜尋範圍或確認出發地/目的地",
+    };
+  }
+
+  return {
+    ok: true,
+    data: {
+      origin: { lat, lng },
+      destination: { lat: destCoords.latitude, lng: destCoords.longitude },
+      city,
+      routes,
+      ...(intent ? { intent } : {}),
+    },
+  };
 }
 
 export async function findAccessibleRoutes(
