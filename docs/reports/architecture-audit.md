@@ -10,7 +10,7 @@
 > `tsc` 全綠、git 全部記錄為 rename（保留歷史）。結果：`*.service.ts` 只剩在模組內，命名不再重複。
 > 其餘 Slice（0 常數、1 邊界驗證、2 AI/air service、3 controller 瘦身、5 config 領域邏輯、6 治理）仍待辦。
 
-## 與既有 `docs/ARCHITECTURE.md` 的關係
+## 與既有 `docs/reports/ARCHITECTURE.md` 的關係
 
 `ARCHITECTURE.md`（v1.1）記錄的是 **歷史重構（Phase 1–8）** 與「路由型別倒置依賴」的深度分析。
 本報告 **不取代** 它，而是補上它未涵蓋的面向（回應契約、魔術常數、邊界驗證、跨層 import），

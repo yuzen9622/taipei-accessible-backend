@@ -1,7 +1,7 @@
 # OTP2 維運手冊 — 資料更新、建圖、Docker 部署
 
 > 適用版本：OpenTripPlanner **2.9.0**（pin 於 `docker-compose.yml` 與 `build-otp-graph.sh`，2026-06-12 起）
-> 相關規格：`docs/FUNCTIONAL_SPEC_OTP2_INTEGRATION.md`（Phase 16）
+> 相關規格：`docs/specs/FUNCTIONAL_SPEC_OTP2_INTEGRATION.md`（Phase 16）
 
 本文件涵蓋 OTP sidecar 的完整生命週期：GTFS 資料取得 → 清理 → 台鐵班表注入 → graph 建置 → Docker 配置與啟動 → 驗證 → 故障排查。
 
