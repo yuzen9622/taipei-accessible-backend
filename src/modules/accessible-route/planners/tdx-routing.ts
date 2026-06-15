@@ -18,18 +18,19 @@
  * departure → intermediateStops → arrival coordinates.
  */
 
-import { tdxFetch } from "../config/fetch";
+import { tdxFetch } from "../../../config/fetch";
+import { metroLineCode } from "../../../config/transit";
 import {
   taipeiIsoLocal,
   taipeiYmdDash,
   taipeiWallClock,
   addTaipeiDays,
-} from "../config/taipei-time";
+} from "../../../config/taipei-time";
 import {
   nearbyA11y,
   deriveHighlights,
   attachA11yToLeg,
-} from "./route-a11y.service";
+} from "./route-a11y";
 import type {
   AccessibleRoute,
   WalkLeg,
@@ -37,7 +38,7 @@ import type {
   MetroLeg,
   ThsrLeg,
   TraLeg,
-} from "../types/route";
+} from "../../../types/route";
 
 const ROUTING_URL = "https://tdx.transportdata.tw/api/maas/routing";
 const METRO_AGENCIES = new Set([
@@ -169,7 +170,10 @@ function transitSectionToLeg(
   if (isThsr) {
     return {
       type: "THSR",
-      trainNo: t.number || t.headsign || lineName,
+      // headsign is the DESTINATION (e.g. "南港"), never a train number — when
+      // MaaS omits number, fall back to the line label like TRA; the real
+      // TrainNo is recovered later via recoverThsrTrainNos (OD timetable).
+      trainNo: t.number || lineName,
       departureStation: fromName,
       arrivalStation: toName,
       departureStationUID: fromName,
@@ -209,6 +213,7 @@ function transitSectionToLeg(
     return {
       type: "METRO",
       railSystem: agencyId,
+      lineId: metroLineCode(agencyId, t.number || lineName),
       lineName,
       lineUid: t.number || lineName,
       departureStation: fromName,

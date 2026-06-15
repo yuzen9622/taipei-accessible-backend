@@ -5,9 +5,10 @@ import {
   thsrUrl,
   traUrl,
   CITY_METRO_SYSTEMS,
+  metroLineCode,
 } from "../../config/transit";
-import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
-import { orsWalkingRoute } from "../../service/ors.service";
+import { getRouteDirectionImproved, equalStopName } from "../../utils/transit-text";
+import { orsWalkingRoute } from "./planners/ors";
 import {
   taipeiMinutesOfDay,
   taipeiWeekday,
@@ -18,7 +19,7 @@ import {
   routeCost,
   MODE_PROFILES,
   AccessibilityMode,
-} from "../../config/a11y-scoring";
+} from "./scoring";
 import BusStopModel from "../../model/bus-stop.model";
 import MetroStationModel from "../../model/metro-station.model";
 import TrainStationModel from "../../model/train-station.model";
@@ -41,6 +42,13 @@ import {
 } from "../../types/transit";
 import { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
+import { getCity, getCoordinates } from "../../adapters/google.adapter";
+// Import the AI service file directly (not the ../ai barrel): the barrel pulls
+// in the router → chat controller → ai-chat.service → agent-tools → back here,
+// which would be a cycle. ai.service itself only depends on the Gemini config.
+import { parseRouteIntent, type RouteIntent } from "../ai/ai.service";
+import { ResponseCode } from "../../types/code";
+import { ERROR_MESSAGE } from "../../constants/messages";
 
 // ─── Response types ──────────────────────────────────────────────────────────
 // The route/leg domain model now lives in src/types/route.ts (the neutral types
@@ -720,6 +728,7 @@ export async function buildMetroCandidate(
   const metroLeg: MetroLeg = {
     type: "METRO",
     railSystem,
+    lineId: metroLineCode(railSystem, lineUid),
     lineName: lineUid,
     lineUid,
     departureStation: boardStation.stationName.Zh_tw,
@@ -1295,7 +1304,7 @@ function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
 //
-// Uses the evidence-based scoring engine from src/config/a11y-scoring.ts.
+// Uses the evidence-based scoring engine from scoring.ts (this module).
 // See that module for full citation list and weight rationale.
 //
 // Summary of key design choices:
@@ -1332,7 +1341,12 @@ export function scoreAndRank(
       // score: cost = time + transfers × 5 × modePenalty + (100 − score) × 0.3.
       return {
         route: r,
-        cost: routeCost(r.totalMinutes, r.transferCount, result.totalScore, mode),
+        cost: routeCost(
+          r.totalMinutes,
+          r.transferCount,
+          result.totalScore,
+          mode,
+        ),
       };
     })
     .sort((a, b) => a.cost - b.cost)
@@ -1361,7 +1375,8 @@ function isRouteExcluded(
   route: AccessibleRoute,
   mode: AccessibilityMode,
 ): boolean {
-  if (!(MODE_PROFILES[mode] ?? MODE_PROFILES.normal).tier1Required) return false;
+  if (!(MODE_PROFILES[mode] ?? MODE_PROFILES.normal).tier1Required)
+    return false;
 
   for (const leg of route.legs) {
     if (leg.type === "WALK") {
@@ -1491,7 +1506,7 @@ async function enrichTopRoutes(
   mode: AccessibilityMode,
 ): Promise<void> {
   const { nearbyA11y, attachA11yToLeg, deriveHighlights, enrichLegIndoor } =
-    await import("../../service/route-a11y.service");
+    await import("./planners/route-a11y");
 
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -1599,9 +1614,8 @@ async function finalizeRoutes(
   t.enrich = Date.now() - t0;
   t0 = Date.now();
   try {
-    const { overlayFacilityStatus } = await import(
-      "../../service/facility-status.service"
-    );
+    const { overlayFacilityStatus } =
+      await import("./planners/facility-status");
     await overlayFacilityStatus(top, mode);
   } catch (err) {
     console.warn("[accessible-route] facility status overlay failed", err);
@@ -1609,9 +1623,12 @@ async function finalizeRoutes(
   t.facilityOverlay = Date.now() - t0;
   t0 = Date.now();
   try {
-    const { overlayRealtimeTransit } = await import(
-      "../../service/realtime-transit.service"
-    );
+    const { overlayRealtimeTransit, recoverRailTrainNos } =
+      await import("./planners/realtime-transit");
+    // Rail (TRA+THSR) trainNo/time recovery is schedule-based; run it FIRST so
+    // it backfills the real (snapped) train number before the realtime pass
+    // matches TRA delays against it.
+    await recoverRailTrainNos(top).catch(() => undefined);
     await overlayRealtimeTransit(top, { departureTime });
   } catch (err) {
     console.warn("[accessible-route] realtime transit overlay failed", err);
@@ -1668,6 +1685,160 @@ export async function resolveCityFromStops(
   }
 }
 
+// ─── Request orchestration ───────────────────────────────────────────────────
+// The controller-free part of POST /accessible-route: resolve a natural-language
+// query into endpoints (optional intent switch), geocode them, pick the city,
+// normalize departureTime, then plan. Returns a tagged result the controller
+// maps straight onto sendResponse — no req/res in here.
+
+export interface PlanRouteRequest {
+  origin?: unknown;
+  destination?: unknown;
+  query?: string;
+  userLocation?: { latitude: number; longitude: number };
+  maxTransfers?: number;
+  departureTime?: string;
+  format?: string;
+  mode?: RouteIntent["mode"];
+}
+
+export type PlanRouteResult =
+  | {
+      ok: true;
+      data: {
+        origin: { lat: number; lng: number };
+        destination: { lat: number; lng: number };
+        city: TaiwanCityEn;
+        routes: AccessibleRoute[];
+        intent?: RouteIntent;
+      };
+    }
+  | { ok: false; status: ResponseCode; error: string };
+
+export async function planAccessibleRouteFromRequest(
+  body: PlanRouteRequest,
+): Promise<PlanRouteResult> {
+  let { origin, destination } = body;
+  const { query, userLocation, maxTransfers, departureTime, format } = body;
+  let mode = body.mode;
+
+  // Phase 9 — optional intent switch: a natural-language `query` is parsed into
+  // origin/destination (+ mode) when explicit endpoints are not supplied.
+  let intent: RouteIntent | null = null;
+  if (query && (!origin || !destination)) {
+    try {
+      intent = await parseRouteIntent(query);
+    } catch (err) {
+      console.error("[accessible-route] intent parsing failed", err);
+      return {
+        ok: false,
+        status: ResponseCode.INTERNAL_ERROR,
+        error:
+          "語意解析服務暫時無法使用，請稍後再試或直接提供 origin/destination",
+      };
+    }
+    if (!intent) {
+      return {
+        ok: false,
+        status: ResponseCode.INVALID_INPUT,
+        error: ERROR_MESSAGE.INTENT_PARSE_FAILED,
+      };
+    }
+    origin =
+      intent.from === "current_location"
+        ? userLocation ?? undefined
+        : intent.from;
+    destination = intent.to;
+    // Explicit body mode wins; otherwise adopt the parsed intent's mode.
+    mode = mode ?? intent.mode;
+    if (!origin) {
+      return {
+        ok: false,
+        status: ResponseCode.INVALID_INPUT,
+        error: "查詢使用了『目前位置』，請一併提供 userLocation 座標",
+      };
+    }
+  }
+
+  if (!origin || !destination) {
+    return {
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      error: `${ERROR_MESSAGE.MISSING_PARAMS}：origin, destination`,
+    };
+  }
+
+  // Resolve coordinates for both ends
+  const [originCoords, destCoords] = await Promise.all([
+    typeof origin === "string"
+      ? getCoordinates(origin)
+      : Promise.resolve(origin as { latitude: number; longitude: number }),
+    typeof destination === "string"
+      ? getCoordinates(destination)
+      : Promise.resolve(destination as { latitude: number; longitude: number }),
+  ]);
+
+  if (!originCoords || !destCoords) {
+    return {
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      error: "無法解析出發地或目的地座標",
+    };
+  }
+
+  const lat = originCoords.latitude;
+  const lng = originCoords.longitude;
+
+  // Local stop-based city lookup (~10ms) replaces the per-request Google
+  // reverse geocode; Google remains the fallback for stop-less areas.
+  const city = ((await resolveCityFromStops(lat, lng)) ??
+    (await getCity(lat, lng))) as TaiwanCityEn;
+
+  // Phase 11/12: thread mode + transfer budget + departure time through.
+  // A departureTime in the past (stale client state / clock skew) would make
+  // every planner return buses that already left — treat it as "now".
+  const parsedDeparture = departureTime ? new Date(departureTime) : undefined;
+  const futureDeparture =
+    parsedDeparture &&
+    !isNaN(parsedDeparture.getTime()) &&
+    parsedDeparture.getTime() > Date.now()
+      ? parsedDeparture
+      : undefined;
+
+  const routes = await findAccessibleRoutes(
+    { lat, lng },
+    { lat: destCoords.latitude, lng: destCoords.longitude },
+    city,
+    {
+      mode: mode ?? "normal",
+      maxTransfers: (maxTransfers ?? 1) as 0 | 1 | 2,
+      departureTime: futureDeparture,
+      // Phase 14: "compact" dedupes facilities into route.facilities.
+      format: format === "compact" ? "compact" : "standard",
+    },
+  );
+
+  if (!routes.length) {
+    return {
+      ok: false,
+      status: ResponseCode.NOT_FOUND,
+      error:
+        "找不到連通的公車或捷運路線，請嘗試擴大搜尋範圍或確認出發地/目的地",
+    };
+  }
+
+  return {
+    ok: true,
+    data: {
+      origin: { lat, lng },
+      destination: { lat: destCoords.latitude, lng: destCoords.longitude },
+      city,
+      routes,
+      ...(intent ? { intent } : {}),
+    },
+  };
+}
+
 export async function findAccessibleRoutes(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
@@ -1691,7 +1862,7 @@ export async function findAccessibleRoutes(
   const otpShadow = otpFlag === "shadow";
   const otpPromise: Promise<AccessibleRoute[]> =
     otpMerged || otpShadow
-      ? import("../../service/otp-routing.service")
+      ? import("./planners/otp-routing")
           .then((m) =>
             m.planOtpRoute(origin, destination, {
               maxTransfers,
@@ -1704,7 +1875,7 @@ export async function findAccessibleRoutes(
 
   if (otpMerged) {
     const planT: Record<string, number> = {};
-    const timed = <T,>(label: string, p: Promise<T>): Promise<T> => {
+    const timed = <T>(label: string, p: Promise<T>): Promise<T> => {
       const t0 = Date.now();
       return p.finally(() => {
         planT[label] = Date.now() - t0;
@@ -1714,7 +1885,7 @@ export async function findAccessibleRoutes(
       process.env.USE_TDX_ROUTING === "true"
         ? await timed(
             "tdx",
-            import("../../service/tdx-routing.service")
+            import("./planners/tdx-routing")
               .then((m) =>
                 m.planTdxRoute(origin, destination, {
                   departureTime: opts.departureTime,

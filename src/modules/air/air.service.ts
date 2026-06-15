@@ -1,5 +1,8 @@
-import type { STAApiResponse } from "../../types/air";
+import type { STAApiResponse, AIResponse } from "../../types/air";
 import { getCityZh } from "../../adapters/google.adapter";
+import { googleGenAi, model } from "../../config/ai";
+import { rankConfig } from "../../config/ai/config";
+import { rankContents } from "../../config/ai/contents";
 
 export interface AirReading {
   area: string | null;
@@ -44,4 +47,39 @@ export function classifyPm25(pm25: number): { quality: string; advice: string } 
   if (pm25 <= 55.4) return { quality: "對敏感族群不健康", advice: "輪椅使用者及呼吸道敏感者建議配戴口罩，減少戶外停留時間" };
   if (pm25 <= 150.4) return { quality: "不健康", advice: "建議所有人減少戶外活動，出門配戴口罩" };
   return { quality: "非常不健康", advice: "強烈建議不要外出，若必須外出請配戴 N95 口罩" };
+}
+
+/**
+ * Full air-quality lookup for the endpoint and the agent tool: fetch the
+ * nearest PM2.5 readings, then have Gemini turn them into a user-facing
+ * description. Returns null when no sensor covers the area (the caller maps
+ * that to 404).
+ */
+export async function getAirQualityWithAI(
+  lat: number,
+  lng: number,
+): Promise<AIResponse | null> {
+  const airData = await getAirData(lat, lng);
+  if (!airData) return null;
+
+  const aiResponse = await googleGenAi.models.generateContent({
+    model,
+    contents: [
+      ...rankContents,
+      {
+        role: "user",
+        parts: [
+          {
+            text: `感測器座標：${JSON.stringify(airData.readings[0])}\n路線位置：{lat: ${lat}, lng: ${lng}}`,
+          },
+        ],
+      },
+    ],
+    config: rankConfig,
+  });
+
+  return JSON.parse(
+    aiResponse?.candidates?.[0].content?.parts?.[0].text ??
+      '{"description":"此區域沒有空氣品質監測器喔!","quality":""}',
+  ) as AIResponse;
 }

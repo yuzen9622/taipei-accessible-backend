@@ -1,4 +1,4 @@
-import { detectBusApiType, getRouteDirectionImproved } from "../../config/lib";
+import { detectBusApiType, getRouteDirectionImproved } from "../../utils/transit-text";
 import { busUrl } from "../../config/transit";
 import { tdxFetch } from "../../config/fetch";
 import type { BusRoute } from "../../types/transit";

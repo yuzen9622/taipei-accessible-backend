@@ -4,6 +4,21 @@ import { registry } from "../../openapi/registry";
 
 extendZodWithOpenApi(z);
 
+// ── Request schemas ─────────────────────────────────────────────────────────
+
+export const AirQualityQuerySchema = z
+  .object({
+    lat: z
+      .string()
+      .regex(/^-?\d+(\.\d+)?$/, "Must be a valid latitude")
+      .openapi({ example: "25.0330" }),
+    lng: z
+      .string()
+      .regex(/^-?\d+(\.\d+)?$/, "Must be a valid longitude")
+      .openapi({ example: "121.5654" }),
+  })
+  .strict();
+
 // ── Response envelope helper ────────────────────────────────────────────────
 
 const ApiResponseSchema = <T extends z.ZodTypeAny>(data: T) =>

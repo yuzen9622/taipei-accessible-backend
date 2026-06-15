@@ -48,12 +48,7 @@ async function login(
     );
   } catch (error) {
     console.error(error);
-    return res.status(500).json({
-      ok: false,
-      status: "error",
-      code: ResponseCode.INTERNAL_ERROR,
-      message: ResponseMessage.INTERNAL_ERROR,
-    });
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ResponseMessage.INTERNAL_ERROR);
   }
 }
 
@@ -246,9 +241,9 @@ async function refresh(
 async function logout(req: Request, res: Response) {
   try {
     res.cookie("refreshToken", "", { maxAge: 0 });
-    return sendResponse(res, true, "success", 200, "Logout successful");
+    return sendResponse(res, true, "success", ResponseCode.OK, "Logout successful");
   } catch (error) {
-    return sendResponse(res, false, "error", 500, "Logout failed");
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, "Logout failed");
   }
 }
 export { login, token, refresh, info, config, updateConfig, logout };

@@ -100,6 +100,8 @@ export interface MetroLeg {
   /** Phase 14 compact format only: osmId refs into route-level `facilities`. */
   a11yRefs?: string[];
   railSystem: string;
+  /** Bare line code for the frontend to colour/label the line: 紅線 "R", 藍線 "BL", 綠線 "G", … */
+  lineId: string;
   lineName: string;
   lineUid: string;
   departureStation: string;

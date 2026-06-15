@@ -11,10 +11,11 @@
  */
 
 import { decode } from "@googlemaps/polyline-codec";
-import { GtfsTrip } from "../model/gtfs-trip.model";
-import { haversineCoords, WHEELCHAIR_SPEED_M_PER_MIN } from "./ors.service";
-import { taipeiHHmm, taipeiYmdDash } from "../config/taipei-time";
-import type { AccessibilityMode } from "../config/a11y-scoring";
+import { GtfsTrip } from "../../../model/gtfs-trip.model";
+import { haversineCoords, WHEELCHAIR_SPEED_M_PER_MIN } from "./ors";
+import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
+import { metroLineCode } from "../../../config/transit";
+import type { AccessibilityMode } from "../scoring";
 import type {
   AccessibleRoute,
   WalkLeg,
@@ -23,7 +24,7 @@ import type {
   ThsrLeg,
   TraLeg,
   WaitInfo,
-} from "../types/route";
+} from "../../../types/route";
 
 // The timeout guards against HUNG connections only — a dead OTP container
 // rejects instantly (ECONNREFUSED) and trips the circuit breaker, so a
@@ -249,6 +250,94 @@ async function queryOtpPlan(
   }
 }
 
+// ── Rail leg geometry (Phase 15 overlay) ──
+//
+// The real track corridor for a MaaS rail leg: OTP carries the GTFS shapes, so
+// a station→station rail plan returns the geometry the MaaS API omits. Geometry
+// is time-independent, so the caller passes a safe midday service time. Goes
+// through the circuit breaker and never throws — null means "keep the leg's
+// existing straight-line polyline".
+
+const RAIL_GEOMETRY_QUERY = `
+query RailGeom(
+  $fromLat: Float!, $fromLon: Float!,
+  $toLat: Float!, $toLon: Float!,
+  $date: String!, $time: String!
+) {
+  plan(
+    from: { lat: $fromLat, lon: $fromLon }
+    to: { lat: $toLat, lon: $toLon }
+    date: $date
+    time: $time
+    numItineraries: 1
+    transportModes: [{ mode: WALK }, { mode: RAIL }]
+    locale: "zh-TW"
+  ) {
+    itineraries { legs { mode legGeometry { points } } }
+  }
+}`;
+
+/**
+ * Real track polyline ([lng,lat], GeoJSON order) for a rail OD via OTP, or null
+ * (OTP down / no itinerary / empty). Transit legs are concatenated and
+ * consecutive duplicate points dropped (OTP repeats a point at stop joins).
+ */
+export async function fetchRailLegGeometry(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  dateYmd: string,
+  timeHHmm: string,
+): Promise<[number, number][] | null> {
+  if (Date.now() < circuitOpenUntil) return null;
+  const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OTP_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${baseUrl}/otp/gtfs/v1`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        query: RAIL_GEOMETRY_QUERY,
+        variables: {
+          fromLat: from.lat,
+          fromLon: from.lng,
+          toLat: to.lat,
+          toLon: to.lng,
+          date: dateYmd,
+          time: timeHHmm,
+        },
+      }),
+    });
+    if (!res.ok) throw new Error(`OTP HTTP ${res.status}`);
+    const json = (await res.json()) as {
+      data?: {
+        plan?: {
+          itineraries?: {
+            legs?: { mode: string; legGeometry?: { points?: string } | null }[];
+          }[];
+        };
+      };
+    };
+    recordSuccess();
+    const legs = json.data?.plan?.itineraries?.[0]?.legs ?? [];
+    const coords: [number, number][] = [];
+    for (const leg of legs) {
+      if (leg.mode === "WALK") continue; // access/egress walk — not the ride
+      for (const pt of decodeOtpPolyline(leg.legGeometry?.points)) {
+        const last = coords[coords.length - 1];
+        if (!last || last[0] !== pt[0] || last[1] !== pt[1]) coords.push(pt);
+      }
+    }
+    return coords.length >= 2 ? coords : null;
+  } catch {
+    recordFailure();
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Snap-to-stop fallback ──
 
 const NEARBY_STOPS_QUERY = `
@@ -428,6 +517,7 @@ function transitLegFrom(
     return {
       type: "METRO",
       railSystem: system,
+      lineId: metroLineCode(system, routeId),
       lineName: routeName,
       lineUid: routeId,
       departureStation: fromName,

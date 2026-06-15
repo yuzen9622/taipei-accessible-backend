@@ -1,8 +1,9 @@
 import type { Request, Response } from "express";
-import OpenAI from "openai";
 import { openai, model as defaultModel } from "../../config/ai";
-import { openAiChatTools } from "../../config/ai/tool";
-import { executeLocalTool } from "./agent-tools";
+import { sendResponse } from "../../config/lib";
+import { ResponseCode } from "../../types/code";
+import { MSG, ERROR_MESSAGE } from "../../constants/messages";
+import { runToolLoop, type OAIMessage } from "./ai-chat.service";
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
 
@@ -46,75 +47,6 @@ const SYSTEM_PROMPT = `你是「無障礙交通導航 AI 助理」，專為輪�
 
 function sendSse(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-}
-
-// ─── Tool execution loop (shared by streaming and non-streaming paths) ────────
-
-type OAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
-
-async function runToolLoop(
-  messages: OAIMessage[],
-  useModel: string,
-  useTemp: number,
-  userLocation?: { latitude: number; longitude: number },
-  onToolCall?: (name: string, args: Record<string, unknown>) => void,
-  onToolResult?: (name: string, result: unknown) => void
-): Promise<void> {
-  const MAX_ROUNDS = 5;
-
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const response = await openai.chat.completions.create({
-      model: useModel,
-      messages,
-      tools: openAiChatTools,
-      tool_choice: "auto",
-      temperature: useTemp,
-      stream: false,
-    });
-
-    const choice = response.choices[0];
-
-    if (choice.finish_reason !== "tool_calls" || !choice.message.tool_calls?.length) {
-      break;
-    }
-
-    // Add assistant's tool-call turn to history
-    messages.push(
-      choice.message as OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam
-    );
-
-    for (const tc of choice.message.tool_calls) {
-      // Only process standard function tool calls (not custom tool calls)
-      if (tc.type !== "function" || !("function" in tc)) continue;
-      const fnCall = tc as OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall;
-
-      let toolArgs: Record<string, unknown> = {};
-      try {
-        toolArgs = JSON.parse(fnCall.function.arguments);
-      } catch {
-        // keep empty object
-      }
-
-      onToolCall?.(fnCall.function.name, toolArgs);
-
-      const resultStr = await executeLocalTool(fnCall.function.name, toolArgs, userLocation);
-
-      let parsedResult: unknown;
-      try {
-        parsedResult = JSON.parse(resultStr);
-      } catch {
-        parsedResult = { result: resultStr };
-      }
-
-      onToolResult?.(tc.function.name, parsedResult);
-
-      messages.push({
-        role: "tool",
-        tool_call_id: fnCall.id,
-        content: resultStr,
-      } as OpenAI.Chat.Completions.ChatCompletionToolMessageParam);
-    }
-  }
 }
 
 // ─── Controller ───────────────────────────────────────────────────────────────
@@ -185,8 +117,8 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     } catch (error: any) {
       console.error("[ai/chat stream]", error);
       sendSse(res, "error", {
-        code: 500,
-        message: error?.message ?? "Internal server error",
+        code: ResponseCode.INTERNAL_ERROR,
+        message: error?.message ?? ERROR_MESSAGE.INTERNAL,
       });
       res.write("event: done\ndata: done\n\n");
       res.end();
@@ -205,27 +137,22 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       stream: false,
     });
 
-    res.json({
-      ok: true,
-      status: "success",
-      code: 200,
-      message: "OK",
-      data: {
-        id: response.id,
-        object: response.object,
-        created: response.created,
-        model: response.model,
-        choices: response.choices,
-        usage: response.usage,
-      },
+    sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, {
+      id: response.id,
+      object: response.object,
+      created: response.created,
+      model: response.model,
+      choices: response.choices,
+      usage: response.usage,
     });
   } catch (error: any) {
     console.error("[ai/chat]", error);
-    res.status(500).json({
-      ok: false,
-      status: "error",
-      code: 500,
-      message: error?.message ?? "Internal server error",
-    });
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      error?.message ?? ERROR_MESSAGE.INTERNAL
+    );
   }
 }

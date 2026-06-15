@@ -9,7 +9,7 @@
  * Stage A (`slimRoutes`) — always on: project each facility down to the fields
  * the frontend and the re-scoring endpoints (/route-rank, /route-select)
  * actually consume. The tag whitelist is EXACTLY the keys read by
- * src/config/a11y-scoring.ts (so slimmed routes re-score identically) plus a
+ * scoring.ts (this module) (so slimmed routes re-score identically) plus a
  * few display keys. Full documents stay available via GET /api/a11y/place.
  *
  * Stage B (`compactRoutes`) — opt-in via body `format: "compact"`: dedupe
@@ -34,7 +34,7 @@ export type { SlimA11y } from "../../types/route";
 
 /**
  * Tags that survive slimming.
- * Scoring keys: every key read by a11y-scoring.ts (ALL_TAG_WEIGHTS tiers 1–4
+ * Scoring keys: every key read by scoring.ts (ALL_TAG_WEIGHTS tiers 1–4
  * plus the numeric width/incline helpers) — keeps /route-rank & /route-select
  * re-scoring of slimmed payloads identical to first-pass scoring.
  * Display keys: name / opening_hours / level / amenity for frontend rendering.

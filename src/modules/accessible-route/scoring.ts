@@ -46,7 +46,7 @@
  *   <20  Critical   (★☆☆☆☆)
  */
 
-import { IOsmA11y } from "../types";
+import { IOsmA11y } from "../../types";
 
 // ─── Node-level scoring ───────────────────────────────────────────────────────
 

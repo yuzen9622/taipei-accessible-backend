@@ -41,25 +41,25 @@ import {
 import {
   findReachableStops,
   type ReachableStop,
-} from "../../service/reachable-stops.service";
+} from "./planners/reachable-stops";
 
 import {
   orsWalkingRoute,
   orsWalkingMatrix,
   WHEELCHAIR_SPEED_M_PER_MIN,
-} from "../../service/ors.service";
+} from "./planners/ors";
 
 import { CITY_METRO_SYSTEMS } from "../../config/transit";
 import { TaiwanCityEn } from "../../types/transit";
 
-import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
+import { getRouteDirectionImproved, equalStopName } from "../../utils/transit-text";
 
 import BusStopModel from "../../model/bus-stop.model";
 import OsmA11y from "../../model/osm-a11y.model";
 import {
   findAccessibleExits,
   selectNearestExit,
-} from "../../service/a11y-exit.service";
+} from "./planners/a11y-exit";
 
 import {
   ITdxBusStop,
@@ -629,6 +629,7 @@ async function buildMetroSegment(
   const leg: MetroLeg = {
     type: "METRO",
     railSystem,
+    lineId: bare,
     lineName: lineUid,
     lineUid,
     departureStation: boardName,

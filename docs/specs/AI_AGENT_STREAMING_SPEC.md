@@ -2,7 +2,7 @@
 ## Functional Specification — OpenAI-Compatible Streaming Agent (v1.1)
 
 **版本**：v1.1  
-**狀態**：草稿 (Draft)  
+**狀態**：Active — 已實作並上線（`POST /api/v1/ai/chat`，見 `src/modules/ai/ai.chat.controller.ts`）  
 **日期**：2026-06-11  
 **作者**：Antigravity AI  
 
