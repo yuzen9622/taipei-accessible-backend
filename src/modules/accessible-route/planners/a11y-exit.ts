@@ -12,11 +12,11 @@
  * All coordinates are [lng, lat] (GeoJSON order); no conversion is performed.
  */
 
-import A11y from "../model/a11y.model";
-import { IA11y } from "../types";
-import { orsWalkingRoute, haversineCoords } from "./ors.service";
-import type { WalkLeg } from "../types/route";
-import { getStationAccess } from "./indoor-graph.service";
+import A11y from "../../../model/a11y.model";
+import { IA11y } from "../../../types";
+import { orsWalkingRoute, haversineCoords } from "./ors";
+import type { WalkLeg } from "../../../types/route";
+import { getStationAccess } from "./indoor-graph";
 
 /** Raw lean()'d A11y document — the stored DB shape, before parsing. */
 type RawA11yDoc = IA11y;

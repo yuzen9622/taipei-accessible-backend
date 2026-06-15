@@ -15,16 +15,16 @@
  * dependency on the accessible-route module.
  */
 
-import OsmA11y from "../model/osm-a11y.model";
-import { getStationAccess, AccessibilityMode } from "./indoor-graph.service";
-import type { IOsmA11y } from "../types";
+import OsmA11y from "../../../model/osm-a11y.model";
+import { getStationAccess, AccessibilityMode } from "./indoor-graph";
+import type { IOsmA11y } from "../../../types";
 import type {
   WalkLeg,
   BusLeg,
   MetroLeg,
   ThsrLeg,
   TraLeg,
-} from "../types/route";
+} from "../../../types/route";
 
 const A11Y_RADIUS_M = 200;
 const A11Y_LIMIT = 5;

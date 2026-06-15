@@ -42,17 +42,17 @@
  * outage never degrades routing. Disable with USE_REALTIME_TRANSIT=false.
  */
 
-import { tdxFetch } from "../config/fetch";
-import { busUrl, trainUrl, traUrl, thsrUrl } from "../config/transit";
-import { fetchRailLegGeometry } from "./otp-routing.service";
+import { tdxFetch } from "../../../config/fetch";
+import { busUrl, trainUrl, traUrl, thsrUrl } from "../../../config/transit";
+import { fetchRailLegGeometry } from "./otp-routing";
 import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-time";
-import { taipeiSecondsOfDay, taipeiYmdDash } from "../config/taipei-time";
+import { taipeiSecondsOfDay, taipeiYmdDash } from "../../../config/taipei-time";
 import type {
   AccessibleRoute,
   BusLeg,
   TraLeg,
   ThsrLeg,
-} from "../types/route";
+} from "../../../types/route";
 
 const CACHE_TTL_MS = 30 * 1000;
 const MAX_DEPARTURE_SKEW_MS = 15 * 60 * 1000;

@@ -1,4 +1,4 @@
-import { tdxTokenManager } from "../service/TdxTokenManger";
+import { tdxTokenManager } from "../adapters/tdx.adapter";
 
 /**
  * 包裝 fetch：自動加上 Bearer token。401 時強制刷新 token 後重試一次；

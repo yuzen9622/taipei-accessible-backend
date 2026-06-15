@@ -18,19 +18,19 @@
  * departure → intermediateStops → arrival coordinates.
  */
 
-import { tdxFetch } from "../config/fetch";
-import { metroLineCode } from "../config/transit";
+import { tdxFetch } from "../../../config/fetch";
+import { metroLineCode } from "../../../config/transit";
 import {
   taipeiIsoLocal,
   taipeiYmdDash,
   taipeiWallClock,
   addTaipeiDays,
-} from "../config/taipei-time";
+} from "../../../config/taipei-time";
 import {
   nearbyA11y,
   deriveHighlights,
   attachA11yToLeg,
-} from "./route-a11y.service";
+} from "./route-a11y";
 import type {
   AccessibleRoute,
   WalkLeg,
@@ -38,7 +38,7 @@ import type {
   MetroLeg,
   ThsrLeg,
   TraLeg,
-} from "../types/route";
+} from "../../../types/route";
 
 const ROUTING_URL = "https://tdx.transportdata.tw/api/maas/routing";
 const METRO_AGENCIES = new Set([

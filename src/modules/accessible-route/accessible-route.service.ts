@@ -8,7 +8,7 @@ import {
   metroLineCode,
 } from "../../config/transit";
 import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
-import { orsWalkingRoute } from "../../service/ors.service";
+import { orsWalkingRoute } from "./planners/ors";
 import {
   taipeiMinutesOfDay,
   taipeiWeekday,
@@ -1499,7 +1499,7 @@ async function enrichTopRoutes(
   mode: AccessibilityMode,
 ): Promise<void> {
   const { nearbyA11y, attachA11yToLeg, deriveHighlights, enrichLegIndoor } =
-    await import("../../service/route-a11y.service");
+    await import("./planners/route-a11y");
 
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -1608,7 +1608,7 @@ async function finalizeRoutes(
   t0 = Date.now();
   try {
     const { overlayFacilityStatus } =
-      await import("../../service/facility-status.service");
+      await import("./planners/facility-status");
     await overlayFacilityStatus(top, mode);
   } catch (err) {
     console.warn("[accessible-route] facility status overlay failed", err);
@@ -1617,7 +1617,7 @@ async function finalizeRoutes(
   t0 = Date.now();
   try {
     const { overlayRealtimeTransit, recoverRailTrainNos } =
-      await import("../../service/realtime-transit.service");
+      await import("./planners/realtime-transit");
     // Rail (TRA+THSR) trainNo/time recovery is schedule-based; run it FIRST so
     // it backfills the real (snapped) train number before the realtime pass
     // matches TRA delays against it.
@@ -1701,7 +1701,7 @@ export async function findAccessibleRoutes(
   const otpShadow = otpFlag === "shadow";
   const otpPromise: Promise<AccessibleRoute[]> =
     otpMerged || otpShadow
-      ? import("../../service/otp-routing.service")
+      ? import("./planners/otp-routing")
           .then((m) =>
             m.planOtpRoute(origin, destination, {
               maxTransfers,
@@ -1724,7 +1724,7 @@ export async function findAccessibleRoutes(
       process.env.USE_TDX_ROUTING === "true"
         ? await timed(
             "tdx",
-            import("../../service/tdx-routing.service")
+            import("./planners/tdx-routing")
               .then((m) =>
                 m.planTdxRoute(origin, destination, {
                   departureTime: opts.departureTime,

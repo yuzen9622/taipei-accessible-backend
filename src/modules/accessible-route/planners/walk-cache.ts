@@ -9,7 +9,7 @@
  *   walk:{o_lng.toFixed(6)},{o_lat.toFixed(6)}:{d_lng.toFixed(6)},{d_lat.toFixed(6)}
  * TTL: 86400 seconds (24h).
  */
-import { redisGet, redisSet } from "../config/redis";
+import { redisGet, redisSet } from "../../../config/redis";
 
 const WALK_TTL_SEC = 86400; // 24h
 

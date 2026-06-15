@@ -23,11 +23,11 @@
  * All coordinates are [lng, lat] (GeoJSON order); no conversion is performed.
  */
 
-import { GtfsStop, IGtfsStop } from "../model/gtfs-stop.model";
-import { GtfsPathway, IGtfsPathway } from "../model/gtfs-pathway.model";
-import { GtfsLevel } from "../model/gtfs-level.model";
-import { equalStopName } from "../config/lib";
-import { haversineCoords } from "./ors.service";
+import { GtfsStop, IGtfsStop } from "../../../model/gtfs-stop.model";
+import { GtfsPathway, IGtfsPathway } from "../../../model/gtfs-pathway.model";
+import { GtfsLevel } from "../../../model/gtfs-level.model";
+import { equalStopName } from "../../../config/lib";
+import { haversineCoords } from "./ors";
 
 export type AccessibilityMode =
   | "wheelchair"

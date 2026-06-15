@@ -20,6 +20,12 @@
 | **7** | **`user.service.ts` — user 模組原本完全沒有 service 層（v1.0 遺漏）** | `b4a9fa9` |
 | 補 | transit 服務改回傳明確 HTTP status（移除字串比對 hack） | `fa24a65` |
 | **8** | **`src/types/route.ts` — 路由領域型別下沉，根治倒置依賴（見 §9）** | `1a5658b` |
+| **9** | **消滅頂層 `src/service/`：11 個 planner → `modules/accessible-route/planners/`、`TdxTokenManger` → `adapters/tdx.adapter.ts`** | （本分支） |
+
+> **§2/§6 的目錄樹早於 Phase 9**：頂層 `src/service/` 已不存在，`*.service.ts` 現在只出現在模組內。
+> 最新結構與理由見 [`architecture-audit.md`](./architecture-audit.md) §3/§4。Phase 9 的動機：`src/service/`
+> 名義上是「跨模組共用層」，實際上 11/12 檔只被 `accessible-route` 使用（非跨模組），唯一真．跨切面的
+> `TdxTokenManger` 本質是外部 API client，故歸入既有的 `adapters/` 層。
 
 ---
 

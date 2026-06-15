@@ -6,7 +6,7 @@
  * For unlimited requests, self-host: https://github.com/GIScience/openrouteservice
  */
 
-import { getWalkCache, setWalkCache } from "./walk-cache.service";
+import { getWalkCache, setWalkCache } from "./walk-cache";
 
 const ORS_BASE = "https://api.openrouteservice.org/v2";
 export const WHEELCHAIR_SPEED_M_PER_MIN = 60; // conservative wheelchair walking speed

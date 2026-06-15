@@ -10,15 +10,15 @@
  *
  * This service is NOT wired into findAccessibleRoutes — that is Phase 4.
  */
-import BusStopModel from "../model/bus-stop.model";
-import MetroStationModel from "../model/metro-station.model";
-import { ITdxBusStop, ITdxMetroStation } from "../types";
+import BusStopModel from "../../../model/bus-stop.model";
+import MetroStationModel from "../../../model/metro-station.model";
+import { ITdxBusStop, ITdxMetroStation } from "../../../types";
 import {
   orsWalkingMatrix,
   haversineCoords,
   WHEELCHAIR_SPEED_M_PER_MIN,
-} from "./ors.service";
-import { setWalkCache } from "./walk-cache.service";
+} from "./ors";
+import { setWalkCache } from "./walk-cache";
 
 const GEO_QUERY_RADIUS_M = 2000;
 
