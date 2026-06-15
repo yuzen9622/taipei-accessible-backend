@@ -629,6 +629,7 @@ async function buildMetroSegment(
   const leg: MetroLeg = {
     type: "METRO",
     railSystem,
+    lineId: bare,
     lineName: lineUid,
     lineUid,
     departureStation: boardName,

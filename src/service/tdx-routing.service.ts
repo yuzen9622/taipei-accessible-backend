@@ -19,6 +19,7 @@
  */
 
 import { tdxFetch } from "../config/fetch";
+import { metroLineCode } from "../config/transit";
 import {
   taipeiIsoLocal,
   taipeiYmdDash,
@@ -209,6 +210,7 @@ function transitSectionToLeg(
     return {
       type: "METRO",
       railSystem: agencyId,
+      lineId: metroLineCode(agencyId, t.number || lineName),
       lineName,
       lineUid: t.number || lineName,
       departureStation: fromName,

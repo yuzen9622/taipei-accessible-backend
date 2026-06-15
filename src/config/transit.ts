@@ -47,6 +47,26 @@ export const CITY_METRO_SYSTEMS: Partial<Record<TaiwanCityEn, string[]>> = {
   [TaiwanCityEn.Kaohsiung]: ["KRTC"],
 };
 
+/**
+ * Bare metro line code the frontend uses to colour/label a line
+ * (淡水信義線 "R" 紅, 板南線 "BL" 藍, 松山新店線 "G" 綠, 中和新蘆線 "O" 橘, 文湖線 "BR" 棕…).
+ * Recovers the code from the two id shapes the routers emit:
+ *   - OTP GTFS route id  "TRTC_BL_BL-1_0" → "BL"   (SYSTEM_LINE_LINE-VARIANT_DIRECTION)
+ *   - TDX line uid       "TRTC-R" | "R"   → "R"
+ * Returns the input unchanged when it matches neither shape.
+ */
+export function metroLineCode(railSystem: string, raw: string): string {
+  if (!raw) return "";
+  if (raw.includes("_")) {
+    const parts = raw.split("_");
+    return parts[1] || parts[0];
+  }
+  if (railSystem && raw.startsWith(`${railSystem}-`)) {
+    return raw.slice(railSystem.length + 1);
+  }
+  return raw;
+}
+
 const RAIL_BASE = "https://tdx.transportdata.tw/api/basic/v2/Rail";
 
 export const thsrUrl = {

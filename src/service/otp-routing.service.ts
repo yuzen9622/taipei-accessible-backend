@@ -14,6 +14,7 @@ import { decode } from "@googlemaps/polyline-codec";
 import { GtfsTrip } from "../model/gtfs-trip.model";
 import { haversineCoords, WHEELCHAIR_SPEED_M_PER_MIN } from "./ors.service";
 import { taipeiHHmm, taipeiYmdDash } from "../config/taipei-time";
+import { metroLineCode } from "../config/transit";
 import type { AccessibilityMode } from "../config/a11y-scoring";
 import type {
   AccessibleRoute,
@@ -428,6 +429,7 @@ function transitLegFrom(
     return {
       type: "METRO",
       railSystem: system,
+      lineId: metroLineCode(system, routeId),
       lineName: routeName,
       lineUid: routeId,
       departureStation: fromName,

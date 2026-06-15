@@ -89,6 +89,7 @@ function summarizeLeg(
     return {
       type: "METRO",
       railSystem: leg.railSystem,
+      lineId: leg.lineId,
       lineName: leg.lineName,
       departureStation: leg.departureStation,
       arrivalStation: leg.arrivalStation,

@@ -247,6 +247,10 @@ const MetroLegSchema = z
     type: z.literal("METRO").openapi({ example: "METRO" }),
     a11yRefs: A11yRefsSchema,
     railSystem: z.string().openapi({ example: "TRTC" }),
+    lineId: z.string().openapi({
+      example: "R",
+      description: "路線代碼，前端用來上色/標示（紅線 R、藍線 BL、綠線 G、橘線 O、棕線 BR…）",
+    }),
     lineName: z.string().openapi({ example: "TRTC-R" }),
     lineUid: z.string().openapi({ example: "TRTC-R" }),
     departureStation: z.string().openapi({ example: "市政府站" }),

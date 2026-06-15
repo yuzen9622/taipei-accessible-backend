@@ -5,6 +5,7 @@ import {
   thsrUrl,
   traUrl,
   CITY_METRO_SYSTEMS,
+  metroLineCode,
 } from "../../config/transit";
 import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
 import { orsWalkingRoute } from "../../service/ors.service";
@@ -720,6 +721,7 @@ export async function buildMetroCandidate(
   const metroLeg: MetroLeg = {
     type: "METRO",
     railSystem,
+    lineId: metroLineCode(railSystem, lineUid),
     lineName: lineUid,
     lineUid,
     departureStation: boardStation.stationName.Zh_tw,
