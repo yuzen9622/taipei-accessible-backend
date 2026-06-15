@@ -170,7 +170,10 @@ function transitSectionToLeg(
   if (isThsr) {
     return {
       type: "THSR",
-      trainNo: t.number || t.headsign || lineName,
+      // headsign is the DESTINATION (e.g. "南港"), never a train number — when
+      // MaaS omits number, fall back to the line label like TRA; the real
+      // TrainNo is recovered later via recoverThsrTrainNos (OD timetable).
+      trainNo: t.number || lineName,
       departureStation: fromName,
       arrivalStation: toName,
       departureStationUID: fromName,

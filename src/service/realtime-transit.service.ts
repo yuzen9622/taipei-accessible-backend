@@ -30,7 +30,10 @@
  * headway/2 and THSR is near-punctual; disruptions there surface via the
  * Phase 13 Alert overlay. Legacy-path BUS legs already carry a live ETA
  * (fetchWaitInfo) — legs whose waitInfo.source is "realtime" are skipped.
- * MaaS THSR legs stay schedule-only (no realtime API to overlay anyway).
+ * MaaS rail legs (TRA + THSR) have no realtime delay API, but their train
+ * number, type and real schedule are recovered from the OD daily timetable by
+ * recoverRailTrainNos — a separate schedule-based pass that runs even outside
+ * the realtime window (it also snaps MaaS schedule drift to the real train).
  *
  * Realtime only makes sense for "departing now": the overlay is skipped when
  * the requested departureTime is more than 15 minutes from now, and for
@@ -40,13 +43,15 @@
  */
 
 import { tdxFetch } from "../config/fetch";
-import { busUrl, trainUrl, traUrl } from "../config/transit";
+import { busUrl, trainUrl, traUrl, thsrUrl } from "../config/transit";
+import { fetchRailLegGeometry } from "./otp-routing.service";
 import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-time";
 import { taipeiSecondsOfDay, taipeiYmdDash } from "../config/taipei-time";
 import type {
   AccessibleRoute,
   BusLeg,
   TraLeg,
+  ThsrLeg,
 } from "../types/route";
 
 const CACHE_TTL_MS = 30 * 1000;
@@ -339,8 +344,9 @@ interface TdxTraStation {
   StationName?: { Zh_tw?: string };
 }
 interface TdxTraOdItem {
-  DailyTrainInfo?: { TrainNo?: string };
+  DailyTrainInfo?: { TrainNo?: string; TrainTypeName?: { Zh_tw?: string } };
   OriginStopTime?: { DepartureTime?: string };
+  DestinationStopTime?: { ArrivalTime?: string };
 }
 
 let traStationCache: CacheEntry<Map<string, string>> | null = null;
@@ -493,6 +499,282 @@ async function applyTraDelays(
       leg.waitInfo = { time: leg.estimatedWaitMinutes, source: "realtime" };
     }
   }
+}
+
+// ── THSR station index + OD timetable (used by recoverRailTrainNos) ──────────
+
+interface TdxThsrStation {
+  StationID: string;
+  StationName?: { Zh_tw?: string };
+}
+interface TdxThsrOdItem {
+  DailyTrainInfo?: { TrainNo?: string };
+  OriginStopTime?: { DepartureTime?: string };
+  DestinationStopTime?: { ArrivalTime?: string };
+}
+
+let thsrStationCache: CacheEntry<Map<string, string>> | null = null;
+const thsrOdCache = new Map<string, CacheEntry<TdxThsrOdItem[]>>();
+
+/** THSR station name → StationID (12 stations, one cached call). */
+async function thsrStationIndex(): Promise<Map<string, string>> {
+  if (thsrStationCache && Date.now() < thsrStationCache.expiresAt) {
+    return thsrStationCache.data;
+  }
+  return dedup("thsr-stations", async () => {
+    const index = new Map<string, string>();
+    try {
+      const resp = await tdxFetch(
+        `${thsrUrl.stationUrl}?$format=JSON&$select=StationID,StationName`
+      );
+      if (resp.ok) {
+        const items = (await resp.json()) as TdxThsrStation[];
+        if (Array.isArray(items)) {
+          for (const s of items) {
+            if (s.StationName?.Zh_tw) {
+              index.set(normStation(s.StationName.Zh_tw), s.StationID);
+            }
+          }
+        }
+      }
+    } catch {
+      /* fail-soft: empty index */
+    }
+    thsrStationCache = {
+      data: index,
+      expiresAt:
+        Date.now() + (index.size ? STATION_CACHE_TTL_MS : FAILURE_CACHE_TTL_MS),
+    };
+    return index;
+  });
+}
+
+async function fetchThsrOdTimetable(
+  from: string,
+  to: string,
+  date: string
+): Promise<TdxThsrOdItem[]> {
+  const key = `${from}|${to}|${date}`;
+  const hit = cachedEntry(thsrOdCache, key);
+  if (hit) return hit;
+  return dedup(`thsr-od|${key}`, async () => {
+    let items: TdxThsrOdItem[] = [];
+    try {
+      const resp = await tdxFetch(
+        `${thsrUrl.dailyTimetableOdUrl(from, to, date)}?$format=JSON`
+      );
+      if (resp.ok) {
+        const data = (await resp.json()) as TdxThsrOdItem[];
+        if (Array.isArray(data)) items = data;
+      }
+    } catch {
+      /* fail-soft: empty timetable */
+    }
+    cacheSet(thsrOdCache, key, {
+      data: items,
+      expiresAt:
+        Date.now() + (items.length ? OD_CACHE_TTL_MS : FAILURE_CACHE_TTL_MS),
+    });
+    return items;
+  });
+}
+
+// ── Rail (TRA + THSR): MaaS trainNo / time / UID recovery ────────────────────
+//
+// MaaS-built rail legs carry no train number (trainNo falls back to a line
+// label like "北湖-嘉義"), hold station NAMES in the UID fields, and — because
+// the MaaS engine's internal schedule DRIFTS from TDX's live timetable — often
+// quote a departure clock with no matching train (e.g. "21:26" when the real
+// trains are 21:22 / 21:30). Recovery: map station names → StationID (fixes the
+// UIDs), then snap the MaaS clock to a real train in the OD daily timetable —
+// exact minute if it exists, else the nearest BOARDABLE train within ±10 min —
+// and adopt that train's number, type and real departure/arrival times. GTFS
+// (OTP) legs already carry a numeric trainNo + real UIDs, so are skipped.
+
+const RAIL_DRIFT_WINDOW_MIN = 10;
+
+/** Minutes-of-day of an "HH:mm" clock (NaN-safe via gtfsTimeToSeconds). */
+function clockMinutes(hhmm: string): number {
+  return Math.round(gtfsTimeToSeconds(hhmm) / 60);
+}
+
+// Real track geometry for a rail OD, cached by station pair (geometry is
+// stable). Empty array = "OTP had nothing" (cached briefly so one miss doesn't
+// re-hit OTP every request); ≥2 points = the corridor to draw.
+const railGeometryCache = new Map<string, CacheEntry<[number, number][]>>();
+
+async function railGeometry(
+  system: "TRA" | "THSR",
+  fromId: string,
+  toId: string,
+  straight: [number, number][],
+  date: string,
+): Promise<[number, number][]> {
+  const key = `${system}|${fromId}|${toId}`;
+  const hit = cachedEntry(railGeometryCache, key);
+  if (hit) return hit;
+  return dedup(`railgeom|${key}`, async () => {
+    // The MaaS leg's straight polyline already starts/ends at the two stations.
+    const a = straight[0];
+    const b = straight[straight.length - 1];
+    const geo =
+      (await fetchRailLegGeometry(
+        { lat: a[1], lng: a[0] },
+        { lat: b[1], lng: b[0] },
+        date,
+        "12:00", // geometry is time-independent; midday guarantees service
+      ).catch(() => null)) ?? [];
+    cacheSet(railGeometryCache, key, {
+      data: geo,
+      expiresAt:
+        Date.now() + (geo.length >= 2 ? OD_CACHE_TTL_MS : FAILURE_CACHE_TTL_MS),
+    });
+    return geo;
+  });
+}
+
+interface RailOdRow {
+  DailyTrainInfo?: { TrainNo?: string; TrainTypeName?: { Zh_tw?: string } };
+  OriginStopTime?: { DepartureTime?: string };
+  DestinationStopTime?: { ArrivalTime?: string };
+}
+interface RailMatch {
+  trainNo: string;
+  trainType?: string;
+  dep: string; // "HH:mm"
+  arr: string; // "HH:mm"
+}
+
+/**
+ * Pick the train for a (possibly drifted) MaaS departure clock: an exact minute
+ * match always wins; otherwise the nearest train within ±RAIL_DRIFT_WINDOW_MIN,
+ * preferring a BOARDABLE one (departing at/after the wanted clock) over an
+ * already-departed one. null when nothing is within the window — we never
+ * attribute an arbitrary far-off train (spec: no fuzzy match), so the leg then
+ * keeps its schedule untouched.
+ */
+function snapToTrain(rows: RailOdRow[], wantHHmm: string): RailMatch | null {
+  const want = clockMinutes(wantHHmm);
+  let best: { row: RailOdRow; diff: number } | null = null;
+  for (const row of rows) {
+    const dep = (row.OriginStopTime?.DepartureTime ?? "").slice(0, 5);
+    if (!/^\d\d:\d\d$/.test(dep) || !row.DailyTrainInfo?.TrainNo) continue;
+    const diff = clockMinutes(dep) - want;
+    if (diff === 0) {
+      best = { row, diff };
+      break; // exact — can't do better
+    }
+    if (Math.abs(diff) > RAIL_DRIFT_WINDOW_MIN) continue;
+    const better =
+      !best ||
+      (diff >= 0 && best.diff < 0) || // boardable beats already-departed
+      (Math.sign(diff) === Math.sign(best.diff) &&
+        Math.abs(diff) < Math.abs(best.diff)); // same side → nearest
+    if (better) best = { row, diff };
+  }
+  if (!best) return null;
+  const { DailyTrainInfo, OriginStopTime, DestinationStopTime } = best.row;
+  const trainNo = DailyTrainInfo?.TrainNo;
+  if (!trainNo) return null;
+  return {
+    trainNo,
+    trainType: DailyTrainInfo?.TrainTypeName?.Zh_tw,
+    dep: (OriginStopTime?.DepartureTime ?? "").slice(0, 5),
+    arr: (DestinationStopTime?.ArrivalTime ?? "").slice(0, 5),
+  };
+}
+
+/**
+ * Recover one MaaS rail leg in place: fix the station UIDs, then snap trainNo /
+ * trainType / times to a real train. Fail-soft — an unresolvable leg is left
+ * exactly as it was.
+ */
+async function recoverRailLeg(
+  leg: TraLeg | ThsrLeg,
+  date: string,
+  index: Map<string, string>,
+  fetchOd: (from: string, to: string, date: string) => Promise<RailOdRow[]>,
+): Promise<void> {
+  if (/^\d+$/.test(leg.trainNo)) return; // GTFS leg — already a real number
+  if (!leg.departureStation || !leg.arrivalStation || !leg.departureTime) return;
+  const from = index.get(normStation(leg.departureStation));
+  const to = index.get(normStation(leg.arrivalStation));
+  if (!from || !to) return;
+  // MaaS stored station names in the UID fields — backfill the real StationIDs.
+  leg.departureStationUID = from;
+  leg.arrivalStationUID = to;
+
+  // Replace the MaaS straight-line polyline with the real track corridor from
+  // OTP (independent of the train snap below — only needs the station pair).
+  if (leg.polyline.length >= 2) {
+    const geo = await railGeometry(leg.type, from, to, leg.polyline, date);
+    if (geo.length >= 2) leg.polyline = geo;
+  }
+
+  const match = snapToTrain(await fetchOd(from, to, date), leg.departureTime);
+  if (!match) return;
+  leg.trainNo = match.trainNo;
+  if (leg.type === "TRA" && match.trainType) leg.trainTypeName = match.trainType;
+
+  // Drift: the MaaS clock had no exact train — adopt the real train's schedule
+  // (the rider's actual times) and flag it. Itinerary-level timing/transfers
+  // are NOT re-validated — a corrected mid-route leg can desync from neighbours.
+  if (match.dep && match.dep !== leg.departureTime) {
+    pushUnique(
+      leg.facilityHighlights,
+      `🕒 已對應實際班次 ${match.trainNo}（表訂 ${leg.departureTime} → 實際 ${match.dep}）`,
+    );
+    leg.departureTime = match.dep;
+    if (match.arr) {
+      leg.arrivalTime = match.arr;
+      leg.rideMinutes = Math.max(
+        1,
+        clockMinutes(match.arr) - clockMinutes(match.dep),
+      );
+    }
+    if (leg.waitInfo.source === "schedule") {
+      leg.waitInfo = { time: match.dep, source: "schedule" };
+    }
+  }
+}
+
+/**
+ * Recover real TRA + THSR train numbers / times / station UIDs on the final
+ * routes, in place. Schedule-based (not realtime), so — unlike
+ * overlayRealtimeTransit — it runs regardless of how far the departure is from
+ * now and for next-day routes (departureDate → that day's OD timetable).
+ * Fail-soft; skipped entirely when USE_REALTIME_TRANSIT=false (it hits TDX).
+ */
+export async function recoverRailTrainNos(
+  routes: AccessibleRoute[],
+): Promise<void> {
+  if (process.env.USE_REALTIME_TRANSIT === "false") return;
+  const hasTra = routes.some((r) => r.legs.some((l) => l.type === "TRA"));
+  const hasThsr = routes.some((r) => r.legs.some((l) => l.type === "THSR"));
+  if (!hasTra && !hasThsr) return;
+  // Station indexes are cached 6 h — fetch (at most) once each, up front.
+  const [traIdx, thsrIdx] = await Promise.all([
+    hasTra ? traStationIndex() : Promise.resolve(null),
+    hasThsr ? thsrStationIndex() : Promise.resolve(null),
+  ]);
+  await Promise.all(
+    routes.flatMap((r) => {
+      const date = r.departureDate ?? taipeiYmdDash();
+      return r.legs.map((leg) => {
+        if (leg.type === "TRA" && traIdx) {
+          return recoverRailLeg(leg, date, traIdx, fetchOdTimetable).catch(
+            () => undefined,
+          );
+        }
+        if (leg.type === "THSR" && thsrIdx) {
+          return recoverRailLeg(leg, date, thsrIdx, fetchThsrOdTimetable).catch(
+            () => undefined,
+          );
+        }
+        return Promise.resolve();
+      });
+    }),
+  );
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

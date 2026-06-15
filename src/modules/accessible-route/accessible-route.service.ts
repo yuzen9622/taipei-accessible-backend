@@ -1334,7 +1334,12 @@ export function scoreAndRank(
       // score: cost = time + transfers × 5 × modePenalty + (100 − score) × 0.3.
       return {
         route: r,
-        cost: routeCost(r.totalMinutes, r.transferCount, result.totalScore, mode),
+        cost: routeCost(
+          r.totalMinutes,
+          r.transferCount,
+          result.totalScore,
+          mode,
+        ),
       };
     })
     .sort((a, b) => a.cost - b.cost)
@@ -1363,7 +1368,8 @@ function isRouteExcluded(
   route: AccessibleRoute,
   mode: AccessibilityMode,
 ): boolean {
-  if (!(MODE_PROFILES[mode] ?? MODE_PROFILES.normal).tier1Required) return false;
+  if (!(MODE_PROFILES[mode] ?? MODE_PROFILES.normal).tier1Required)
+    return false;
 
   for (const leg of route.legs) {
     if (leg.type === "WALK") {
@@ -1601,9 +1607,8 @@ async function finalizeRoutes(
   t.enrich = Date.now() - t0;
   t0 = Date.now();
   try {
-    const { overlayFacilityStatus } = await import(
-      "../../service/facility-status.service"
-    );
+    const { overlayFacilityStatus } =
+      await import("../../service/facility-status.service");
     await overlayFacilityStatus(top, mode);
   } catch (err) {
     console.warn("[accessible-route] facility status overlay failed", err);
@@ -1611,9 +1616,12 @@ async function finalizeRoutes(
   t.facilityOverlay = Date.now() - t0;
   t0 = Date.now();
   try {
-    const { overlayRealtimeTransit } = await import(
-      "../../service/realtime-transit.service"
-    );
+    const { overlayRealtimeTransit, recoverRailTrainNos } =
+      await import("../../service/realtime-transit.service");
+    // Rail (TRA+THSR) trainNo/time recovery is schedule-based; run it FIRST so
+    // it backfills the real (snapped) train number before the realtime pass
+    // matches TRA delays against it.
+    await recoverRailTrainNos(top).catch(() => undefined);
     await overlayRealtimeTransit(top, { departureTime });
   } catch (err) {
     console.warn("[accessible-route] realtime transit overlay failed", err);
@@ -1706,7 +1714,7 @@ export async function findAccessibleRoutes(
 
   if (otpMerged) {
     const planT: Record<string, number> = {};
-    const timed = <T,>(label: string, p: Promise<T>): Promise<T> => {
+    const timed = <T>(label: string, p: Promise<T>): Promise<T> => {
       const t0 = Date.now();
       return p.finally(() => {
         planT[label] = Date.now() - t0;
