@@ -8,6 +8,8 @@ import {
 import { parseRouteIntent, RouteIntent } from "../ai";
 import { ApiResponse } from "../../types/response";
 import { TaiwanCityEn } from "../../types/transit";
+import { ResponseCode } from "../../types/code";
+import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 
 export async function accessibleRoute(
   req: Request,
@@ -25,15 +27,15 @@ export async function accessibleRoute(
       intent = await parseRouteIntent(query);
     } catch (err) {
       console.error("[accessible-route] intent parsing failed", err);
-      return sendResponse(res, false, "error", 500, "語意解析服務暫時無法使用，請稍後再試或直接提供 origin/destination");
+      return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, "語意解析服務暫時無法使用，請稍後再試或直接提供 origin/destination");
     }
     if (!intent) {
       return sendResponse(
         res,
         false,
         "error",
-        400,
-        "無法解析您的查詢，請改用『從 A 到 B』的描述或直接提供 origin/destination"
+        ResponseCode.INVALID_INPUT,
+        ERROR_MESSAGE.INTENT_PARSE_FAILED
       );
     }
     origin =
@@ -48,14 +50,14 @@ export async function accessibleRoute(
         res,
         false,
         "error",
-        400,
+        ResponseCode.INVALID_INPUT,
         "查詢使用了『目前位置』，請一併提供 userLocation 座標"
       );
     }
   }
 
   if (!origin || !destination) {
-    return sendResponse(res, false, "error", 400, "缺少必要參數：origin, destination");
+    return sendResponse(res, false, "error", ResponseCode.INVALID_INPUT, `${ERROR_MESSAGE.MISSING_PARAMS}：origin, destination`);
   }
 
   try {
@@ -70,7 +72,7 @@ export async function accessibleRoute(
     ]);
 
     if (!originCoords || !destCoords) {
-      return sendResponse(res, false, "error", 400, "無法解析出發地或目的地座標");
+      return sendResponse(res, false, "error", ResponseCode.INVALID_INPUT, "無法解析出發地或目的地座標");
     }
 
     const lat = originCoords.latitude;
@@ -109,12 +111,12 @@ export async function accessibleRoute(
         res,
         false,
         "error",
-        404,
+        ResponseCode.NOT_FOUND,
         "找不到連通的公車或捷運路線，請嘗試擴大搜尋範圍或確認出發地/目的地"
       );
     }
 
-    return sendResponse(res, true, "success", 200, "OK", {
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, {
       origin: { lat, lng },
       destination: { lat: destCoords.latitude, lng: destCoords.longitude },
       city,
@@ -123,6 +125,6 @@ export async function accessibleRoute(
     });
   } catch (error: any) {
     console.error("[accessible-route]", error);
-    return sendResponse(res, false, "error", 500, error?.message ?? "Internal Server Error");
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error?.message ?? ERROR_MESSAGE.INTERNAL);
   }
 }

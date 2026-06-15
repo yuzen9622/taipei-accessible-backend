@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
-import { ResponseMessage } from "../../types/code";
+import { ResponseMessage, ResponseCode } from "../../types/code";
+import { MSG } from "../../constants/messages";
 import { googleGenAi, model } from "../../config/ai";
 import { intentConfig, explainConfig } from "../../config/ai/config";
 import { intentContents, explainContents } from "../../config/ai/contents";
@@ -198,18 +199,18 @@ export async function aiExplain(
         res,
         false,
         "error",
-        500,
+        ResponseCode.INTERNAL_ERROR,
         "路線說明生成失敗，請稍後再試"
       );
     }
-    return sendResponse(res, true, "success", 200, "OK", explanation);
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, explanation);
   } catch (error) {
     console.error("[ai/explain]", error);
     return sendResponse(
       res,
       false,
       "error",
-      500,
+      ResponseCode.INTERNAL_ERROR,
       ResponseMessage.INTERNAL_ERROR
     );
   }
@@ -229,19 +230,19 @@ export async function aiIntent(
         res,
         false,
         "error",
-        400,
+        ResponseCode.INVALID_INPUT,
         "無法解析您的查詢，請改用『從 A 到 B』的描述方式"
       );
     }
 
-    return sendResponse(res, true, "success", 200, "OK", intent);
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, intent);
   } catch (error) {
     console.error("[ai/intent]", error);
     return sendResponse(
       res,
       false,
       "error",
-      500,
+      ResponseCode.INTERNAL_ERROR,
       ResponseMessage.INTERNAL_ERROR
     );
   }

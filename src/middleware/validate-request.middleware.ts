@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import type { ZodType } from "zod";
 import { ResponseCode } from "../types/code";
+import { sendResponse } from "../config/lib";
 
 interface ValidateSchemas {
   body?: ZodType;
@@ -33,13 +34,14 @@ export function validateRequest(schemas: ValidateSchemas) {
     }
 
     if (errors.length > 0) {
-      return res.status(400).json({
-        ok: false,
-        status: "error",
-        code: ResponseCode.INVALID_INPUT,
-        message: "Invalid request.",
-        data: { errors },
-      });
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.INVALID_INPUT,
+        "Invalid request.",
+        { errors }
+      );
     }
 
     req.validated = validated;

@@ -7,6 +7,8 @@ import { model } from "../../config/ai";
 import { rankConfig } from "../../config/ai/config";
 import { rankContents } from "../../config/ai/contents";
 import { getAirData } from "./air.service";
+import { ResponseCode } from "../../types/code";
+import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 
 export async function getAirQualityInfo(
   req: Request,
@@ -17,7 +19,7 @@ export async function getAirQualityInfo(
     const airData = await getAirData(Number(lat), Number(lng));
 
     if (!airData) {
-      return sendResponse(res, false, "error", 404, "此區域沒有空氣品質監測器");
+      return sendResponse(res, false, "error", ResponseCode.NOT_FOUND, "此區域沒有空氣品質監測器");
     }
 
     const aiResponse = await googleGenAi.models.generateContent({
@@ -40,8 +42,8 @@ export async function getAirQualityInfo(
       res,
       true,
       "success",
-      200,
-      "OK",
+      ResponseCode.OK,
+      MSG.OK,
       JSON.parse(
         aiResponse?.candidates?.[0].content?.parts?.[0].text ??
           '{"description":"此區域沒有空氣品質監測器喔!","quality":""}',
@@ -49,6 +51,6 @@ export async function getAirQualityInfo(
     );
   } catch (error) {
     console.error(error);
-    sendResponse(res, false, "error", 500, "Internal Server Error");
+    sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
   }
 }

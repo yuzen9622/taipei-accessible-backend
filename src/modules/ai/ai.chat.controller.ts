@@ -3,6 +3,9 @@ import OpenAI from "openai";
 import { openai, model as defaultModel } from "../../config/ai";
 import { openAiChatTools } from "../../config/ai/tool";
 import { executeLocalTool } from "./agent-tools";
+import { sendResponse } from "../../config/lib";
+import { ResponseCode } from "../../types/code";
+import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
 
@@ -185,8 +188,8 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     } catch (error: any) {
       console.error("[ai/chat stream]", error);
       sendSse(res, "error", {
-        code: 500,
-        message: error?.message ?? "Internal server error",
+        code: ResponseCode.INTERNAL_ERROR,
+        message: error?.message ?? ERROR_MESSAGE.INTERNAL,
       });
       res.write("event: done\ndata: done\n\n");
       res.end();
@@ -205,27 +208,22 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       stream: false,
     });
 
-    res.json({
-      ok: true,
-      status: "success",
-      code: 200,
-      message: "OK",
-      data: {
-        id: response.id,
-        object: response.object,
-        created: response.created,
-        model: response.model,
-        choices: response.choices,
-        usage: response.usage,
-      },
+    sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, {
+      id: response.id,
+      object: response.object,
+      created: response.created,
+      model: response.model,
+      choices: response.choices,
+      usage: response.usage,
     });
   } catch (error: any) {
     console.error("[ai/chat]", error);
-    res.status(500).json({
-      ok: false,
-      status: "error",
-      code: 500,
-      message: error?.message ?? "Internal server error",
-    });
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      error?.message ?? ERROR_MESSAGE.INTERNAL
+    );
   }
 }

@@ -8,7 +8,12 @@
 > ✅ **Slice 4 已執行：消滅頂層 `src/service/`**。11 個 accessible-route 專屬 planner 已 `git mv` 進
 > `src/modules/accessible-route/planners/`（去掉 `.service` 後綴），`TdxTokenManger` → `src/adapters/tdx.adapter.ts`。
 > `tsc` 全綠、git 全部記錄為 rename（保留歷史）。結果：`*.service.ts` 只剩在模組內，命名不再重複。
-> 其餘 Slice（0 常數、1 邊界驗證、2 AI/air service、3 controller 瘦身、5 config 領域邏輯、6 治理）仍待辦。
+>
+> ✅ **Slice 0 已執行：常數化（不變式 5）+ 收斂回應契約（不變式 4）**。新增 `src/constants/messages.ts`（`MSG` / `ERROR_MESSAGE`）；
+> 全部 `sendResponse` 的原始狀態碼改用 `ResponseCode.*`（含 auth middleware 的 401/403），重複訊息改引用具名常數；
+> 4 處自拼 envelope（`ai.chat` success+error、`user` login catch、`app.ts` 404、validate middleware）改走 `sendResponse`。
+> `tsc` 全綠、API 回應形狀不變（`ResponseCode.OK === 200`）。**不變式 5 由 🔴 FAIL → 🟢 PASS**。
+> 其餘 Slice（1 邊界驗證、2 AI/air service、3 controller 瘦身、5 config 領域邏輯、6 治理）仍待辦。
 
 ## 與既有 `docs/reports/ARCHITECTURE.md` 的關係
 

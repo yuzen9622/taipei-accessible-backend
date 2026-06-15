@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import { apiReference } from "@scalar/express-api-reference";
 import type { ApiResponse } from "./types/response";
 import { ResponseCode } from "./types/code";
+import { sendResponse } from "./config/lib";
 import middleware from "./middleware/middleware";
 import { createA11yRouter } from "./modules/a11y";
 import { createAccessibleRouteRouter } from "./modules/accessible-route";
@@ -38,7 +39,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Health check
 app.get("/health", (_req: Request, res: Response) => {
-  res.status(200).json({
+  res.status(ResponseCode.OK).json({
     status: "OK",
     message: "Server is running",
     timestamp: new Date().toISOString(),
@@ -70,12 +71,13 @@ app.use("/api/v1/ai", createAiRouter());
 
 // 404 handler
 app.use("*", (req: Request, res: Response<ApiResponse<null>>) => {
-  res.status(404).json({
-    ok: false,
-    status: "error",
-    code: ResponseCode.NOT_FOUND,
-    message: `Method ${req.method} ${req.originalUrl} not found`,
-  });
+  sendResponse(
+    res,
+    false,
+    "error",
+    ResponseCode.NOT_FOUND,
+    `Method ${req.method} ${req.originalUrl} not found`
+  );
 });
 
 export default app;
