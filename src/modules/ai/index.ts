@@ -1,7 +1,7 @@
 export { createAiRouter } from "./ai.router";
-export { parseRouteIntent, generateRouteExplanation } from "./ai.controller";
+export { parseRouteIntent, generateRouteExplanation } from "./ai.service";
 export type {
   RouteIntent,
   RouteExplanation,
   AccessibilityMode,
-} from "./ai.controller";
+} from "./ai.service";
