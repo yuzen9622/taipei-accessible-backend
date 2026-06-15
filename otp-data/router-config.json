@@ -14,7 +14,7 @@
       },
       "maxSlope": 0.083
     },
-    "searchWindow": "2h",
+    "searchWindow": "8h",
     "numItineraries": 5,
     "accessEgress": {
       "maxDuration": "20m"
