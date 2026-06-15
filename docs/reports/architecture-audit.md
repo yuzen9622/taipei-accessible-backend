@@ -13,7 +13,14 @@
 > 全部 `sendResponse` 的原始狀態碼改用 `ResponseCode.*`（含 auth middleware 的 401/403），重複訊息改引用具名常數；
 > 4 處自拼 envelope（`ai.chat` success+error、`user` login catch、`app.ts` 404、validate middleware）改走 `sendResponse`。
 > `tsc` 全綠、API 回應形狀不變（`ResponseCode.OK === 200`）。**不變式 5 由 🔴 FAIL → 🟢 PASS**。
-> 其餘 Slice（1 邊界驗證、2 AI/air service、3 controller 瘦身、5 config 領域邏輯、6 治理）仍待辦。
+>
+> ✅ **Slice 1**（不變式 3）：`validateRequest` 將解析後的值寫回 `req.*`，controller 一律讀已驗證輸入；`/air/air-quality` 補上 schema。
+> ✅ **Slice 2**（不變式 2）：`ai.service`（intent/explain）、`ai-chat.service`（tool loop）、`air.service.getAirQualityWithAI` 從 controller 抽出；controller 不再呼叫 LLM SDK 或 import 別的 controller。
+> ✅ **Slice 3**（不變式 2）：accessible-route controller 的編排下沉到 `planAccessibleRouteFromRequest`；controller 只剩 parse → 呼叫 service → `sendResponse`。
+> ✅ **Slice 5**（不變式 1）：`a11y-scoring`（735 行）→ `modules/accessible-route/scoring.ts`；transit 文字工具 → `src/utils/transit-text.ts`；`config/` 只剩設定。
+> ✅ **Slice 6**（治理）：`AGENTS.md` 規則書 + `npm run lint:arch`（`scripts/check-architecture.mjs`）邊界檢查，掛進 `prebuild` 成為 build gate。
+>
+> **全部 7 片完成。六大不變式現況：1🟢 2🟢 3🟢 4🟢 5🟢 6🟢。**
 
 ## 與既有 `docs/reports/ARCHITECTURE.md` 的關係
 
