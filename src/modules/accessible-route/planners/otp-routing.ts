@@ -15,7 +15,7 @@ import { GtfsTrip } from "../../../model/gtfs-trip.model";
 import { haversineCoords, WHEELCHAIR_SPEED_M_PER_MIN } from "./ors";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
-import type { AccessibilityMode } from "../../../config/a11y-scoring";
+import type { AccessibilityMode } from "../scoring";
 import type {
   AccessibleRoute,
   WalkLeg,

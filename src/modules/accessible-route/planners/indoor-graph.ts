@@ -26,7 +26,7 @@
 import { GtfsStop, IGtfsStop } from "../../../model/gtfs-stop.model";
 import { GtfsPathway, IGtfsPathway } from "../../../model/gtfs-pathway.model";
 import { GtfsLevel } from "../../../model/gtfs-level.model";
-import { equalStopName } from "../../../config/lib";
+import { equalStopName } from "../../../utils/transit-text";
 import { haversineCoords } from "./ors";
 
 export type AccessibilityMode =

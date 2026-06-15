@@ -7,7 +7,7 @@ import {
   CITY_METRO_SYSTEMS,
   metroLineCode,
 } from "../../config/transit";
-import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
+import { getRouteDirectionImproved, equalStopName } from "../../utils/transit-text";
 import { orsWalkingRoute } from "./planners/ors";
 import {
   taipeiMinutesOfDay,
@@ -19,7 +19,7 @@ import {
   routeCost,
   MODE_PROFILES,
   AccessibilityMode,
-} from "../../config/a11y-scoring";
+} from "./scoring";
 import BusStopModel from "../../model/bus-stop.model";
 import MetroStationModel from "../../model/metro-station.model";
 import TrainStationModel from "../../model/train-station.model";
@@ -1304,7 +1304,7 @@ function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
 //
-// Uses the evidence-based scoring engine from src/config/a11y-scoring.ts.
+// Uses the evidence-based scoring engine from scoring.ts (this module).
 // See that module for full citation list and weight rationale.
 //
 // Summary of key design choices:

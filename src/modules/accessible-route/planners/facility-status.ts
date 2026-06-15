@@ -21,7 +21,7 @@
 
 import { tdxFetch } from "../../../config/fetch";
 import { metroUrl } from "../../../config/transit";
-import type { AccessibilityMode } from "../../../config/a11y-scoring";
+import type { AccessibilityMode } from "../scoring";
 import type {
   AccessibleRoute,
   MetroLeg,

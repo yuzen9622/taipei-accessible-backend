@@ -52,7 +52,7 @@ import {
 import { CITY_METRO_SYSTEMS } from "../../config/transit";
 import { TaiwanCityEn } from "../../types/transit";
 
-import { getRouteDirectionImproved, equalStopName } from "../../config/lib";
+import { getRouteDirectionImproved, equalStopName } from "../../utils/transit-text";
 
 import BusStopModel from "../../model/bus-stop.model";
 import OsmA11y from "../../model/osm-a11y.model";
