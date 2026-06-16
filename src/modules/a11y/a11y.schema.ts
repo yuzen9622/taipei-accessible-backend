@@ -30,8 +30,6 @@ export const A11yPlaceQuerySchema = z
   })
   .strict();
 
-// ── Domain schemas ──────────────────────────────────────────────────────────
-
 const GeoPointSchema = z
   .object({
     type: z.literal("Point").openapi({ example: "Point" }),
@@ -95,8 +93,6 @@ export const OsmA11ySchema = z
   })
   .openapi("OsmA11y");
 
-// ── Response envelope helper ─────────────────────────────────────────────────
-
 const ApiResponseSchema = <T extends z.ZodTypeAny>(
   data: T,
   refName: string
@@ -111,8 +107,6 @@ const ApiResponseSchema = <T extends z.ZodTypeAny>(
       accessToken: z.string().optional(),
     })
     .openapi(refName);
-
-// ── Response schemas ─────────────────────────────────────────────────────────
 
 export const AllPlacesResponseSchema = ApiResponseSchema(
   z.array(A11ySchema),
@@ -136,8 +130,6 @@ export const NearbyA11yResponseSchema = ApiResponseSchema(
   NearbyA11yDataSchema,
   "NearbyA11yResponse"
 );
-
-// ── OpenAPI path registrations ──────────────────────────────────────────────
 
 registry.registerPath({
   method: "get",

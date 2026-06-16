@@ -2,21 +2,16 @@ import { googleGenAi, model } from "../../config/ai";
 import { intentConfig, explainConfig } from "../../config/ai/config";
 import { intentContents, explainContents } from "../../config/ai/contents";
 
-// ─── Types ─────────────────────────────────────────────────────────────────
-
 export type AccessibilityMode =
   | "wheelchair"
   | "elderly"
   | "visual_impaired"
   | "normal";
 
-/** Structured travel intent extracted from a natural-language query (spec §12.3). */
 export interface RouteIntent {
-  /** Origin place name, or "current_location". */
   from: string;
   to: string;
   mode: AccessibilityMode;
-  /** "now" or "HH:mm" / ISO8601. */
   departureTime: string;
   preferences: {
     minimizeTransfers: boolean;
@@ -24,19 +19,12 @@ export interface RouteIntent {
   };
 }
 
-/** Human-readable explanation of a planned route (spec §12.4). */
 export interface RouteExplanation {
-  /** One-sentence route summary. */
   summary: string;
-  /** Verified accessibility highlights, rephrased from route data. */
   accessibilityHighlights: string[];
-  /** Risks / caveats (elevator outage, next-day departure, low score…). */
   warnings: string[];
-  /** Concrete fallback suggestion; null when there are no warnings. */
   alternatives: string | null;
 }
-
-// ─── Intent parsing (Gemini) ─────────────────────────────────────────────────
 
 const VALID_MODES: AccessibilityMode[] = [
   "wheelchair",
@@ -48,8 +36,10 @@ const VALID_MODES: AccessibilityMode[] = [
 /**
  * Parse a free-form travel query into a RouteIntent via a single structured
  * Gemini call. Returns null when the model produces no usable JSON or the
- * essential fields (from/to) are missing. Reusable by other modules
- * (e.g. accessible-route's optional intent switch).
+ * essential fields (from/to) are missing.
+ *
+ * @param query Free-form natural-language travel query
+ * @returns The parsed RouteIntent, or null when unusable
  */
 export async function parseRouteIntent(
   query: string
@@ -88,20 +78,19 @@ export async function parseRouteIntent(
     departureTime: parsed.departureTime || "now",
     preferences: {
       minimizeTransfers: parsed.preferences?.minimizeTransfers ?? false,
-      // Wheelchair users default to preferring elevators.
       preferElevator:
         parsed.preferences?.preferElevator ?? mode === "wheelchair",
     },
   };
 }
 
-// ─── Route explanation (Gemini) ──────────────────────────────────────────────
-
 /**
  * Strip bulky fields (polylines, raw OSM facility arrays) from an
  * AccessibleRoute before sending it to Gemini — only what the explanation
- * prompt actually reads. Tolerates arbitrary route shapes (route comes from
- * the client in /ai/explain).
+ * prompt actually reads. Tolerates arbitrary route shapes.
+ *
+ * @param route Arbitrary AccessibleRoute-shaped object
+ * @returns A compact route object for the explanation prompt
  */
 function compactRoute(route: Record<string, any>): Record<string, any> {
   const legs = Array.isArray(route.legs)
@@ -133,7 +122,11 @@ function compactRoute(route: Record<string, any>): Record<string, any> {
 /**
  * Generate a RouteExplanation for a planned route via a single structured
  * Gemini call. Returns null when the model produces no usable JSON.
- * Reusable by other modules (e.g. accessible-route optional explanation).
+ *
+ * @param route The AccessibleRoute object to explain
+ * @param mode Accessibility mode shaping the explanation
+ * @param language Output language for the explanation
+ * @returns The generated RouteExplanation, or null when unusable
  */
 export async function generateRouteExplanation(
   route: Record<string, any>,
@@ -171,7 +164,6 @@ export async function generateRouteExplanation(
       ? parsed.accessibilityHighlights
       : [],
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
-    // schema forces a string; empty string means "no suggestion" → null
     alternatives: parsed.alternatives?.trim() ? parsed.alternatives : null,
   };
 }

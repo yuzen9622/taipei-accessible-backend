@@ -36,8 +36,6 @@ export const BusRealtimeQuerySchema = z
   })
   .strict();
 
-// ── Shared sub-schemas ──────────────────────────────────────────────────────
-
 const BilingualNameSchema = z
   .object({
     Zh_tw: z.string().openapi({ example: "台北車站" }),
@@ -48,8 +46,6 @@ const BilingualNameSchema = z
 const DirectionSchema = z
   .union([z.literal(0), z.literal(1)])
   .openapi({ example: 0, description: "行駛方向（0 = 去程，1 = 返程）" });
-
-// ── Response data schemas ───────────────────────────────────────────────────
 
 export const EstimatedTimeOfArrivalSchema = z
   .object({
@@ -88,8 +84,6 @@ export const RealTimeByFrequencySchema = z
   .passthrough()
   .openapi("RealTimeByFrequency");
 
-// ── ApiResponse envelope helper ─────────────────────────────────────────────
-
 const ApiResponseSchema = <T extends z.ZodTypeAny>(data: T) =>
   z.object({
     ok: z.boolean().openapi({ example: true }),
@@ -107,8 +101,6 @@ export const BusArrivalResponseSchema = ApiResponseSchema(
 export const BusRealtimeResponseSchema = ApiResponseSchema(
   z.array(RealTimeByFrequencySchema)
 ).openapi("BusRealtimeResponse");
-
-// ── OpenAPI path registrations ──────────────────────────────────────────────
 
 registry.registerPath({
   method: "post",

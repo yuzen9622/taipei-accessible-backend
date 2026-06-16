@@ -1,10 +1,10 @@
 /**
- * Phase 8 — Indoor Graph Layer (system-agnostic).
+ * Indoor Graph Layer (system-agnostic).
  *
- * Upgrades indoor navigation from the TRTC-only `A11y` collection (Phase 5) to
- * the GTFS `pathways.txt` graph (spec §10), which covers EVERY system that ships
- * indoor data in this feed — TRTC, NTMC, KLRT, TMRT, KRTC, TYMC, THSR, TRA — with
- * a single traversal.
+ * Upgrades indoor navigation from the TRTC-only `A11y` collection to the GTFS
+ * `pathways.txt` graph, which covers EVERY system that ships indoor data in this
+ * feed — TRTC, NTMC, KLRT, TMRT, KRTC, TYMC, THSR, TRA — with a single
+ * traversal.
  *
  * Data model (two disjoint stop namespaces in this feed):
  *   • Routing nodes — `TRTC_R28`, no parent_station, referenced by stop_times.
@@ -16,8 +16,8 @@
  * Indoor node taxonomy under a station (location_type=1):
  *   0 = platform   2 = entrance/exit   3 = generic node (gate / elevator landing)
  *
- * Pathway modes (spec §10.2): 1 walkway · 2 stairs · 3 moving sidewalk ·
- *   4 escalator · 5 elevator · 6 fare gate · 7 exit gate.
+ * Pathway modes: 1 walkway · 2 stairs · 3 moving sidewalk · 4 escalator ·
+ *   5 elevator · 6 fare gate · 7 exit gate.
  * Wheelchair traversal excludes stairs (2) and prefers elevators (5).
  *
  * All coordinates are [lng, lat] (GeoJSON order); no conversion is performed.
@@ -35,30 +35,21 @@ export type AccessibilityMode =
   | "visual_impaired"
   | "normal";
 
-/** Default traversal seconds when pathways.txt omits `traversal_time` (spec §10.2). */
 const DEFAULT_TRAVERSAL_SEC: Record<number, number> = {
-  1: 15, // walkway
-  2: 20, // stairs
-  3: 15, // moving sidewalk
-  4: 20, // escalator
-  5: 30, // elevator
-  6: 5, // fare gate
-  7: 5, // exit gate
+  1: 15,
+  2: 20,
+  3: 15,
+  4: 20,
+  5: 30,
+  6: 5,
+  7: 5,
 };
 
-/** Modes a wheelchair user cannot traverse. */
-const WHEELCHAIR_BLOCKED_MODES = new Set([2]); // stairs
+const WHEELCHAIR_BLOCKED_MODES = new Set([2]);
 
-/** Extra cost (s) to deprioritise non-preferred modes in wheelchair routing. */
 const ESCALATOR_WHEELCHAIR_PENALTY = 120;
 
-/** Max distance (m) between a routing-node coordinate and a candidate indoor
- * station node for the two to be considered the same physical station. */
 const STATION_MATCH_RADIUS_M = 600;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Station bridging — routing node → indoor station node
-// ─────────────────────────────────────────────────────────────────────────────
 
 export interface IndoorStation {
   stationId: string;
@@ -70,12 +61,15 @@ export interface IndoorStation {
  * Resolve the indoor station node (location_type=1) that corresponds to a
  * routing station, matching by stop_name + proximity. Returns null when this
  * feed carries no indoor data for the station (e.g. most bus stops, TRA halts).
+ *
+ * @param name The routing station's stop name.
+ * @param coords The routing station's [lng, lat] coordinates.
+ * @returns The matched indoor station, or null when no indoor data exists.
  */
 export async function findIndoorStation(
   name: string,
   coords: [number, number]
 ): Promise<IndoorStation | null> {
-  // Exact name first (the common case), then a contains-regex fallback.
   let candidates = await GtfsStop.find({ locationType: 1, stopName: name })
     .lean<IGtfsStop[]>();
   if (!candidates.length) {
@@ -94,7 +88,6 @@ export async function findIndoorStation(
   for (const c of candidates) {
     if (!equalStopName(c.stopName, name)) continue;
     const cc = c.location?.coordinates as [number, number] | undefined;
-    // Placeholder [0,0] nodes have no usable geometry — fall back to name-only.
     const dist =
       cc && (cc[0] !== 0 || cc[1] !== 0) ? haversineCoords(coords, cc) : 0;
     if (dist < bestDist) {
@@ -112,39 +105,28 @@ export async function findIndoorStation(
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Pathway graph traversal (Dijkstra, bounded to one station)
-// ─────────────────────────────────────────────────────────────────────────────
-
 interface Edge {
   to: string;
   mode: number;
   cost: number;
 }
 
-/** One step in a resolved indoor path. */
 export interface IndoorPathStep {
   stopId: string;
-  /** Pathway mode used to ARRIVE at this stop (undefined for the start node). */
   viaMode?: number;
 }
 
 export interface IndoorPath {
   steps: IndoorPathStep[];
   totalSeconds: number;
-  /** True when the path traverses at least one elevator (mode 5). */
   usesElevator: boolean;
-  /** True when the path traverses stairs (mode 2) — only when not excluded. */
   usesStairs: boolean;
 }
 
 export interface FindIndoorPathOptions {
-  /** Pathway modes that may NOT be traversed (wheelchair → [2]). */
   excludePathwayModes?: number[];
-  /** Pathway modes to favour with zero/low cost (wheelchair → [5]). */
   preferPathwayModes?: number[];
   mode?: AccessibilityMode;
-  /** Restrict traversal to this node-id set (a single station's nodes). */
   allowedNodeIds?: Set<string>;
 }
 
@@ -153,11 +135,10 @@ function edgeCost(
   opts: FindIndoorPathOptions
 ): number | null {
   const exclude = new Set(opts.excludePathwayModes ?? []);
-  if (exclude.has(p.pathwayMode)) return null; // impassable
+  if (exclude.has(p.pathwayMode)) return null;
 
   let cost = p.traversalTime ?? DEFAULT_TRAVERSAL_SEC[p.pathwayMode] ?? 15;
 
-  // Wheelchair: penalise escalators so an elevator path is chosen when one exists.
   if (opts.mode === "wheelchair" && p.pathwayMode === 4) {
     cost += ESCALATOR_WHEELCHAIR_PENALTY;
   }
@@ -167,6 +148,10 @@ function edgeCost(
 /**
  * Build the adjacency list for a set of indoor node ids. Bidirectional pathways
  * yield edges in both directions; one-directional escalators/gates only forward.
+ *
+ * @param nodeIds The set of indoor node ids to include.
+ * @param opts Traversal options controlling edge cost and exclusions.
+ * @returns The adjacency list keyed by node id.
  */
 async function buildAdjacency(
   nodeIds: Set<string>,
@@ -185,8 +170,6 @@ async function buildAdjacency(
   };
 
   for (const p of pathways) {
-    // Stay inside the station's node set (avoids wandering into neighbours that
-    // share a pathway id range).
     if (!nodeIds.has(p.fromStopId) || !nodeIds.has(p.toStopId)) continue;
     const cost = edgeCost(p, opts);
     if (cost === null) continue;
@@ -201,7 +184,12 @@ async function buildAdjacency(
 /**
  * Dijkstra over a prebuilt adjacency list. Pure (no I/O), so callers that probe
  * many origin/destination pairs within one station build the graph once and
- * reuse it. Returns null when `toStopId` is unreachable.
+ * reuse it.
+ *
+ * @param adj The prebuilt adjacency list.
+ * @param fromStopId The start node id.
+ * @param toStopId The target node id.
+ * @returns The shortest indoor path, or null when `toStopId` is unreachable.
  */
 function dijkstraPath(
   adj: Map<string, Edge[]>,
@@ -256,7 +244,12 @@ function dijkstraPath(
   return { steps, totalSeconds: dist.get(toStopId) ?? 0, usesElevator, usesStairs };
 }
 
-/** Collect every node id belonging to a station (children + the station node). */
+/**
+ * Collect every node id belonging to a station (children + the station node).
+ *
+ * @param stationId The station node id.
+ * @returns The set of node ids belonging to the station.
+ */
 export async function getStationNodeIds(stationId: string): Promise<Set<string>> {
   const kids = await GtfsStop.find({ parentStation: stationId })
     .select("stopId")
@@ -268,8 +261,12 @@ export async function getStationNodeIds(stationId: string): Promise<Set<string>>
 
 /**
  * Shortest accessible indoor path between two nodes within a station, via
- * Dijkstra over the pathway graph. Returns null when no permitted path exists
- * (e.g. wheelchair user and every route needs stairs).
+ * Dijkstra over the pathway graph.
+ *
+ * @param fromStopId The start node id.
+ * @param toStopId The target node id.
+ * @param opts Traversal options controlling exclusions and node scope.
+ * @returns The shortest permitted path, or null when none exists (e.g. wheelchair user and every route needs stairs).
  */
 export async function findIndoorPath(
   fromStopId: string,
@@ -283,7 +280,6 @@ export async function findIndoorPath(
   const nodeIds =
     opts.allowedNodeIds ??
     (await (async () => {
-      // Default scope: union of both endpoints' stations.
       const set = new Set<string>([fromStopId, toStopId]);
       const ends = await GtfsStop.find({ stopId: { $in: [fromStopId, toStopId] } })
         .select("parentStation")
@@ -303,11 +299,12 @@ export async function findIndoorPath(
   return dijkstraPath(adj, fromStopId, toStopId);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Entrances / platforms / accessibility derivation
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Entrance nodes (location_type=2) of a station, with usable coordinates. */
+/**
+ * Entrance nodes (location_type=2) of a station, with usable coordinates.
+ *
+ * @param stationId The station node id.
+ * @returns The station's entrance nodes that have usable coordinates.
+ */
 export async function getStationEntrances(stationId: string): Promise<IGtfsStop[]> {
   const docs = await GtfsStop.find({ parentStation: stationId, locationType: 2 })
     .lean<IGtfsStop[]>();
@@ -317,13 +314,24 @@ export async function getStationEntrances(stationId: string): Promise<IGtfsStop[
   });
 }
 
-/** Platform nodes (location_type=0) of a station. */
+/**
+ * Platform nodes (location_type=0) of a station.
+ *
+ * @param stationId The station node id.
+ * @returns The station's platform nodes.
+ */
 export async function getStationPlatforms(stationId: string): Promise<IGtfsStop[]> {
   return GtfsStop.find({ parentStation: stationId, locationType: 0 })
     .lean<IGtfsStop[]>();
 }
 
-/** Entrance nearest the user, by Haversine distance. */
+/**
+ * Entrance nearest the user, by Haversine distance.
+ *
+ * @param userCoords The user's [lng, lat] coordinates.
+ * @param entrances Candidate entrance nodes.
+ * @returns The nearest entrance, or null when none are given.
+ */
 export function selectNearestEntrance(
   userCoords: [number, number],
   entrances: IGtfsStop[]
@@ -341,9 +349,12 @@ export function selectNearestEntrance(
 }
 
 /**
- * Derive step-free accessibility from the indoor graph (spec §10.4): a station
- * is wheelchair-accessible iff at least one elevator pathway (mode 5) connects
- * its nodes. Cheap existence check; never throws.
+ * Derive step-free accessibility from the indoor graph: a station is
+ * wheelchair-accessible iff at least one elevator pathway (mode 5) connects its
+ * nodes. Cheap existence check; never throws.
+ *
+ * @param stationId The station node id.
+ * @returns True when the station has at least one elevator pathway.
  */
 export async function stationHasElevator(stationId: string): Promise<boolean> {
   try {
@@ -359,32 +370,18 @@ export async function stationHasElevator(stationId: string): Promise<boolean> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// High-level station access (the wiring surface for the router)
-// ─────────────────────────────────────────────────────────────────────────────
-
 export interface StationAccess {
   stationId: string;
   stationName: string;
-  /** Nearest entrance to the user; null when the station lists no entrances. */
   entrance: {
     stopId: string;
     name: string;
-    /** Best-effort exit identifier parsed from the name, or "". */
     exitNumber: string;
     coords: [number, number];
   } | null;
-  /** Whether the station has any elevator pathway at all. */
   hasElevator: boolean;
-  /**
-   * Whether a step-free path exists from the chosen entrance to a platform for
-   * the requested mode (wheelchair excludes stairs). Null when not evaluated
-   * (no entrance or no platform data).
-   */
   stepFree: boolean | null;
-  /** Whether the chosen entrance→platform path actually rides an elevator. */
   usesElevator: boolean;
-  /** levels.txt name of the first elevator landing on the path, when resolvable. */
   elevatorLevelName?: string;
 }
 
@@ -399,11 +396,13 @@ function parseExitNumber(name: string): string {
 
 /**
  * Resolve indoor access for a station from the routing node's name + coords.
- * Returns null when the feed has no indoor graph for the station (caller should
- * fall back to the TRTC A11y collection / station-centroid walk).
- *
  * Picks the entrance nearest the user, then the shortest mode-appropriate path
  * to any platform. Never throws — any failure degrades to null.
+ *
+ * @param station The routing station with name and [lng, lat] coords.
+ * @param userCoords The user's [lng, lat] coordinates.
+ * @param mode The accessibility mode for traversal constraints.
+ * @returns The resolved station access, or null when the feed has no indoor graph for the station (caller should fall back to the TRTC A11y collection / station-centroid walk).
  */
 export async function getStationAccess(
   station: { name: string; coords: [number, number] },
@@ -439,7 +438,6 @@ export async function getStationAccess(
 
     if (!nearest || !platforms.length) return base;
 
-    // Build the station graph ONCE (mode-aware), then probe every entrance.
     const allowed = await getStationNodeIds(indoor.stationId);
     const adj = await buildAdjacency(allowed, {
       mode,
@@ -456,8 +454,6 @@ export async function getStationAccess(
       return best;
     };
 
-    // Prefer the entrance nearest the user that has a step-free path to a
-    // platform; if none is step-free, keep the nearest entrance overall.
     const entrancesByDistance = [...entrances].sort(
       (a, b) =>
         haversineCoords(userCoords, a.location.coordinates as [number, number]) -
@@ -481,7 +477,6 @@ export async function getStationAccess(
       base.usesElevator = chosenPath.usesElevator;
 
       if (chosenPath.usesElevator) {
-        // First elevator landing's level name, for the frontend guidance string.
         const elevStep = chosenPath.steps.find((s) => s.viaMode === 5);
         if (elevStep) {
           const node = await GtfsStop.findOne({ stopId: elevStep.stopId })
@@ -496,7 +491,6 @@ export async function getStationAccess(
         }
       }
     } else {
-      // Entrances exist and platforms exist, but no permitted path for this mode.
       base.stepFree = false;
     }
 

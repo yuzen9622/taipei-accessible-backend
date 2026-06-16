@@ -4,7 +4,6 @@ import { googleGenAi, model } from "../../config/ai";
 import { airConfig } from "../../config/ai/config";
 import { airContents } from "../../config/ai/contents";
 
-// Bypass expired SSL certificate for Taiwan STA Air Quality API (which frequently lapses)
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 export interface AirReading {
@@ -53,10 +52,12 @@ export function classifyPm25(pm25: number): { quality: string; advice: string } 
 }
 
 /**
- * Full air-quality lookup for the endpoint and the agent tool: fetch the
- * nearest PM2.5 readings, then have Gemini turn them into a user-facing
- * description. Returns null when no sensor covers the area (the caller maps
- * that to 404).
+ * Full air-quality lookup that fetches the nearest PM2.5 readings, then has
+ * Gemini turn them into a user-facing description.
+ *
+ * @param lat Latitude of the location to assess.
+ * @param lng Longitude of the location to assess.
+ * @returns The AI air-quality response, or null when no sensor covers the area.
  */
 export async function getAirQualityWithAI(
   lat: number,

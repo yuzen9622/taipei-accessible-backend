@@ -12,8 +12,6 @@ import MetroStationModel from "../model/metro-station.model";
 import { metroUrl } from "../config/transit";
 import { tdxFetch } from "../config/fetch";
 import { TdxMetroStation, TdxMetroStationOfLine } from "../types/transit";
-// TDX Station API returns StationUID with system prefix (e.g. "TMRT-G0").
-// StationOfLine returns bare StationID (e.g. "G0") — we construct the full UID below.
 
 const DELAY_MS = 60000;
 const CHUNK = 500;
@@ -48,8 +46,6 @@ async function importSystem(railSystem: string): Promise<number> {
     ? ((await lineResp.json()) as TdxMetroStationOfLine[])
     : [];
 
-  // Build fullStationUid → Set<fullLineUid>
-  // TDX StationOfLine uses bare IDs, so we prepend railSystem to reconstruct full UIDs.
   const lineMap = new Map<string, Set<string>>();
   for (const sol of stationOfLines) {
     const fullLineUid = `${railSystem}-${sol.LineID}`;

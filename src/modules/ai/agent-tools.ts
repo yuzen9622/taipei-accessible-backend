@@ -6,8 +6,6 @@ import { findAccessibleRoutes } from "../accessible-route/accessible-route.servi
 import type { AccessibleRoute, WalkLeg, BusLeg, MetroLeg, ThsrLeg, TraLeg } from "../accessible-route/accessible-route.service";
 import { TaiwanCityEn } from "../../types/transit";
 
-// ─── Tool 7: findGooglePlaces ─────────────────────────────────────────────────
-
 export async function findGooglePlaces(args: {
   query: string;
   latitude?: number;
@@ -22,8 +20,6 @@ export async function findGooglePlaces(args: {
     return JSON.stringify({ error: "Google Places API 查詢失敗" });
   }
 }
-
-// ─── Tool 1: findA11yPlaces (upgraded — adds OsmA11y) ────────────────────────
 
 export async function findA11yPlaces(args: {
   query?: string;
@@ -64,8 +60,6 @@ export async function findA11yPlaces(args: {
     return JSON.stringify({ error: "資料庫查詢失敗" });
   }
 }
-
-// ─── Tool 2: planAccessibleRoute (upgraded — calls findAccessibleRoutes) ──────
 
 function summarizeLeg(
   leg: WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg
@@ -148,7 +142,6 @@ export async function planAccessibleRoute(args: {
   const { origin, destination, mode, departureTime } = args;
 
   try {
-    // Resolve origin coords
     let originCoords: { latitude: number; longitude: number } | null;
     if (origin === "current_location" && args.userLocation) {
       originCoords = args.userLocation;
@@ -200,8 +193,6 @@ export async function planAccessibleRoute(args: {
   }
 }
 
-// ─── Tool 3: getBusArrivalEstimate ────────────────────────────────────────────
-
 export async function getBusArrivalEstimate(args: {
   routeName: string;
   departureStop: string;
@@ -233,8 +224,6 @@ export async function getBusArrivalEstimate(args: {
   }
 }
 
-// ─── Tool 4: getBusPosition ───────────────────────────────────────────────────
-
 export async function getBusPosition(args: {
   plateNumber: string;
   routeName: string;
@@ -260,8 +249,6 @@ export async function getBusPosition(args: {
     return JSON.stringify({ ok: false, error: "公車位置查詢失敗" });
   }
 }
-
-// ─── Tool 5: getAirQuality ────────────────────────────────────────────────────
 
 export async function getAirQuality(args: {
   latitude: number;
@@ -289,8 +276,6 @@ export async function getAirQuality(args: {
   }
 }
 
-// ─── Tool 6: getA11yFacilityDetails ──────────────────────────────────────────
-
 export async function getA11yFacilityDetails(args: { osmId: string }): Promise<string> {
   try {
     const ids = args.osmId.split(",").map((s) => s.trim()).filter(Boolean);
@@ -307,8 +292,6 @@ export async function getA11yFacilityDetails(args: { osmId: string }): Promise<s
     return JSON.stringify({ ok: false, error: "設施詳情查詢失敗" });
   }
 }
-
-// ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 export async function executeLocalTool(
   name: string,

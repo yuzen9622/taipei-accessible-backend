@@ -11,7 +11,13 @@ import {
   type AccessibilityMode,
 } from "./ai.service";
 
-/** POST /api/v1/ai/explain — AccessibleRoute → RouteExplanation. */
+/**
+ * POST /api/v1/ai/explain — AccessibleRoute → RouteExplanation.
+ *
+ * @param req Express request carrying the route, mode and language
+ * @param res Express response for the RouteExplanation
+ * @returns The sent ApiResponse
+ */
 export async function aiExplain(
   req: Request,
   res: Response<ApiResponse<RouteExplanation>>
@@ -50,7 +56,13 @@ export async function aiExplain(
   }
 }
 
-/** POST /api/v1/ai/intent — natural language → RouteIntent. */
+/**
+ * POST /api/v1/ai/intent — natural language → RouteIntent.
+ *
+ * @param req Express request carrying the natural-language query
+ * @param res Express response for the RouteIntent
+ * @returns The sent ApiResponse
+ */
 export async function aiIntent(
   req: Request,
   res: Response<ApiResponse<RouteIntent>>

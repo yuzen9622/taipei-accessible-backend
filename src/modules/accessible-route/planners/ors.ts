@@ -9,10 +9,10 @@
 import { getWalkCache, setWalkCache } from "./walk-cache";
 
 const ORS_BASE = "https://api.openrouteservice.org/v2";
-export const WHEELCHAIR_SPEED_M_PER_MIN = 60; // conservative wheelchair walking speed
+export const WHEELCHAIR_SPEED_M_PER_MIN = 60;
 
 export interface WalkingRoute {
-  polyline: [number, number][]; // [[lng, lat], ...] GeoJSON order
+  polyline: [number, number][];
   distanceM: number;
   durationSec: number;
 }
@@ -44,14 +44,12 @@ function straightLineRoute(
 }
 
 export async function orsWalkingRoute(
-  from: [number, number], // [lng, lat]
+  from: [number, number],
   to: [number, number],
   wheelchair = true,
 ): Promise<WalkingRoute> {
   const apiKey = process.env.ORS_API_KEY;
 
-  // Phase 1 (FR-04): check the walk cache first. A cached entry only stores
-  // duration + distance, so reconstruct a straight-line-shaped polyline.
   const cached = await getWalkCache(from, to);
   if (cached) {
     return {
@@ -62,8 +60,6 @@ export async function orsWalkingRoute(
   }
 
   if (!apiKey) {
-    // Straight-line fallback is NOT cached — caching poor estimates would
-    // pollute the cache once ORS becomes available.
     return straightLineRoute(from, to);
   }
 
@@ -79,8 +75,6 @@ export async function orsWalkingRoute(
       body: JSON.stringify({ coordinates: [from, to] }),
     });
 
-    // wheelchair profile is not available on the free public API — retry with
-    // foot-walking before giving up entirely.
     if (!resp.ok && resp.status === 404 && profile === "wheelchair") {
       resp = await fetch(`${ORS_BASE}/directions/foot-walking/geojson`, {
         method: "POST",
@@ -107,8 +101,6 @@ export async function orsWalkingRoute(
       durationSec: feature.properties.summary.duration,
     };
 
-    // Cache only successful ORS responses. Fire-and-forget; never delay or
-    // break the caller on a cache-write failure.
     void setWalkCache(from, to, route.durationSec, route.distanceM).catch(
       () => {},
     );
@@ -121,16 +113,20 @@ export async function orsWalkingRoute(
 }
 
 /**
- * Phase 2 — ORS Matrix: one-to-many walking durations.
+ * ORS Matrix: one-to-many walking durations.
  *
  * Returns walking duration in SECONDS for each destination, in the same order
  * as `destinations`. An element is `null` only when ORS reports a destination
  * as unreachable. When ORS_API_KEY is unset or any error occurs, falls back to
  * straight-line Haversine estimates (never null in fallback mode).
+ *
+ * @param origin The [lng, lat] origin coordinate.
+ * @param destinations The [lng, lat] destination coordinates.
+ * @returns Walking duration in seconds per destination, in input order.
  */
 export async function orsWalkingMatrix(
-  origin: [number, number], // [lng, lat]
-  destinations: [number, number][], // [[lng, lat], ...]
+  origin: [number, number],
+  destinations: [number, number][],
 ): Promise<(number | null)[]> {
   const fallback = (): (number | null)[] =>
     destinations.map((d) => {

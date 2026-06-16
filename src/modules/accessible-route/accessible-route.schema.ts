@@ -30,7 +30,6 @@ export const AccessibleRouteBodySchema = z
     }),
     query: z
       .preprocess(
-        // Clients send query: "" when using origin/destination — treat as absent
         (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
         z.string().min(1).optional(),
       )
@@ -87,8 +86,6 @@ export const AccessibleRouteBodySchema = z
     message: "請提供 origin+destination，或自然語言 query",
   });
 
-// ── Response component schemas ──────────────────────────────────────────────
-
 const OsmA11ySchema = z
   .object({
     osmId: z.string().openapi({ example: "node/123456789" }),
@@ -119,7 +116,6 @@ const OsmA11ySchema = z
   })
   .openapi("SlimOsmA11y");
 
-/** Phase 14 compact format: osmId references into route-level `facilities`. */
 const A11yRefsSchema = z
   .array(z.string())
   .optional()
@@ -441,8 +437,6 @@ export const ErrorResponseSchema = z
     accessToken: z.string().optional(),
   })
   .openapi("ErrorResponse");
-
-// ── OpenAPI path registrations ──────────────────────────────────────────────
 
 registry.registerPath({
   method: "post",

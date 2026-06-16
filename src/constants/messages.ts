@@ -14,11 +14,8 @@ export const MSG = {
 } as const;
 
 export const ERROR_MESSAGE = {
-  /** Generic 500 fallback message. */
   INTERNAL: "Internal Server Error",
-  /** Base for missing-parameter 400s; append the field name(s) at the call site. */
   MISSING_PARAMS: "缺少必要參數",
-  /** A natural-language route query that couldn't be parsed into origin/destination. */
   INTENT_PARSE_FAILED:
     "無法解析您的查詢，請改用『從 A 到 B』的描述或直接提供 origin/destination",
 } as const;

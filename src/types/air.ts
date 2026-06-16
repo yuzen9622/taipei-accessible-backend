@@ -1,4 +1,3 @@
-// STA 原始 API 回傳
 export interface STAObservation {
   "@iot.selfLink": string;
   "@iot.id": number;
@@ -27,7 +26,7 @@ export interface STAThing {
 export interface STADatastream {
   "@iot.id": number;
   "@iot.selfLink": string;
-  name: string; // PM2.5
+  name: string;
   description?: string;
   observedArea?: {
     type: string;

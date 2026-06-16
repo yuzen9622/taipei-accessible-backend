@@ -54,8 +54,6 @@ const IntentErrorSchema = z
   })
   .openapi("IntentErrorResponse");
 
-// ─── Phase 10 — /ai/explain ──────────────────────────────────────────────────
-
 export const ExplainBodySchema = z
   .object({
     route: z
@@ -130,8 +128,6 @@ registry.registerPath({
     },
   },
 });
-
-// ─── Phase 17 — /ai/chat (Agent Streaming) ───────────────────────────────────
 
 export const ToolCallSchema = z
   .object({

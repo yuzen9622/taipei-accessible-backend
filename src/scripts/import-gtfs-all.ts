@@ -3,10 +3,10 @@
  * Recommended to run individual scripts first to verify, then use this for a full refresh.
  *
  * Only the collections the live server still reads are imported:
- *   1. levels    (no deps)        — indoor graph
- *   2. stops     (refs levels)    — indoor graph (station/entrance/platform nodes)
- *   3. trips     (no runtime deps)— OTP direction_id lookup
- *   4. pathways  (refs stops)     — indoor graph
+ *   levels    (no deps)        — indoor graph
+ *   stops     (refs levels)    — indoor graph (station/entrance/platform nodes)
+ *   trips     (no runtime deps)— OTP direction_id lookup
+ *   pathways  (refs stops)     — indoor graph
  *
  * The schedule tables (routes/calendar/frequencies/stop_times/shapes) backed the
  * retired in-Mongo GTFS router and are no longer imported — OTP reads the GTFS

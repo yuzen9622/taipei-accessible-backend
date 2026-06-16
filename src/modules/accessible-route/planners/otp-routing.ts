@@ -1,11 +1,11 @@
 /**
- * OTP2 transit planner client (Phase 16, spec: FUNCTIONAL_SPEC_OTP2_INTEGRATION.md).
+ * OTP2 transit planner client.
  *
  * Queries a sidecar OpenTripPlanner 2.x server (GTFS GraphQL API) and maps its
  * itineraries into AccessibleRoute so they enter the same finalizeRoutes()
  * pipeline as the GTFS graph and TDX MaaS planners. This planner does NO a11y
- * enrichment (spec §8.1 — the orchestrator enriches the final top-3) and never
- * throws: any failure returns [] so the other planners' results still serve.
+ * enrichment (the orchestrator enriches the final top-3) and never throws: any
+ * failure returns [] so the other planners' results still serve.
  *
  * Endpoint: POST {OTP_BASE_URL}/otp/gtfs/v1  (GraphQL)
  */
@@ -26,27 +26,13 @@ import type {
   WaitInfo,
 } from "../../../types/route";
 
-// The timeout guards against HUNG connections only — a dead OTP container
-// rejects instantly (ECONNREFUSED) and trips the circuit breaker, so a
-// generous ceiling costs nothing on the fail-soft path. It must absorb
-// event-loop starvation too: when planGtfsRoute's CPU-heavy joins block the
-// loop, an expired abort timer runs BEFORE the already-arrived response's
-// I/O callback and would kill a successful query (observed with 12s).
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
 const OTP_NUM_ITINERARIES = 5;
 
-// Snap-to-stop fallback: when plan() returns no itineraries, the usual cause is
-// the endpoint linking onto a disconnected street island (station plazas — the
-// OSM footways around e.g. 台中車站 don't connect back to the road grid), so
-// EVERY access leg dies. Retry once from the nearest stop that has at least one
-// route serving it — stops without routes (orphaned station entities, platforms
-// of feeds with no trips) often sit on the same island and can't board anyway.
 const SNAP_RADIUS_M = 500;
 const SNAP_CANDIDATES = 10;
 const WALK_SPEED_M_PER_MIN = 75;
 
-// Same set as gtfs-router.service.ts — OTP route gtfsIds carry the TDX system
-// code as their leading segment once the feed prefix is stripped.
 const METRO_SYSTEMS = new Set([
   "TRTC",
   "KRTC",
@@ -56,9 +42,6 @@ const METRO_SYSTEMS = new Set([
   "TYMC",
 ]);
 
-// The national TDX feed also carries ferries (route_type 4) and domestic air
-// (1102), which AccessibleRoute does not model (gtfs-router likewise drops
-// ferry). Itineraries using any other mode are discarded whole.
 const SUPPORTED_TRANSIT_MODES = new Set([
   "BUS",
   "TROLLEYBUS",
@@ -68,8 +51,6 @@ const SUPPORTED_TRANSIT_MODES = new Set([
   "MONORAIL",
 ]);
 
-// ── Circuit breaker (spec §9): after consecutive failures stop hitting OTP for
-// a cooldown window so a dead container costs ~0ms instead of 3s per request.
 const BREAKER_THRESHOLD = 3;
 const BREAKER_COOLDOWN_MS = 60_000;
 let consecutiveFailures = 0;
@@ -86,7 +67,6 @@ function recordSuccess(): void {
   circuitOpenUntil = 0;
 }
 
-// ── Raw response shapes (only fields we consume) ──
 interface OtpStop {
   gtfsId: string;
   code?: string;
@@ -98,11 +78,11 @@ interface OtpPlace {
   stop?: OtpStop | null;
 }
 interface OtpLeg {
-  mode: string; // WALK | BUS | RAIL | SUBWAY | TRAM | …
-  startTime: number; // epoch ms
-  endTime: number; // epoch ms
-  duration?: number; // seconds
-  distance?: number; // meters
+  mode: string;
+  startTime: number;
+  endTime: number;
+  duration?: number;
+  distance?: number;
   from: OtpPlace;
   to: OtpPlace;
   route?: {
@@ -117,40 +97,52 @@ interface OtpLeg {
   intermediatePlaces?: { stop?: OtpStop | null }[] | null;
 }
 interface OtpItinerary {
-  duration: number; // seconds
+  duration: number;
   walkDistance?: number;
   legs: OtpLeg[];
 }
 
 export interface PlanOtpRouteOptions {
-  /** Departure time; controller already clamps past times → undefined (= now). */
   departureTime?: Date;
   maxTransfers?: 0 | 1 | 2;
   mode?: AccessibilityMode;
   limit?: number;
 }
 
-// ── Time formatting: OTP returns epoch ms; the feed runs on Asia/Taipei ──
-
 function hhmm(epochMs: number): string {
   return taipeiHHmm(new Date(epochMs));
 }
 const ymdDash = taipeiYmdDash;
 
-/** "1:TXG123" → "TXG123" — restore the TDX id the Phase 15 overlay keys on. */
+/**
+ * "1:TXG123" → "TXG123" — restore the TDX id the overlay keys on.
+ *
+ * @param gtfsId The feed-prefixed GTFS id.
+ * @returns The id with the feed prefix stripped.
+ */
 function stripFeedId(gtfsId: string | undefined): string {
   if (!gtfsId) return "";
   const idx = gtfsId.indexOf(":");
   return idx >= 0 ? gtfsId.slice(idx + 1) : gtfsId;
 }
 
-/** System code prefix of a stripped GTFS id, e.g. "TRTC_BL12" → "TRTC". */
+/**
+ * System code prefix of a stripped GTFS id, e.g. "TRTC_BL12" → "TRTC".
+ *
+ * @param id The stripped GTFS id.
+ * @returns The system code prefix.
+ */
 function systemFromId(id: string): string {
   const idx = id.indexOf("_");
   return idx > 0 ? id.slice(0, idx) : id;
 }
 
-/** Decode OTP's Google-encoded polyline into [lng, lat] pairs (GeoJSON order). */
+/**
+ * Decode OTP's Google-encoded polyline into [lng, lat] pairs (GeoJSON order).
+ *
+ * @param points The Google-encoded polyline string.
+ * @returns The decoded [lng, lat] coordinate pairs.
+ */
 export function decodeOtpPolyline(points: string | undefined): [number, number][] {
   if (!points) return [];
   try {
@@ -164,12 +156,15 @@ function isTransitLeg(leg: OtpLeg): boolean {
   return leg.mode !== "WALK";
 }
 
-/** Train number from a stripped rail trip id ("TRA_1003_…" → "1003"). */
+/**
+ * Train number from a stripped rail trip id ("TRA_1003_…" → "1003").
+ *
+ * @param tripId The stripped rail trip id.
+ * @returns The train number, or null when not parseable.
+ */
 function trainNoFromTripId(tripId: string): string | null {
   return tripId.match(/^(?:TRA|THSR)_(\d+)/)?.[1] ?? null;
 }
-
-// ── GraphQL ──
 
 const PLAN_QUERY = `
 query Plan(
@@ -250,14 +245,6 @@ async function queryOtpPlan(
   }
 }
 
-// ── Rail leg geometry (Phase 15 overlay) ──
-//
-// The real track corridor for a MaaS rail leg: OTP carries the GTFS shapes, so
-// a station→station rail plan returns the geometry the MaaS API omits. Geometry
-// is time-independent, so the caller passes a safe midday service time. Goes
-// through the circuit breaker and never throws — null means "keep the leg's
-// existing straight-line polyline".
-
 const RAIL_GEOMETRY_QUERY = `
 query RailGeom(
   $fromLat: Float!, $fromLon: Float!,
@@ -278,9 +265,15 @@ query RailGeom(
 }`;
 
 /**
- * Real track polyline ([lng,lat], GeoJSON order) for a rail OD via OTP, or null
- * (OTP down / no itinerary / empty). Transit legs are concatenated and
- * consecutive duplicate points dropped (OTP repeats a point at stop joins).
+ * Real track polyline ([lng,lat], GeoJSON order) for a rail OD via OTP. Transit
+ * legs are concatenated and consecutive duplicate points dropped (OTP repeats a
+ * point at stop joins).
+ *
+ * @param from The [lat, lng] origin.
+ * @param to The [lat, lng] destination.
+ * @param dateYmd The service date in YYYY-MM-DD form.
+ * @param timeHHmm The departure time in "HH:mm" form.
+ * @returns The track polyline, or null (OTP down / no itinerary / empty).
  */
 export async function fetchRailLegGeometry(
   from: { lat: number; lng: number },
@@ -323,7 +316,7 @@ export async function fetchRailLegGeometry(
     const legs = json.data?.plan?.itineraries?.[0]?.legs ?? [];
     const coords: [number, number][] = [];
     for (const leg of legs) {
-      if (leg.mode === "WALK") continue; // access/egress walk — not the ride
+      if (leg.mode === "WALK") continue;
       for (const pt of decodeOtpPolyline(leg.legGeometry?.points)) {
         const last = coords[coords.length - 1];
         if (!last || last[0] !== pt[0] || last[1] !== pt[1]) coords.push(pt);
@@ -337,8 +330,6 @@ export async function fetchRailLegGeometry(
     clearTimeout(timer);
   }
 }
-
-// ── Snap-to-stop fallback ──
 
 const NEARBY_STOPS_QUERY = `
 query NearbyStops($lat: Float!, $lon: Float!, $radius: Int!, $first: Int!) {
@@ -361,6 +352,9 @@ interface SnapStop {
 /**
  * Nearest stop within SNAP_RADIUS_M that has ≥1 route serving it (results come
  * back distance-ascending). Fail-soft: null on any error or no candidate.
+ *
+ * @param point The [lat, lng] point to snap from.
+ * @returns The nearest route-bearing stop, or null.
  */
 async function findSnapStop(point: {
   lat: number;
@@ -415,7 +409,14 @@ async function findSnapStop(point: {
   }
 }
 
-/** Straight-line walk leg bridging a real endpoint to its snapped stop. */
+/**
+ * Straight-line walk leg bridging a real endpoint to its snapped stop.
+ *
+ * @param from The origin point with name and coords.
+ * @param to The destination point with name and coords.
+ * @param wheelchair Whether to use the wheelchair walking speed.
+ * @returns The bridging WalkLeg.
+ */
 function snapWalkLeg(
   from: { lng: number; lat: number; name: string },
   to: { lng: number; lat: number; name: string },
@@ -440,11 +441,12 @@ function snapWalkLeg(
   };
 }
 
-// ── Leg mapping (spec §7) ──
-
 /**
  * Batched direction lookup: OTP exposes no direction_id, but the Mongo GtfsTrip
- * collection (kept for stop geo / overlay, spec §5) has it. Fail-soft to {}.
+ * collection has it. Fail-soft to {}.
+ *
+ * @param tripIds The trip ids to look up.
+ * @returns A map of trip id to direction id.
  */
 async function lookupDirections(
   tripIds: string[],
@@ -457,7 +459,6 @@ async function lookupDirections(
       .lean<{ tripId: string; directionId: 0 | 1 }[]>();
     for (const t of trips) map.set(t.tripId, t.directionId ?? 0);
   } catch {
-    /* direction degrades to 0 — collapse key falls back to routeName */
   }
   return map;
 }
@@ -503,7 +504,6 @@ function transitLegFrom(
   );
   const polyline = decodeOtpPolyline(leg.legGeometry?.points);
   const direction = directions.get(tripId) ?? 0;
-  // WaitInfo contract: schedule source carries the "HH:mm" departure clock.
   const waitInfo: WaitInfo = { time: departureTime, source: "schedule" };
 
   const system = systemFromId(routeId);
@@ -579,7 +579,6 @@ function transitLegFrom(
     };
   }
 
-  // default: bus (mode BUS / route type 3)
   return {
     type: "BUS",
     routeName,
@@ -598,12 +597,15 @@ function transitLegFrom(
   };
 }
 
-// ── Public API ──
-
 /**
  * Plan transit routes via the OTP2 sidecar. Output is AccessibleRoute-compatible
  * and un-enriched (no a11y arrays, no highlights) — finalizeRoutes() handles
  * scoring, enrichment and overlays downstream. Fail-soft: [] on any error.
+ *
+ * @param origin The [lat, lng] origin.
+ * @param destination The [lat, lng] destination.
+ * @param opts Planning options (departure time, transfer cap, mode, limit).
+ * @returns The planned AccessibleRoute-compatible routes.
  */
 export async function planOtpRoute(
   origin: { lat: number; lng: number },
@@ -625,8 +627,6 @@ export async function planOtpRoute(
     return [];
   }
 
-  // Empty plan → snap endpoints to the nearest route-bearing stop and retry
-  // once (street-island linking failure; see SNAP_RADIUS_M comment).
   let snapPre: WalkLeg | null = null;
   let snapPost: WalkLeg | null = null;
   if (!itineraries.length) {
@@ -671,7 +671,6 @@ export async function planOtpRoute(
     }
   }
 
-  // OTP has no transfer cap — filter in Node (spec §6.2).
   const maxTransfers = opts?.maxTransfers;
   const queryDate = ymdDash(departure);
   const allTripIds = [
@@ -689,9 +688,9 @@ export async function planOtpRoute(
   const out: AccessibleRoute[] = [];
   for (const [i, it] of itineraries.entries()) {
     const transitOtpLegs = it.legs.filter(isTransitLeg);
-    if (!transitOtpLegs.length) continue; // walk-only: not a transit route
+    if (!transitOtpLegs.length) continue;
     if (transitOtpLegs.some((l) => !SUPPORTED_TRANSIT_MODES.has(l.mode)))
-      continue; // ferry / air / other unmodelled modes
+      continue;
     if (
       maxTransfers !== undefined &&
       transitOtpLegs.length - 1 > maxTransfers
@@ -700,16 +699,11 @@ export async function planOtpRoute(
 
     const legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
     const transitLegs: (BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
-    // Wait baseline: query time for the first leg, then each leg's endTime.
     let clockMs = departure.getTime();
     for (const [j, leg] of it.legs.entries()) {
       if (!isTransitLeg(leg)) {
-        // Drop zero-length transfer connectors, keep real walks.
         if ((leg.distance ?? 0) > 0) {
           const wl = walkLegFrom(leg, j === 0, j === it.legs.length - 1);
-          // Snapped endpoints: the itinerary starts/ends at the snap stop, not
-          // the user's true origin/destination — those are covered by the
-          // synthetic legs added below.
           if (j === 0 && snapPre) wl.from = snapPre.to;
           if (j === it.legs.length - 1 && snapPost) wl.to = snapPost.from;
           legs.push(wl);
@@ -737,10 +731,8 @@ export async function planOtpRoute(
       )
       .join(" → ");
 
-    // Cross-midnight itineraries carry the service date (departureDate 慣例).
     const firstDepDate = ymdDash(new Date(transitOtpLegs[0].startTime));
 
-    // Bridge legs for snapped endpoints (cloned — enrichment mutates legs).
     if (snapPre) legs.unshift({ ...snapPre });
     if (snapPost) legs.push({ ...snapPost });
     const snapMinutes =

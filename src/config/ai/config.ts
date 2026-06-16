@@ -17,7 +17,7 @@ const agentConfig: GenerateContentConfig = {
       ],
     },
   ],
-  temperature: 0.1, // 保持低溫，讓工具呼叫更精準
+  temperature: 0.1,
   topP: 0.95,
   topK: 40,
   candidateCount: 1,
@@ -60,8 +60,6 @@ const routeConfig: GenerateContentConfig = {
   topK: 1,
 };
 
-// Phase 9 — intent parsing. Single-shot structured extraction (no tool loop):
-// a natural-language travel query → RouteIntent JSON.
 const intentConfig: GenerateContentConfig = {
   responseMimeType: "application/json",
   responseJsonSchema: {
@@ -98,8 +96,6 @@ const intentConfig: GenerateContentConfig = {
   topK: 1,
 };
 
-// Phase 10 — route explanation. Single-shot structured generation:
-// an AccessibleRoute (compacted) + mode + language → RouteExplanation JSON.
 const explainConfig: GenerateContentConfig = {
   responseMimeType: "application/json",
   responseJsonSchema: {
