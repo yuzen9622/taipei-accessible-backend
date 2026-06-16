@@ -24,7 +24,6 @@ import {
   fetchTdxRoute,
   fetchWaitInfo,
   waitInfoMinutes,
-  fetchNearestBus,
   fetchMetroStationOfLine,
   fetchMetroTravelTimes,
   fetchMetroHeadway,
@@ -445,7 +444,7 @@ function findTransferCombos(
 
 /**
  * Build a BusLeg + the alighting coords/name for a transit segment, boarding at
- * `boardName` and alighting at `alightName`. Reuses fetchWaitInfo/fetchNearestBus.
+ * `boardName` and alighting at `alightName`. Reuses fetchWaitInfo.
  * Returns null on any failure (bad direction, missing stops, etc.).
  */
 async function buildBusSegment(
@@ -492,11 +491,10 @@ async function buildBusSegment(
     .slice(boardIdx, alightIdx + 1)
     .map((s) => [s.StopPosition.PositionLon, s.StopPosition.PositionLat]);
 
-  const [waitInfo, originA11y, destA11y, nearestBus] = await Promise.all([
+  const [waitInfo, originA11y, destA11y] = await Promise.all([
     fetchWaitInfo(routeId, city, direction, boardName),
     OsmA11y.find(nearQuery(boardCoords, 150)).limit(5).lean<IOsmA11y[]>(),
     OsmA11y.find(nearQuery(alightCoords, 150)).limit(5).lean<IOsmA11y[]>(),
-    fetchNearestBus(routeId, city, direction, boardCoords, boardIdx, dirStops),
   ]);
 
   const waitMinutes = waitInfoMinutes(waitInfo);
@@ -513,7 +511,8 @@ async function buildBusSegment(
     polyline,
     departureStopA11y: originA11y,
     arrivalStopA11y: destA11y,
-    ...(nearestBus ? { nearestBus } : {}),
+    // Per-city legacy path — `city` is the TDX City segment for live position polling.
+    tdxCity: city,
   };
 
   return { leg, rideMinutes, waitMinutes, alightCoords };

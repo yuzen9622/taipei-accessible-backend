@@ -32,7 +32,6 @@ import {
 } from "../../types";
 import {
   BusRoute,
-  BusRealTimeByFrequency,
   TdxMetroStationOfLine,
   TdxMetroS2STravelTimeRecord,
   TdxMetroFrequencyRecord,
@@ -57,7 +56,6 @@ import { ERROR_MESSAGE } from "../../constants/messages";
 import type {
   SlimA11y,
   WaitInfo,
-  NearestBus,
   WalkLeg,
   BusLeg,
   MetroLeg,
@@ -68,7 +66,6 @@ import type {
 export type {
   SlimA11y,
   WaitInfo,
-  NearestBus,
   WalkLeg,
   BusLeg,
   MetroLeg,
@@ -216,75 +213,6 @@ export async function fetchWaitInfo(
   return { time: null, source: "unavailable" };
 }
 
-// ─── Real-time bus position ───────────────────────────────────────────────────
-
-export async function fetchNearestBus(
-  subRouteId: string,
-  city: string,
-  direction: number,
-  departureStopCoords: [number, number],
-  departureStopIdx: number,
-  dirStops: BusRoute["Stops"],
-): Promise<NearestBus | null> {
-  try {
-    const url =
-      `${busUrl.cityRealtimeByFrequencyUrl}/${city}/${subRouteId}` +
-      `?$format=JSON&$filter=Direction eq ${direction}`;
-    const resp = await tdxFetch(url);
-    if (!resp.ok) return null;
-    const buses = (await resp.json()) as BusRealTimeByFrequency[];
-    if (!Array.isArray(buses) || !buses.length) return null;
-
-    const active = buses.filter(
-      (b) => b.DutyStatus === 1 && b.BusStatus === 0 && b.BusPosition,
-    );
-    if (!active.length) return null;
-
-    let best: NearestBus | null = null;
-    let bestDist = Infinity;
-
-    for (const bus of active) {
-      const busCoords: [number, number] = [
-        bus.BusPosition.PositionLon,
-        bus.BusPosition.PositionLat,
-      ];
-
-      // Find which stop in the sequence this bus is closest to
-      let nearestStopIdx = 0;
-      let nearestStopDist = Infinity;
-      for (let i = 0; i < dirStops.length; i++) {
-        const stopCoords: [number, number] = [
-          dirStops[i].StopPosition.PositionLon,
-          dirStops[i].StopPosition.PositionLat,
-        ];
-        const d = haversineM(busCoords, stopCoords);
-        if (d < nearestStopDist) {
-          nearestStopDist = d;
-          nearestStopIdx = i;
-        }
-      }
-
-      // Only buses that haven't passed the departure stop yet
-      if (nearestStopIdx > departureStopIdx) continue;
-
-      const distToDeparture = haversineM(busCoords, departureStopCoords);
-      if (distToDeparture < bestDist) {
-        bestDist = distToDeparture;
-        best = {
-          plateNumb: bus.PlateNumb,
-          position: busCoords,
-          speed: bus.Speed,
-          stopsAway: departureStopIdx - nearestStopIdx,
-        };
-      }
-    }
-
-    return best;
-  } catch {
-    return null;
-  }
-}
-
 // ─── Candidate builder ───────────────────────────────────────────────────────
 
 export async function buildCandidate(
@@ -338,22 +266,14 @@ export async function buildCandidate(
   ];
   const destStopCoords = destStopDoc.location.coordinates as [number, number];
 
-  // 5. Parallel: walking routes + wait info + OsmA11y + nearest bus
-  const [walkTo, walkFrom, waitInfo, originA11y, destA11y, nearestBus] =
+  // 5. Parallel: walking routes + wait info + OsmA11y
+  const [walkTo, walkFrom, waitInfo, originA11y, destA11y] =
     await Promise.all([
       orsWalkingRoute(originCoords, originStopCoords),
       orsWalkingRoute(destStopCoords, destCoords),
       fetchWaitInfo(subRouteId, city, direction, originStopDoc.stopName.Zh_tw),
       OsmA11y.find(nearQuery(originStopCoords, 150)).limit(5).lean(),
       OsmA11y.find(nearQuery(destStopCoords, 150)).limit(5).lean(),
-      fetchNearestBus(
-        subRouteId,
-        city,
-        direction,
-        originStopCoords,
-        originIdx,
-        dirStops,
-      ),
     ]);
 
   // 6. Transit time estimate: 2 min per stop
@@ -417,7 +337,9 @@ export async function buildCandidate(
     polyline: busPolyline,
     departureStopA11y: originA11y as IOsmA11y[],
     arrivalStopA11y: destA11y as IOsmA11y[],
-    ...(nearestBus ? { nearestBus } : {}),
+    // Legacy path runs per-city, so `city` is already the TDX City segment the
+    // frontend polls RealTimeByFrequency with (即時位置另外打).
+    tdxCity: city,
   };
 
   return {
@@ -1623,8 +1545,12 @@ async function finalizeRoutes(
   t.facilityOverlay = Date.now() - t0;
   t0 = Date.now();
   try {
-    const { overlayRealtimeTransit, recoverRailTrainNos } =
+    const { overlayRealtimeTransit, recoverRailTrainNos, annotateBusTdxCity } =
       await import("./planners/realtime-transit");
+    // tdxCity is static metadata (which TDX endpoint the frontend polls for live
+    // vehicle position) — set it unconditionally, independent of the realtime
+    // overlay's USE_REALTIME_TRANSIT / departure-window gating below.
+    annotateBusTdxCity(top);
     // Rail (TRA+THSR) trainNo/time recovery is schedule-based; run it FIRST so
     // it backfills the real (snapped) train number before the realtime pass
     // matches TRA delays against it.

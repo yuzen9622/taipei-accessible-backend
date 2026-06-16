@@ -33,13 +33,6 @@ export interface WaitInfo {
   source: "realtime" | "schedule" | "unavailable";
 }
 
-export interface NearestBus {
-  plateNumb: string;
-  position: [number, number];
-  speed?: number;
-  stopsAway?: number;
-}
-
 export interface WalkLeg {
   type: "WALK";
   /** Phase 14 compact format only: osmId refs into route-level `facilities`. */
@@ -77,9 +70,10 @@ export interface BusLeg {
   departureStopId?: string;
   arrivalStopId?: string;
   /**
-   * TDX operator system code（"NWT"、"TXG"、"THB" 公路客運…）。Set by the TDX
-   * MaaS path (from agency_id), where stop ids are unavailable — the Phase 15
-   * overlay's fallback for picking the realtime ETA endpoint.
+   * 內部欄位（不回傳給前端，finalize 收尾時由 slimRoutes 移除）。TDX 業者系統
+   * 代碼（"NWT"、"TXG"、"THB" 公路客運…），由 TDX MaaS 路徑從 agency_id 取得，
+   * 該路徑無 stop id。供 Phase 15 即時 ETA 端點選擇與 tdxCity 推導使用；前端
+   * 對外只需要 tdxCity。
    */
   cityCode?: string;
   /** "HH:mm" scheduled next departure, when the source timetable provides it. */
@@ -92,7 +86,13 @@ export interface BusLeg {
   polyline: [number, number][];
   departureStopA11y: IOsmA11y[];
   arrivalStopA11y: IOsmA11y[];
-  nearestBus?: NearestBus;
+  /**
+   * TDX City path segment for RealTimeByFrequency（"NewTaipei"、"Taichung"…）。
+   * 即時車輛位置是「另外打」的 API：路線回應只給前端持續追蹤所需的座標
+   * （tdxCity + routeName + direction），不在規劃當下塞一張無法刷新的位置快照。
+   * 公路客運（THB）無城市路徑、省略此欄，前端改打 InterCity 端點。
+   */
+  tdxCity?: string;
 }
 
 export interface MetroLeg {

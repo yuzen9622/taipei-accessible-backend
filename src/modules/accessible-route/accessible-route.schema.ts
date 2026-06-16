@@ -179,20 +179,6 @@ const WaitInfoSchema = z
   })
   .openapi("WaitInfo");
 
-const NearestBusSchema = z
-  .object({
-    plateNumb: z.string().openapi({ example: "ABC-1234" }),
-    position: z
-      .tuple([z.number(), z.number()])
-      .openapi({ example: [121.567, 25.041], description: "[lng, lat]" }),
-    speed: z.number().optional().openapi({ example: 25, description: "km/h" }),
-    stopsAway: z
-      .number()
-      .optional()
-      .openapi({ example: 2, description: "距發車站的站數" }),
-  })
-  .openapi("NearestBus");
-
 const BusLegSchema = z
   .object({
     type: z.literal("BUS").openapi({ example: "BUS" }),
@@ -208,11 +194,6 @@ const BusLegSchema = z
     arrivalStopId: z.string().optional().openapi({
       example: "TXG3917",
       description: "含系統前綴的 GTFS 站牌 id（僅 GTFS 路徑）",
-    }),
-    cityCode: z.string().optional().openapi({
-      example: "NWT",
-      description:
-        "TDX 業者系統代碼（僅 TDX MaaS 路徑）；THB 為公路客運",
     }),
     departureTime: z.string().optional().openapi({
       example: "21:05",
@@ -238,7 +219,12 @@ const BusLegSchema = z
     }),
     departureStopA11y: z.array(OsmA11ySchema),
     arrivalStopA11y: z.array(OsmA11ySchema),
-    nearestBus: NearestBusSchema.optional(),
+    tdxCity: z.string().optional().openapi({
+      example: "NewTaipei",
+      description:
+        "TDX City 路徑段，前端用來「另外打」RealTimeByFrequency 即時車輛位置 " +
+        "（tdxCity + routeName + direction）做持續追蹤；公路客運（THB）無城市路徑、省略此欄。",
+    }),
   })
   .openapi("BusLeg");
 

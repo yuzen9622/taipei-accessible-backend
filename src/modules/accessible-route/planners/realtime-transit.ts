@@ -173,6 +173,29 @@ function busSystemCode(leg: BusLeg): string | null {
 }
 
 /**
+ * Set `leg.tdxCity` on every BUS leg lacking it — the TDX City path segment the
+ * FRONTEND needs to poll RealTimeByFrequency on its own (即時車輛位置另外打，
+ * 不在路線回應裡塞快照). GTFS/OTP legs derive it from the stop-id prefix, MaaS
+ * legs from cityCode; intercity (公路客運, THB) buses have no city path and are
+ * left undefined (frontend uses the InterCity endpoint). Legacy-path legs come
+ * in with tdxCity already set from the request city, so are skipped here.
+ *
+ * Pure + local (no TDX call): runs unconditionally in finalizeRoutes, so EVERY
+ * path produces the same field — no planner can forget it the way nearestBus was.
+ */
+export function annotateBusTdxCity(routes: AccessibleRoute[]): void {
+  for (const route of routes) {
+    for (const leg of route.legs) {
+      if (leg.type !== "BUS" || leg.tdxCity) continue;
+      const code = busSystemCode(leg);
+      if (!code || code === "THB") continue;
+      const city = CITY_BY_STOP_PREFIX[code];
+      if (city) leg.tdxCity = city;
+    }
+  }
+}
+
+/**
  * ETA endpoint for a GTFS-built bus leg, or null when it cannot be derived.
  * Queries BOTH stops and BOTH directions: GTFS direction_id does not reliably
  * map onto TDX Direction (verified live: 860 at 三芝 — GTFS says 0, the bus

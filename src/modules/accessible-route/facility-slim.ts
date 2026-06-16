@@ -111,7 +111,7 @@ function facilityArrayKeys(leg: AnyLeg): string[] {
   }
 }
 
-/** Stage A: replace every facility array's documents with slim projections. */
+/** replace every facility array's documents with slim projections. */
 export function slimRoutes(routes: AccessibleRoute[]): void {
   for (const route of routes) {
     for (const leg of route.legs) {
@@ -120,6 +120,10 @@ export function slimRoutes(routes: AccessibleRoute[]): void {
         const arr = bag[key];
         if (Array.isArray(arr)) bag[key] = arr.map(slimFacility);
       }
+      // cityCode is an internal realtime-overlay hint (consumed upstream by the
+      // ETA overlay + tdxCity derivation) — drop it from the response; the
+      // frontend tracks live position via tdxCity instead.
+      if (leg.type === "BUS") delete bag.cityCode;
     }
   }
 }
