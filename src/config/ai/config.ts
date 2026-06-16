@@ -137,4 +137,34 @@ const explainConfig: GenerateContentConfig = {
   topK: 1,
 };
 
-export { agentConfig, rankConfig, routeConfig, intentConfig, explainConfig };
+const airConfig: GenerateContentConfig = {
+  responseMimeType: "application/json",
+  responseJsonSchema: {
+    type: "object",
+    properties: {
+      description: {
+        type: "string",
+        description: "對目前空氣品質的簡短說明與給行動不便人士的防護建議",
+      },
+      quality: {
+        type: "string",
+        enum: [
+          "GOOD",
+          "MODERATE",
+          "UNHEALTHY_SENSITIVE",
+          "UNHEALTHY",
+          "VERY_UNHEALTHY",
+          "HAZARDOUS",
+          "",
+        ],
+      },
+    },
+    propertyOrdering: ["description", "quality"],
+    required: ["description", "quality"],
+  },
+  temperature: 0.2,
+  topP: 0,
+  topK: 1,
+};
+
+export { agentConfig, rankConfig, routeConfig, intentConfig, explainConfig, airConfig };

@@ -13,6 +13,7 @@ export interface STAThingProperties {
   areaDescription?: string;
   stationID?: string;
   stationName?: string;
+  area?: string;
 }
 
 export interface STAThing {
