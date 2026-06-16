@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { openai, model as defaultModel } from "../../config/ai";
+import { openai, model } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
@@ -53,7 +53,6 @@ function sendSse(res: Response, event: string, data: unknown): void {
 
 export async function aiChat(req: Request, res: Response): Promise<void> {
   const {
-    model: requestModel,
     messages: rawMessages,
     stream,
     temperature,
@@ -66,7 +65,6 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     userLocation?: { latitude: number; longitude: number };
   };
 
-  const useModel = requestModel || defaultModel;
   const useTemp = temperature ?? 0.2;
 
   // Build conversation: prepend system prompt when not already supplied
@@ -92,16 +90,16 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       // Phase 1: tool-calling loop (non-streaming, emits tool_call / tool_result events)
       await runToolLoop(
         messages,
-        useModel,
+        model,
         useTemp,
         userLocation,
         (name, args) => sendSse(res, "tool_call", { name, args }),
-        (name, result) => sendSse(res, "tool_result", { name, result })
+        (name, result) => sendSse(res, "tool_result", { name, result }),
       );
 
       // Phase 2: final answer streamed token-by-token (flat { text } payload)
       const finalStream = await openai.chat.completions.create({
-        model: useModel,
+        model: model,
         messages,
         temperature: useTemp,
         stream: true,
@@ -128,10 +126,10 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
 
   // ── Non-streaming path ──────────────────────────────────────────────────────
   try {
-    await runToolLoop(messages, useModel, useTemp, userLocation);
+    await runToolLoop(messages, model, useTemp, userLocation);
 
     const response = await openai.chat.completions.create({
-      model: useModel,
+      model: model,
       messages,
       temperature: useTemp,
       stream: false,
@@ -152,7 +150,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      error?.message ?? ERROR_MESSAGE.INTERNAL
+      error?.message ?? ERROR_MESSAGE.INTERNAL,
     );
   }
 }
