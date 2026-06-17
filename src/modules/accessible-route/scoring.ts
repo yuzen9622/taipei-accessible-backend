@@ -530,6 +530,7 @@ export function scoreRoute(
   facilityNodes: IOsmA11y[],
   totalMinutes: number,
   maxMinutes: number,
+  minMinutes: number,
   highlightCount: number,
   mode: AccessibilityMode = "normal",
   walkDistanceM = 0,
@@ -578,9 +579,10 @@ export function scoreRoute(
     (hasTactilePaving ? w.tactilePaving : 0);
   const criticalFeatureScore = Math.min(criticalRaw, 100);
 
-  const timeScore = maxMinutes > 0
-    ? Math.max(0, (1 - totalMinutes / maxMinutes) * 100)
-    : 100;
+  const timeRange = maxMinutes - minMinutes;
+  const timeScore = timeRange > 0
+    ? ((maxMinutes - totalMinutes) / timeRange) * 100
+    : 100; // 唯一候選或等時路線不給予時間懲罰
 
   const highlightBonus = Math.min(highlightCount * 1.5, 5);
   const adjustedFacilityScore = Math.min(facilityScore + highlightBonus, 100);

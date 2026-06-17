@@ -105,20 +105,20 @@ describe("routeCost / prerankCost — walk distance & transfers count", () => {
 
 describe("scoreRoute — walk penalty, confidence, warnings", () => {
   it("a long walk lowers the total score", () => {
-    const short = scoreRoute([], 30, 40, 0, "wheelchair", 425, 1);
-    const long = scoreRoute([], 30, 40, 0, "wheelchair", 1444, 1);
+    const short = scoreRoute([], 30, 40, 30, 0, "wheelchair", 425, 1);
+    const long = scoreRoute([], 30, 40, 30, 0, "wheelchair", 1444, 1);
     expect(long.totalScore).toBeLessThan(short.totalScore);
     expect(long.components.walkPenalty).toBeGreaterThan(
       short.components.walkPenalty,
     );
   });
   it("flags low data confidence + warning when no a11y data on the route", () => {
-    const r = scoreRoute([], 30, 40, 0, "wheelchair", 0, 0);
+    const r = scoreRoute([], 30, 40, 30, 0, "wheelchair", 0, 0);
     expect(r.dataConfidence).toBe("low");
     expect(r.warnings).toContain("沿途無障礙資料不足，分數為保守估計");
   });
   it("keeps totalScore within 0–100", () => {
-    const r = scoreRoute([], 200, 40, 0, "wheelchair", 100000, 0);
+    const r = scoreRoute([], 200, 40, 30, 0, "wheelchair", 100000, 0);
     expect(r.totalScore).toBeGreaterThanOrEqual(0);
     expect(r.totalScore).toBeLessThanOrEqual(100);
   });
@@ -152,8 +152,8 @@ describe("mode profiles — P5: elderly / visual_impaired actually bite", () => 
         "traffic_signals:sound": "yes",
       }),
     ];
-    const visual = scoreRoute(facilities, 20, 20, 0, "visual_impaired");
-    const wheelchair = scoreRoute(facilities, 20, 20, 0, "wheelchair");
+    const visual = scoreRoute(facilities, 20, 20, 20, 0, "visual_impaired");
+    const wheelchair = scoreRoute(facilities, 20, 20, 20, 0, "wheelchair");
     // visual weights: tactile 30 + audio 25 = 55; wheelchair: tactile 0 + audio 4
     expect(visual.components.criticalFeatureScore).toBeGreaterThan(
       wheelchair.components.criticalFeatureScore,
@@ -163,8 +163,8 @@ describe("mode profiles — P5: elderly / visual_impaired actually bite", () => 
 
   it("elderly weights accessible toilets above wheelchair", () => {
     const facilities = [node("toilet", { "toilets:wheelchair": "yes" })];
-    const elderly = scoreRoute(facilities, 20, 20, 0, "elderly");
-    const wheelchair = scoreRoute(facilities, 20, 20, 0, "wheelchair");
+    const elderly = scoreRoute(facilities, 20, 20, 20, 0, "elderly");
+    const wheelchair = scoreRoute(facilities, 20, 20, 20, 0, "wheelchair");
     // elderly toilet weight 14 vs wheelchair 6
     expect(elderly.components.criticalFeatureScore).toBeGreaterThan(
       wheelchair.components.criticalFeatureScore,
@@ -198,7 +198,7 @@ describe("mode profiles — P5: elderly / visual_impaired actually bite", () => 
       node("crossing", { tactile_paving: "yes", "traffic_signals:sound": "yes" }),
     ];
     const scores = (["wheelchair", "elderly", "visual_impaired", "normal"] as const).map(
-      (m) => scoreRoute(facilities, 25, 30, 0, m, 600).totalScore,
+      (m) => scoreRoute(facilities, 25, 30, 25, 0, m, 600).totalScore,
     );
     // not all four identical
     expect(new Set(scores).size).toBeGreaterThan(1);

@@ -1221,6 +1221,7 @@ export function scoreAndRank(
   mode: AccessibilityMode = "normal",
 ): AccessibleRoute[] {
   const maxTime = Math.max(...routes.map((r) => r.totalMinutes), 1);
+  const minTime = Math.min(...routes.map((r) => r.totalMinutes), maxTime);
 
   return routes
     .map((r) => {
@@ -1230,6 +1231,7 @@ export function scoreAndRank(
         facilities,
         r.totalMinutes,
         maxTime,
+        minTime,
         r.accessibilityHighlights.length,
         mode,
         walkDistanceM,
