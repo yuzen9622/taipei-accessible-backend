@@ -116,6 +116,32 @@ python3 "$SCRIPT_DIR/inject-metro-gtfs.py" \
   "$WORK_DIR/feed-1.gtfs.zip" "$METRO_DIR" \
   || log "WARN: metro injection failed — continuing without metro gap-fill"
 
+# ── 1d. Stop wheelchair_boarding injection — the TDX feed ships no
+# wheelchair_boarding column, so OTP treats every stop as unknown accessibility
+# (stop.unknownCost applies flat to all 160k+ stops, no differentiation). The TDX
+# Metro StationFacility API lists each station's Elevators; this sets
+# wheelchair_boarding=1 on stations that have one, so OTP's wheelchair routing
+# prefers them. See inject-station-wheelchair.py for the (top-level Elevators list,
+# StationID-keyed) response shape. Coverage: KRTC/TYMC/TMRT/NTMC/KLRT carry data;
+# TRTC returns 0 (known gap → OSM backfill later); TRA/THSR StationFacility 404 (no
+# such API) so rail stations aren't covered here. FACILITY_SYSTEMS is its own list
+# (NOT OTP_METRO_SYSTEMS, which is only the 0-trips gap-fill set and omits KRTC).
+# Fail-soft: a build without these flags (today's behaviour) beats no build at all.
+FACILITY_SYSTEMS="${OTP_FACILITY_SYSTEMS:-TRTC KRTC TYMC TMRT NTMC KLRT}"
+FACILITY_DIR="$WORK_DIR/facility"
+mkdir -p "$FACILITY_DIR"
+log "fetching Metro StationFacility (wheelchair): $FACILITY_SYSTEMS"
+for sys in $FACILITY_SYSTEMS; do
+  curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
+    -o "$FACILITY_DIR/$sys.facility.json" \
+    "$METRO_BASE/StationFacility/$sys?%24format=JSON" \
+    || log "WARN: metro StationFacility fetch failed for $sys"
+  sleep 3
+done
+python3 "$SCRIPT_DIR/inject-station-wheelchair.py" \
+  "$WORK_DIR/feed-1.gtfs.zip" "$FACILITY_DIR" \
+  || log "WARN: station wheelchair injection failed — continuing"
+
 # ── 2. OSM extract (monthly refresh, spec §5) ──
 OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"
 OSM_CLIPPED="$WORK_DIR/taiwan-clipped.osm.pbf"
