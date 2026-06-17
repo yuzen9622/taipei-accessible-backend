@@ -19,6 +19,7 @@ import { walkSpeedMps, type AccessibilityMode } from "../scoring";
 import type {
   AccessibleRoute,
   WalkLeg,
+  WalkStep,
   BusLeg,
   MetroLeg,
   ThsrLeg,
@@ -94,6 +95,17 @@ interface OtpLeg {
   trip?: { gtfsId?: string; wheelchairAccessible?: string } | null;
   legGeometry?: { points?: string } | null;
   intermediatePlaces?: { stop?: OtpStop | null }[] | null;
+  steps?: OtpStep[] | null;
+}
+interface OtpStep {
+  distance?: number;
+  lon?: number;
+  lat?: number;
+  relativeDirection?: string | null;
+  absoluteDirection?: string | null;
+  streetName?: string | null;
+  area?: boolean | null;
+  bogusName?: boolean | null;
 }
 interface OtpItinerary {
   duration: number;
@@ -198,6 +210,16 @@ query Plan(
         trip { gtfsId wheelchairAccessible }
         legGeometry { points }
         intermediatePlaces { stop { gtfsId } }
+        steps {
+          distance
+          lon
+          lat
+          relativeDirection
+          absoluteDirection
+          streetName
+          area
+          bogusName
+        }
       }
     }
   }
@@ -481,6 +503,17 @@ function walkLegFrom(leg: OtpLeg, isFirst: boolean, isLast: boolean): WalkLeg {
     polyline: decodeOtpPolyline(leg.legGeometry?.points),
     a11yFacilities: [],
     exitInfo: null,
+    steps: (leg.steps ?? []).map(
+      (s): WalkStep => ({
+        relativeDirection: s.relativeDirection ?? "CONTINUE",
+        absoluteDirection: s.absoluteDirection ?? null,
+        streetName: s.streetName ?? "",
+        bogusName: s.bogusName ?? false,
+        area: s.area ?? false,
+        distanceM: Math.round(s.distance ?? 0),
+        location: [s.lon ?? 0, s.lat ?? 0],
+      }),
+    ),
   };
 }
 

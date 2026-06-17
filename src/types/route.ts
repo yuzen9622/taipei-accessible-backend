@@ -23,6 +23,16 @@ export interface WaitInfo {
   source: "realtime" | "schedule" | "unavailable";
 }
 
+export interface WalkStep {
+  relativeDirection: string;
+  absoluteDirection: string | null;
+  streetName: string;
+  bogusName: boolean;
+  area: boolean;
+  distanceM: number;
+  location: [number, number];
+}
+
 export interface WalkLeg {
   type: "WALK";
   a11yRefs?: string[];
@@ -38,6 +48,7 @@ export interface WalkLeg {
     type: "elevator" | "ramp";
     coords: [number, number];
   } | null;
+  steps?: WalkStep[];
 }
 
 export interface BusLeg {
