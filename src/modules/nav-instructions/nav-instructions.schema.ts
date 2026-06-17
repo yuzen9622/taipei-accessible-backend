@@ -1,0 +1,116 @@
+import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
+import { z } from "zod";
+import { registry } from "../../openapi/registry";
+
+extendZodWithOpenApi(z);
+
+export const NavInstructionsRequestSchema = z
+  .object({
+    route: z
+      .object({
+        routeId: z.string().optional(),
+        legs: z.array(z.any()),
+      })
+      .openapi({
+        description:
+          "由 /accessible-route 回傳的路線物件（前端 passthrough）。僅需含 legs 陣列。",
+      }),
+    userHeading: z
+      .number()
+      .min(0)
+      .max(359)
+      .optional()
+      .openapi({
+        description:
+          "使用者當前朝向（度，正北 = 0，順時針），由陀螺儀取得。提供時後端填入 relativeDirection；省略則為 null。",
+        example: 45,
+      }),
+    language: z.enum(["zh-TW"]).default("zh-TW").openapi({
+      description: "輸出語言（預留，目前僅支援 zh-TW）。",
+    }),
+  })
+  .openapi("NavInstructionsRequest");
+
+const RelativeDirectionEnum = z
+  .enum(["正前方", "左前方", "右前方", "左側", "右側", "左後方", "右後方", "正後方"])
+  .openapi("RelativeDirection");
+
+const NavInstructionSchema = z
+  .object({
+    text: z.string(),
+    type: z.enum([
+      "turn",
+      "transit_board",
+      "transit_alight",
+      "facility",
+      "depart",
+      "arrive",
+    ]),
+    bearing: z.number().nullable(),
+    relativeDirection: RelativeDirectionEnum.nullable(),
+    distanceM: z.number().nullable(),
+    streetName: z.string().nullable(),
+    legType: z.enum(["WALK", "BUS", "METRO", "THSR", "TRA"]),
+    polylineIndex: z.number().nullable(),
+  })
+  .openapi("NavInstruction");
+
+const NavInstructionsDataSchema = z
+  .object({
+    instructions: z.array(NavInstructionSchema),
+    initialBearing: z.number(),
+    totalSteps: z.number(),
+    warnings: z.array(z.string()),
+  })
+  .openapi("NavInstructionsData");
+
+const NavInstructionsResponseSchema = z
+  .object({
+    ok: z.boolean(),
+    status: z.string(),
+    code: z.number(),
+    message: z.string(),
+    data: NavInstructionsDataSchema,
+  })
+  .openapi("NavInstructionsResponse");
+
+const NavErrorResponseSchema = z
+  .object({
+    ok: z.literal(false),
+    status: z.literal("error"),
+    code: z.number(),
+    message: z.string(),
+    data: z.object({ reason: z.string() }).optional(),
+  })
+  .openapi("NavInstructionsErrorResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/a11y/route/instructions",
+  tags: ["Accessibility"],
+  summary: "路線逐步導航指引產生",
+  description:
+    "將 /accessible-route 回傳的路線攤平為可語音朗讀的逐步指引陣列，並提供起始與每步方位角；提供 userHeading 時附帶八方位相對方向。",
+  request: {
+    body: {
+      content: { "application/json": { schema: NavInstructionsRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "逐步指引陣列（含起始方位角與警告）",
+      content: {
+        "application/json": { schema: NavInstructionsResponseSchema },
+      },
+    },
+    400: {
+      description: "route.legs 為空或含未支援的 leg 型別",
+      content: { "application/json": { schema: NavErrorResponseSchema } },
+    },
+    500: {
+      description: "伺服器錯誤",
+      content: { "application/json": { schema: NavErrorResponseSchema } },
+    },
+  },
+});
