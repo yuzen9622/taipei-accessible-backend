@@ -8,7 +8,7 @@
  * derived from peer-reviewed accessibility literature and Taiwan/ADA standards.
  */
 
-import { IOsmA11y } from "../../types";
+import type { IOsmA11y } from "../../types";
 
 type TagWeightMap = Record<string, Record<string, number>>;
 
@@ -167,6 +167,15 @@ export function crossSlopeContribution(crossSlopePercent: number): number {
 const NODE_SCORE_DENOM = 100;
 
 /**
+ * Score for a stop/station with NO accessibility data — "fair / unknown", not
+ * "critical". Treating unknown as 0 collapsed the accessibility budget on
+ * Taiwan's sparse OSM coverage (every data-less route scored the same), so the
+ * ranking degenerated to pure travel time. A neutral baseline keeps unknown from
+ * masquerading as bad; dataConfidence / warnings carry the uncertainty instead.
+ */
+export const FACILITY_NEUTRAL = 40;
+
+/**
  * Score a single OsmA11y node on a 0–100 scale, representing how much the
  * facility improves wheelchair accessibility at its location. A category-level
  * base bonus is added (elevator +15, kerb_cut +10, ramp +8, toilet +5) plus
@@ -231,7 +240,7 @@ export function scoreOsmNode(node: IOsmA11y): number {
  * @returns The facility-set score on a 0–100 scale.
  */
 export function scoreFacilitySet(nodes: IOsmA11y[]): number {
-  if (!nodes.length) return 0;
+  if (!nodes.length) return FACILITY_NEUTRAL;
 
   const maxNodeScore = Math.max(...nodes.map(scoreOsmNode));
 
@@ -364,36 +373,144 @@ export const MODE_PROFILES: Record<AccessibilityMode, ModeProfile> = {
 };
 
 /**
+ * Per-mode walk-distance penalty params: distance up to `freeM` is free, then a
+ * linear penalty of `slope` points/metre accrues up to `cap`. A long walk is the
+ * single biggest barrier for wheelchair/elderly users, so it must lower the
+ * user-facing score AND the ranking cost — not merely leak in via travel time.
+ */
+const WALK_PENALTY: Record<
+  AccessibilityMode,
+  { freeM: number; slope: number; cap: number }
+> = {
+  wheelchair: { freeM: 150, slope: 0.03, cap: 35 },
+  elderly: { freeM: 200, slope: 0.025, cap: 30 },
+  visual_impaired: { freeM: 250, slope: 0.02, cap: 25 },
+  normal: { freeM: 400, slope: 0.01, cap: 15 },
+};
+
+/**
+ * Walk-distance penalty as a positive magnitude (callers subtract it from a
+ * score or add it to a ranking cost). Zero up to the mode's free distance, then
+ * linear to the mode's cap.
+ *
+ * @param walkDistanceM Total walking distance of the route in metres.
+ * @param mode Accessibility mode driving the thresholds. Default "normal".
+ * @returns The penalty magnitude (0 to the mode's cap).
+ */
+export function walkPenaltyScore(
+  walkDistanceM: number,
+  mode: AccessibilityMode = "normal"
+): number {
+  const { freeM, slope, cap } = WALK_PENALTY[mode] ?? WALK_PENALTY.normal;
+  const over = Math.max(0, walkDistanceM - freeM);
+  return Math.min(over * slope, cap);
+}
+
+/**
+ * Mode-specific walking speed (m/s) for converting walk DISTANCE to duration.
+ * Wheelchair self-propulsion is ~0.8 m/s; OTP's foot-walking default (~1.33 m/s)
+ * badly underestimates wheelchair/elderly walk times (the "685 m = 8 min"
+ * symptom). Consumed by the ORS client and passed to OTP as the `walkSpeed`
+ * request parameter.
+ */
+const WALK_SPEED_MPS: Record<AccessibilityMode, number> = {
+  wheelchair: 0.8,
+  elderly: 0.9,
+  visual_impaired: 1.0,
+  normal: 1.3,
+};
+
+/**
+ * Walking speed in metres/second for a mode.
+ *
+ * @param mode Accessibility mode. Default "wheelchair" — the conservative choice
+ *   for an accessibility-first planner when the caller has no mode.
+ * @returns Walking speed in m/s.
+ */
+export function walkSpeedMps(mode: AccessibilityMode = "wheelchair"): number {
+  return WALK_SPEED_MPS[mode] ?? WALK_SPEED_MPS.wheelchair;
+}
+
+export type DataConfidence = "high" | "medium" | "low";
+
+/**
+ * Map an accessibility-data coverage ratio (fraction of legs carrying any a11y
+ * evidence) to a confidence label. Kept separate from the score so missing data
+ * surfaces as uncertainty rather than being silently scored as bad.
+ *
+ * @param ratio Coverage ratio in [0, 1].
+ * @returns "high" (≥ 2/3), "medium" (≥ 1/3) or "low".
+ */
+export function dataConfidenceFromRatio(ratio: number): DataConfidence {
+  if (ratio >= 2 / 3) return "high";
+  if (ratio >= 1 / 3) return "medium";
+  return "low";
+}
+
+/**
  * Route-ranking cost — lower is better. NOT the user-facing score:
- * cost = travelTime + transferCount × 5 × modePenalty + (100 − a11yScore) × 0.3.
+ * cost = travelTime + transferCount × 5 × modePenalty + (100 − a11yScore) × 0.3
+ *        + walkPenalty.
  *
  * @param totalMinutes Total journey time in minutes.
  * @param transferCount Number of transfers in the route.
  * @param accessibilityScore Route accessibility score (0–100).
- * @param mode Accessibility mode driving the transfer penalty. Default "normal".
+ * @param mode Accessibility mode driving the transfer/walk penalties. Default "normal".
+ * @param walkDistanceM Total walking distance in metres (drives the walk penalty).
  * @returns The route-ranking cost.
  */
 export function routeCost(
   totalMinutes: number,
   transferCount: number,
   accessibilityScore: number,
+  mode: AccessibilityMode = "normal",
+  walkDistanceM = 0
+): number {
+  const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
+  return (
+    totalMinutes +
+    transferCount * 5 * profile.transferPenaltyMultiplier +
+    (100 - accessibilityScore) * 0.3 +
+    walkPenaltyScore(walkDistanceM, mode)
+  );
+}
+
+/**
+ * Stage-1 pre-ranking cost for the two-stage pipeline — a cheap,
+ * accessibility-aware proxy that needs NO OSM/facility data (used to pick the
+ * top-N candidates to enrich before the real scoreRoute runs). Same shape as
+ * routeCost minus the facility term: travelTime + transferPenalty + walkPenalty.
+ *
+ * @param totalMinutes Total journey time in minutes.
+ * @param transferCount Number of transfers in the route.
+ * @param walkDistanceM Total walking distance in metres.
+ * @param mode Accessibility mode driving the penalties. Default "normal".
+ * @returns The pre-ranking cost.
+ */
+export function prerankCost(
+  totalMinutes: number,
+  transferCount: number,
+  walkDistanceM: number,
   mode: AccessibilityMode = "normal"
 ): number {
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
   return (
     totalMinutes +
     transferCount * 5 * profile.transferPenaltyMultiplier +
-    (100 - accessibilityScore) * 0.3
+    walkPenaltyScore(walkDistanceM, mode)
   );
 }
 
 export interface RouteAccessibilityScore {
   totalScore: number;
   label: ScoreLabel;
+  dataConfidence: DataConfidence;
+  warnings: string[];
   components: {
     facilityScore: number;
     timeScore: number;
     criticalFeatureScore: number;
+    walkPenalty: number;
   };
 }
 
@@ -414,7 +531,9 @@ export function scoreRoute(
   totalMinutes: number,
   maxMinutes: number,
   highlightCount: number,
-  mode: AccessibilityMode = "normal"
+  mode: AccessibilityMode = "normal",
+  walkDistanceM = 0,
+  dataCoverageRatio = 1
 ): RouteAccessibilityScore {
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
   const facilityScore = scoreFacilitySet(facilityNodes);
@@ -469,17 +588,30 @@ export function scoreRoute(
   const a11yScore =
     adjustedFacilityScore * (40 / 65) + criticalFeatureScore * (25 / 65);
 
-  const totalScore = Math.round(
-    a11yScore * profile.a11yWeight + timeScore * profile.timeWeight
-  );
+  const walkPenalty = walkPenaltyScore(walkDistanceM, mode);
+
+  const rawTotal =
+    a11yScore * profile.a11yWeight +
+    timeScore * profile.timeWeight -
+    walkPenalty;
+  const totalScore = Math.max(0, Math.min(100, Math.round(rawTotal)));
+
+  const dataConfidence = dataConfidenceFromRatio(dataCoverageRatio);
+  const warnings: string[] = [];
+  if (dataConfidence === "low")
+    warnings.push("沿途無障礙資料不足，分數為保守估計");
+  if (walkPenalty >= 20) warnings.push("步行距離較長，行動不便者請留意");
 
   return {
-    totalScore: Math.max(0, Math.min(100, totalScore)),
+    totalScore,
     label: scoreLabel(totalScore),
+    dataConfidence,
+    warnings,
     components: {
       facilityScore: Math.round(adjustedFacilityScore),
       timeScore: Math.round(timeScore),
       criticalFeatureScore: Math.round(criticalFeatureScore),
+      walkPenalty: Math.round(walkPenalty),
     },
   };
 }

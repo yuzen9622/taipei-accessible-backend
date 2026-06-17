@@ -12,10 +12,10 @@
 
 import { decode } from "@googlemaps/polyline-codec";
 import { GtfsTrip } from "../../../model/gtfs-trip.model";
-import { haversineCoords, WHEELCHAIR_SPEED_M_PER_MIN } from "./ors";
+import { haversineCoords } from "./ors";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
-import type { AccessibilityMode } from "../scoring";
+import { walkSpeedMps, type AccessibilityMode } from "../scoring";
 import type {
   AccessibleRoute,
   WalkLeg,
@@ -31,7 +31,6 @@ const OTP_NUM_ITINERARIES = 5;
 
 const SNAP_RADIUS_M = 500;
 const SNAP_CANDIDATES = 10;
-const WALK_SPEED_M_PER_MIN = 75;
 
 const METRO_SYSTEMS = new Set([
   "TRTC",
@@ -171,7 +170,7 @@ query Plan(
   $fromLat: Float!, $fromLon: Float!,
   $toLat: Float!, $toLon: Float!,
   $date: String!, $time: String!,
-  $wheelchair: Boolean!, $numItineraries: Int!
+  $wheelchair: Boolean!, $numItineraries: Int!, $walkSpeed: Float
 ) {
   plan(
     from: { lat: $fromLat, lon: $fromLon }
@@ -179,6 +178,7 @@ query Plan(
     date: $date
     time: $time
     wheelchair: $wheelchair
+    walkSpeed: $walkSpeed
     numItineraries: $numItineraries
     transportModes: [{ mode: WALK }, { mode: TRANSIT }]
     locale: "zh-TW"
@@ -208,6 +208,7 @@ async function queryOtpPlan(
   destination: { lat: number; lng: number },
   departure: Date,
   wheelchair: boolean,
+  walkSpeed: number,
 ): Promise<OtpItinerary[]> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   const controller = new AbortController();
@@ -227,6 +228,7 @@ async function queryOtpPlan(
           date: ymdDash(departure),
           time: hhmm(departure.getTime()),
           wheelchair,
+          walkSpeed,
           numItineraries: OTP_NUM_ITINERARIES,
         },
       }),
@@ -414,18 +416,18 @@ async function findSnapStop(point: {
  *
  * @param from The origin point with name and coords.
  * @param to The destination point with name and coords.
- * @param wheelchair Whether to use the wheelchair walking speed.
+ * @param mode Accessibility mode driving the walking speed.
  * @returns The bridging WalkLeg.
  */
 function snapWalkLeg(
   from: { lng: number; lat: number; name: string },
   to: { lng: number; lat: number; name: string },
-  wheelchair: boolean,
+  mode: AccessibilityMode,
 ): WalkLeg {
   const distanceM = Math.round(
     haversineCoords([from.lng, from.lat], [to.lng, to.lat]),
   );
-  const speed = wheelchair ? WHEELCHAIR_SPEED_M_PER_MIN : WALK_SPEED_M_PER_MIN;
+  const speed = walkSpeedMps(mode) * 60;
   return {
     type: "WALK",
     from: from.name,
@@ -615,11 +617,19 @@ export async function planOtpRoute(
   if (Date.now() < circuitOpenUntil) return [];
 
   const departure = opts?.departureTime ?? new Date();
-  const wheelchair = opts?.mode === "wheelchair";
+  const mode = opts?.mode ?? "normal";
+  const wheelchair = mode === "wheelchair";
+  const walkSpeed = walkSpeedMps(mode);
 
   let itineraries: OtpItinerary[];
   try {
-    itineraries = await queryOtpPlan(origin, destination, departure, wheelchair);
+    itineraries = await queryOtpPlan(
+      origin,
+      destination,
+      departure,
+      wheelchair,
+      walkSpeed,
+    );
     recordSuccess();
   } catch (err) {
     recordFailure();
@@ -641,6 +651,7 @@ export async function planOtpRoute(
           destSnap ?? destination,
           departure,
           wheelchair,
+          walkSpeed,
         );
       } catch (err) {
         recordFailure();
@@ -657,14 +668,14 @@ export async function planOtpRoute(
           snapPre = snapWalkLeg(
             { ...origin, name: "出發地" },
             originSnap,
-            wheelchair,
+            mode,
           );
         }
         if (destSnap) {
           snapPost = snapWalkLeg(
             destSnap,
             { ...destination, name: "目的地" },
-            wheelchair,
+            mode,
           );
         }
       }

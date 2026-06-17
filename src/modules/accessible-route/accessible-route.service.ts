@@ -17,6 +17,7 @@ import {
 import {
   scoreRoute,
   routeCost,
+  prerankCost,
   MODE_PROFILES,
   AccessibilityMode,
 } from "./scoring";
@@ -205,6 +206,7 @@ export async function buildCandidate(
   destination: { lat: number; lng: number },
   originStopDoc: ITdxBusStop | null,
   destStopDoc: ITdxBusStop | null,
+  mode: AccessibilityMode = "normal",
 ): Promise<AccessibleRoute | null> {
   if (!originStopDoc || !destStopDoc) return null;
 
@@ -245,8 +247,8 @@ export async function buildCandidate(
 
   const [walkTo, walkFrom, waitInfo, originA11y, destA11y] =
     await Promise.all([
-      orsWalkingRoute(originCoords, originStopCoords),
-      orsWalkingRoute(destStopCoords, destCoords),
+      orsWalkingRoute(originCoords, originStopCoords, mode),
+      orsWalkingRoute(destStopCoords, destCoords, mode),
       fetchWaitInfo(subRouteId, city, direction, originStopDoc.stopName.Zh_tw),
       OsmA11y.find(nearQuery(originStopCoords, 150)).limit(5).lean(),
       OsmA11y.find(nearQuery(destStopCoords, 150)).limit(5).lean(),
@@ -439,6 +441,7 @@ export async function buildMetroCandidate(
   railSystem: string,
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
+  mode: AccessibilityMode = "normal",
 ): Promise<AccessibleRoute | null> {
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -537,8 +540,8 @@ export async function buildMetroCandidate(
     boardA11y,
     alightA11y,
   ] = await Promise.all([
-    orsWalkingRoute(originCoords, boardCoords),
-    orsWalkingRoute(alightCoords, destCoords),
+    orsWalkingRoute(originCoords, boardCoords, mode),
+    orsWalkingRoute(alightCoords, destCoords, mode),
     fetchMetroFacilities(railSystem, boardStation.stationUid),
     fetchMetroFacilities(railSystem, alightStation.stationUid),
     OsmA11y.find(nearQuery(boardCoords, 200)).limit(5).lean(),
@@ -792,6 +795,7 @@ async function findNextThsrTrain(
 async function buildThsrCandidate(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
+  mode: AccessibilityMode = "normal",
 ): Promise<AccessibleRoute | null> {
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -826,8 +830,8 @@ async function buildThsrCandidate(
   const alightCoords = alightStation.location.coordinates as [number, number];
 
   const [walkTo, walkFrom, boardA11y, alightA11y] = await Promise.all([
-    orsWalkingRoute(originCoords, boardCoords),
-    orsWalkingRoute(alightCoords, destCoords),
+    orsWalkingRoute(originCoords, boardCoords, mode),
+    orsWalkingRoute(alightCoords, destCoords, mode),
     OsmA11y.find(nearQuery(boardCoords, 300)).limit(5).lean(),
     OsmA11y.find(nearQuery(alightCoords, 300)).limit(5).lean(),
   ]);
@@ -1017,6 +1021,7 @@ async function findNextTraTrain(
 async function buildTraCandidate(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
+  mode: AccessibilityMode = "normal",
 ): Promise<AccessibleRoute | null> {
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -1051,8 +1056,8 @@ async function buildTraCandidate(
   const alightCoords = alightStation.location.coordinates as [number, number];
 
   const [walkTo, walkFrom, boardA11y, alightA11y] = await Promise.all([
-    orsWalkingRoute(originCoords, boardCoords),
-    orsWalkingRoute(alightCoords, destCoords),
+    orsWalkingRoute(originCoords, boardCoords, mode),
+    orsWalkingRoute(alightCoords, destCoords, mode),
     OsmA11y.find(nearQuery(boardCoords, 300)).limit(5).lean(),
     OsmA11y.find(nearQuery(alightCoords, 300)).limit(5).lean(),
   ]);
@@ -1162,6 +1167,47 @@ function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
 }
 
 /**
+ * Total walking distance across all WALK legs, in metres — drives the
+ * walk-distance penalty in scoring/ranking and is surfaced on the route.
+ *
+ * @param r Route to measure.
+ * @returns Total walk distance in metres.
+ */
+function totalWalkDistanceM(r: AccessibleRoute): number {
+  return r.legs.reduce(
+    (sum, leg) => (leg.type === "WALK" ? sum + leg.distanceM : sum),
+    0,
+  );
+}
+
+/**
+ * Fraction of legs that carry ANY accessibility evidence (OSM a11y nodes or
+ * facility highlights) — feeds dataConfidence so missing data is flagged as
+ * uncertainty, not scored as bad.
+ *
+ * @param r Route to inspect.
+ * @returns Coverage ratio in [0, 1].
+ */
+function legDataCoverageRatio(r: AccessibleRoute): number {
+  if (!r.legs.length) return 1;
+  let withData = 0;
+  for (const leg of r.legs) {
+    if (leg.type === "WALK") {
+      if (leg.a11yFacilities.length) withData++;
+    } else if (leg.type === "BUS") {
+      if (leg.departureStopA11y.length || leg.arrivalStopA11y.length) withData++;
+    } else if (
+      leg.departureStationA11y.length ||
+      leg.arrivalStationA11y.length ||
+      leg.facilityHighlights.length
+    ) {
+      withData++;
+    }
+  }
+  return withData / r.legs.length;
+}
+
+/**
  * Score every candidate route with the evidence-based scoring engine
  * (accessibility 65% / travel time 35%) and rank them by mode-aware route cost.
  *
@@ -1179,16 +1225,22 @@ export function scoreAndRank(
   return routes
     .map((r) => {
       const facilities = collectRouteFacilities(r);
+      const walkDistanceM = totalWalkDistanceM(r);
       const result = scoreRoute(
         facilities,
         r.totalMinutes,
         maxTime,
         r.accessibilityHighlights.length,
         mode,
+        walkDistanceM,
+        legDataCoverageRatio(r),
       );
       r.accessibilityScore = result.totalScore;
       r.accessibilityLabel = result.label;
       r.scoreComponents = result.components;
+      r.dataConfidence = result.dataConfidence;
+      r.scoreWarnings = result.warnings;
+      r.totalWalkDistanceM = walkDistanceM;
       return {
         route: r,
         cost: routeCost(
@@ -1196,9 +1248,39 @@ export function scoreAndRank(
           r.transferCount,
           result.totalScore,
           mode,
+          walkDistanceM,
         ),
       };
     })
+    .sort((a, b) => a.cost - b.cost)
+    .map((s) => s.route);
+}
+
+/**
+ * Stage-1 pre-ranking for the two-stage pipeline: order candidates by a cheap,
+ * accessibility-aware proxy (time + transfers + walk distance) that needs NO OSM
+ * data, so the top-N can be enriched before the real scoreRoute runs. Without
+ * this, scoring ran on the un-enriched candidate set (facility data still empty)
+ * and the accessibility budget collapsed to pure travel time.
+ *
+ * @param routes Candidate routes.
+ * @param mode Accessibility mode driving the proxy penalties.
+ * @returns Routes sorted by ascending proxy cost (best first).
+ */
+function prerankByProxy(
+  routes: AccessibleRoute[],
+  mode: AccessibilityMode,
+): AccessibleRoute[] {
+  return routes
+    .map((r) => ({
+      route: r,
+      cost: prerankCost(
+        r.totalMinutes,
+        r.transferCount,
+        totalWalkDistanceM(r),
+        mode,
+      ),
+    }))
     .sort((a, b) => a.cost - b.cost)
     .map((s) => s.route);
 }
@@ -1452,24 +1534,29 @@ async function finalizeRoutes(
   format: "standard" | "compact" = "standard",
   departureTime?: Date,
 ): Promise<AccessibleRoute[]> {
+  const PRERANK_N = 8;
   const t: Record<string, number> = {};
   let t0 = Date.now();
-  const ranked = scoreAndRank(
-    applyModeExclusion(
-      collapseLogicalDuplicates(deduplicateRoutes(routes)),
-      mode,
-    ),
+  // Stage 1: cheap accessibility-aware proxy pre-rank (no OSM data) → top-N.
+  const candidates = applyModeExclusion(
+    collapseLogicalDuplicates(deduplicateRoutes(routes)),
     mode,
   );
-  const top = ranked.slice(0, 3);
-  t.rank = Date.now() - t0;
+  const topN = prerankByProxy(candidates, mode).slice(0, PRERANK_N);
+  t.prerank = Date.now() - t0;
   t0 = Date.now();
+  // Stage 2: a11y enrichment (Mongo) BEFORE scoring, so facility data is real
+  // when scoreRoute runs — otherwise the accessibility budget collapses to 0.
   try {
-    await enrichTopRoutes(top, origin, destination, mode);
+    await enrichTopRoutes(topN, origin, destination, mode);
   } catch (err) {
-    console.warn("[accessible-route] top-3 a11y enrichment failed", err);
+    console.warn("[accessible-route] top-N a11y enrichment failed", err);
   }
   t.enrich = Date.now() - t0;
+  t0 = Date.now();
+  // Stage 3: score with the enriched facility data + rank → final top-3.
+  const top = scoreAndRank(topN, mode).slice(0, 3);
+  t.rank = Date.now() - t0;
   t0 = Date.now();
   try {
     const { overlayFacilityStatus } =
@@ -1778,6 +1865,7 @@ export async function findAccessibleRoutes(
           destination,
           originStop,
           destStop,
+          mode,
         );
       }),
     );
@@ -1786,16 +1874,16 @@ export async function findAccessibleRoutes(
 
   const systems = CITY_METRO_SYSTEMS[city] ?? [];
   const metroPromises = systems.map((railSystem) =>
-    buildMetroCandidate(railSystem, origin, destination)
+    buildMetroCandidate(railSystem, origin, destination, mode)
       .then((r): AccessibleRoute[] => (r ? [r] : []))
       .catch((): AccessibleRoute[] => []),
   );
 
-  const thsrPromise = buildThsrCandidate(origin, destination)
+  const thsrPromise = buildThsrCandidate(origin, destination, mode)
     .then((r): AccessibleRoute[] => (r ? [r] : []))
     .catch((): AccessibleRoute[] => []);
 
-  const traPromise = buildTraCandidate(origin, destination)
+  const traPromise = buildTraCandidate(origin, destination, mode)
     .then((r): AccessibleRoute[] => (r ? [r] : []))
     .catch((): AccessibleRoute[] => []);
 

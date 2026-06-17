@@ -134,9 +134,13 @@ export interface AccessibleRoute {
   facilities?: Record<string, SlimA11y>;
   accessibilityScore?: number;
   accessibilityLabel?: "excellent" | "good" | "fair" | "poor" | "critical";
+  dataConfidence?: "high" | "medium" | "low";
+  scoreWarnings?: string[];
+  totalWalkDistanceM?: number;
   scoreComponents?: {
     facilityScore: number;
     timeScore: number;
     criticalFeatureScore: number;
+    walkPenalty: number;
   };
 }

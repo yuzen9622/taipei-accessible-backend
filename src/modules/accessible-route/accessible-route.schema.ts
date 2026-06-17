@@ -344,6 +344,11 @@ const ScoreComponentsSchema = z
       description:
         "0–100：Tier 1 關鍵設施（電梯、平接緣石、坡道）的具備程度",
     }),
+    walkPenalty: z.number().openapi({
+      example: 8,
+      description:
+        "依模式扣分的步行距離懲罰（0 至模式上限；輪椅 35、長者 30、視障 25、一般 15）",
+    }),
   })
   .openapi("ScoreComponents");
 
@@ -389,6 +394,26 @@ const AccessibleRouteSchema = z
     scoreComponents: ScoreComponentsSchema.optional().openapi({
       description: "accessibilityScore 的子項目拆解",
     }),
+    dataConfidence: z
+      .enum(["high", "medium", "low"])
+      .optional()
+      .openapi({
+        example: "low",
+        description:
+          "無障礙資料覆蓋信心：依沿途有 a11y 資料的路段比例（high ≥ 2/3、medium ≥ 1/3、low < 1/3）。" +
+          "low 表示分數為保守估計（資料稀疏），與『真的無障礙差』不同。",
+      }),
+    scoreWarnings: z
+      .array(z.string())
+      .optional()
+      .openapi({
+        example: ["沿途無障礙資料不足，分數為保守估計"],
+        description: "影響分數可信度或需提醒使用者的訊息（如資料不足、步行過長）",
+      }),
+    totalWalkDistanceM: z
+      .number()
+      .optional()
+      .openapi({ example: 736, description: "全程步行距離（公尺），供前端顯示與排序透明度" }),
     facilities: z
       .record(z.string(), OsmA11ySchema)
       .optional()

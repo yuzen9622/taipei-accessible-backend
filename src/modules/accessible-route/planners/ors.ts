@@ -7,9 +7,15 @@
  */
 
 import { getWalkCache, setWalkCache } from "./walk-cache";
+import { walkSpeedMps, type AccessibilityMode } from "../scoring";
 
 const ORS_BASE = "https://api.openrouteservice.org/v2";
 export const WHEELCHAIR_SPEED_M_PER_MIN = 60;
+
+/** Walk duration (seconds) for a distance at the mode's walking speed. */
+function durationForMode(distanceM: number, mode: AccessibilityMode): number {
+  return distanceM / walkSpeedMps(mode);
+}
 
 export interface WalkingRoute {
   polyline: [number, number][];
@@ -34,36 +40,39 @@ export function haversineCoords(a: [number, number], b: [number, number]): numbe
 function straightLineRoute(
   from: [number, number],
   to: [number, number],
+  mode: AccessibilityMode,
 ): WalkingRoute {
   const distanceM = haversineCoords(from, to);
   return {
     polyline: [from, to],
     distanceM,
-    durationSec: (distanceM / WHEELCHAIR_SPEED_M_PER_MIN) * 60,
+    durationSec: durationForMode(distanceM, mode),
   };
 }
 
 export async function orsWalkingRoute(
   from: [number, number],
   to: [number, number],
-  wheelchair = true,
+  mode: AccessibilityMode = "wheelchair",
 ): Promise<WalkingRoute> {
   const apiKey = process.env.ORS_API_KEY;
 
+  // Distance is mode-independent; duration is always (re)derived from the mode's
+  // walking speed, so a cached entry never leaks one mode's duration to another.
   const cached = await getWalkCache(from, to);
   if (cached) {
     return {
       polyline: [from, to],
       distanceM: cached.distanceM,
-      durationSec: cached.durationSec,
+      durationSec: durationForMode(cached.distanceM, mode),
     };
   }
 
   if (!apiKey) {
-    return straightLineRoute(from, to);
+    return straightLineRoute(from, to, mode);
   }
 
-  const profile = wheelchair ? "wheelchair" : "foot-walking";
+  const profile = mode === "wheelchair" ? "wheelchair" : "foot-walking";
 
   try {
     let resp = await fetch(`${ORS_BASE}/directions/${profile}/geojson`, {
@@ -88,17 +97,20 @@ export async function orsWalkingRoute(
 
     if (!resp.ok) {
       console.warn(`ORS ${resp.status} — falling back to straight line`);
-      return straightLineRoute(from, to);
+      return straightLineRoute(from, to, mode);
     }
 
     const data = (await resp.json()) as any;
     const feature = data.features?.[0];
-    if (!feature) return straightLineRoute(from, to);
+    if (!feature) return straightLineRoute(from, to, mode);
 
+    // Trust ORS for distance/geometry; derive duration from the mode's walking
+    // speed so wheelchair times aren't underestimated by ORS's foot-walking pace.
+    const distanceM = feature.properties.summary.distance as number;
     const route: WalkingRoute = {
       polyline: feature.geometry.coordinates as [number, number][],
-      distanceM: feature.properties.summary.distance,
-      durationSec: feature.properties.summary.duration,
+      distanceM,
+      durationSec: durationForMode(distanceM, mode),
     };
 
     void setWalkCache(from, to, route.durationSec, route.distanceM).catch(
@@ -108,7 +120,7 @@ export async function orsWalkingRoute(
     return route;
   } catch (err) {
     console.warn("ORS request failed — falling back to straight line:", err);
-    return straightLineRoute(from, to);
+    return straightLineRoute(from, to, mode);
   }
 }
 
