@@ -7,14 +7,15 @@ export type OAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
 /**
  * Run the OpenAI tool-calling loop (max 5 rounds) over `messages`, executing
- * local tools and appending their results in place. Pure of transport: the
- * caller passes onToolCall/onToolResult hooks (used by the SSE controller to
- * stream tool events). Leaves `messages` ready for the final completion.
+ * local tools and appending their results in place. Leaves `messages` ready
+ * for the final completion.
  *
- * Lives apart from ai.service (Gemini intent/explain) because it depends on
- * agent-tools, which imports accessible-route.service — keeping the loop here
- * means ai.service stays free of that dependency and other modules can import
- * parseRouteIntent without a cycle.
+ * @param messages Conversation history, mutated in place with tool turns
+ * @param useModel Model name to call
+ * @param useTemp Sampling temperature
+ * @param userLocation Optional user coordinates passed to tools
+ * @param onToolCall Hook invoked when a tool call starts
+ * @param onToolResult Hook invoked with a tool's parsed result
  */
 export async function runToolLoop(
   messages: OAIMessage[],
@@ -42,13 +43,11 @@ export async function runToolLoop(
       break;
     }
 
-    // Add assistant's tool-call turn to history
     messages.push(
       choice.message as OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam
     );
 
     for (const tc of choice.message.tool_calls) {
-      // Only process standard function tool calls (not custom tool calls)
       if (tc.type !== "function" || !("function" in tc)) continue;
       const fnCall = tc as OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall;
 
@@ -56,7 +55,6 @@ export async function runToolLoop(
       try {
         toolArgs = JSON.parse(fnCall.function.arguments);
       } catch {
-        // keep empty object
       }
 
       onToolCall?.(fnCall.function.name, toolArgs);

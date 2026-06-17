@@ -17,6 +17,7 @@ import {
 import {
   scoreRoute,
   routeCost,
+  prerankCost,
   MODE_PROFILES,
   AccessibilityMode,
 } from "./scoring";
@@ -32,7 +33,6 @@ import {
 } from "../../types";
 import {
   BusRoute,
-  BusRealTimeByFrequency,
   TdxMetroStationOfLine,
   TdxMetroS2STravelTimeRecord,
   TdxMetroFrequencyRecord,
@@ -43,21 +43,13 @@ import {
 import { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
 import { getCity, getCoordinates } from "../../adapters/google.adapter";
-// Import the AI service file directly (not the ../ai barrel): the barrel pulls
-// in the router → chat controller → ai-chat.service → agent-tools → back here,
-// which would be a cycle. ai.service itself only depends on the Gemini config.
 import { parseRouteIntent, type RouteIntent } from "../ai/ai.service";
 import { ResponseCode } from "../../types/code";
 import { ERROR_MESSAGE } from "../../constants/messages";
 
-// ─── Response types ──────────────────────────────────────────────────────────
-// The route/leg domain model now lives in src/types/route.ts (the neutral types
-// layer). Imported here for local use and re-exported so existing importers of
-// this module keep working unchanged.
 import type {
   SlimA11y,
   WaitInfo,
-  NearestBus,
   WalkLeg,
   BusLeg,
   MetroLeg,
@@ -68,7 +60,6 @@ import type {
 export type {
   SlimA11y,
   WaitInfo,
-  NearestBus,
   WalkLeg,
   BusLeg,
   MetroLeg,
@@ -88,13 +79,11 @@ export function waitInfoMinutes(w: WaitInfo): number {
     const [h, m] = w.time.split(":").map(Number);
     if (isNaN(h) || isNaN(m)) return 0;
     let diff = h * 60 + m - taipeiMinutesOfDay();
-    if (diff < -720) diff += 1440; // schedule time is past midnight
+    if (diff < -720) diff += 1440;
     return Math.max(0, diff);
   }
   return 0;
 }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export function nearQuery(coords: [number, number], maxDistM: number) {
   return {
@@ -131,8 +120,6 @@ export async function fetchTdxRoute(
   return (await resp.json()) as BusRoute[];
 }
 
-// ─── ETA / Schedule ──────────────────────────────────────────────────────────
-
 async function fetchScheduledWait(
   subRouteId: string,
   city: string,
@@ -160,7 +147,7 @@ async function fetchScheduledWait(
           if (isNaN(h) || isNaN(m)) continue;
           const depMinutes = h * 60 + m;
           let diff = depMinutes - nowMinutes;
-          if (diff < -720) diff += 1440; // departure wraps past midnight
+          if (diff < -720) diff += 1440;
           if (diff >= 0 && (nearest === null || diff < nearest)) {
             nearest = diff;
           }
@@ -181,7 +168,6 @@ export async function fetchWaitInfo(
   stopName: string,
 ): Promise<WaitInfo> {
   try {
-    // Note: stopName must NOT be encodeURIComponent'd — TDX OData filter expects raw UTF-8
     const url =
       `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${subRouteId}` +
       `?$format=JSON&$filter=Direction eq ${direction} and contains(StopName/Zh_tw,'${stopName}')`;
@@ -196,96 +182,22 @@ export async function fetchWaitInfo(
         if (estimateTime != null && estimateTime >= 0) {
           return { time: Math.round(estimateTime / 60), source: "realtime" };
         }
-        // StopStatus 3 = 末班車已過, 4 = 今日未營運
         if (stopStatus === 3 || stopStatus === 4) {
           return { time: null, source: "unavailable" };
         }
-        // StopStatus 1 = 尚未發車, or other null → fall through to schedule
       }
     }
   } catch {
-    // fall through to schedule lookup
+    /* ignore */
   }
 
   const scheduled = await fetchScheduledWait(subRouteId, city, direction);
   if (scheduled !== null) {
-    // Timetable lookup yields minutes-from-now — surface it as a clock time.
     const dep = new Date(Date.now() + scheduled * 60000);
     return { time: taipeiHHmm(dep), source: "schedule" };
   }
   return { time: null, source: "unavailable" };
 }
-
-// ─── Real-time bus position ───────────────────────────────────────────────────
-
-export async function fetchNearestBus(
-  subRouteId: string,
-  city: string,
-  direction: number,
-  departureStopCoords: [number, number],
-  departureStopIdx: number,
-  dirStops: BusRoute["Stops"],
-): Promise<NearestBus | null> {
-  try {
-    const url =
-      `${busUrl.cityRealtimeByFrequencyUrl}/${city}/${subRouteId}` +
-      `?$format=JSON&$filter=Direction eq ${direction}`;
-    const resp = await tdxFetch(url);
-    if (!resp.ok) return null;
-    const buses = (await resp.json()) as BusRealTimeByFrequency[];
-    if (!Array.isArray(buses) || !buses.length) return null;
-
-    const active = buses.filter(
-      (b) => b.DutyStatus === 1 && b.BusStatus === 0 && b.BusPosition,
-    );
-    if (!active.length) return null;
-
-    let best: NearestBus | null = null;
-    let bestDist = Infinity;
-
-    for (const bus of active) {
-      const busCoords: [number, number] = [
-        bus.BusPosition.PositionLon,
-        bus.BusPosition.PositionLat,
-      ];
-
-      // Find which stop in the sequence this bus is closest to
-      let nearestStopIdx = 0;
-      let nearestStopDist = Infinity;
-      for (let i = 0; i < dirStops.length; i++) {
-        const stopCoords: [number, number] = [
-          dirStops[i].StopPosition.PositionLon,
-          dirStops[i].StopPosition.PositionLat,
-        ];
-        const d = haversineM(busCoords, stopCoords);
-        if (d < nearestStopDist) {
-          nearestStopDist = d;
-          nearestStopIdx = i;
-        }
-      }
-
-      // Only buses that haven't passed the departure stop yet
-      if (nearestStopIdx > departureStopIdx) continue;
-
-      const distToDeparture = haversineM(busCoords, departureStopCoords);
-      if (distToDeparture < bestDist) {
-        bestDist = distToDeparture;
-        best = {
-          plateNumb: bus.PlateNumb,
-          position: busCoords,
-          speed: bus.Speed,
-          stopsAway: departureStopIdx - nearestStopIdx,
-        };
-      }
-    }
-
-    return best;
-  } catch {
-    return null;
-  }
-}
-
-// ─── Candidate builder ───────────────────────────────────────────────────────
 
 export async function buildCandidate(
   subRouteId: string,
@@ -294,17 +206,16 @@ export async function buildCandidate(
   destination: { lat: number; lng: number },
   originStopDoc: ITdxBusStop | null,
   destStopDoc: ITdxBusStop | null,
+  mode: AccessibilityMode = "normal",
 ): Promise<AccessibleRoute | null> {
   if (!originStopDoc || !destStopDoc) return null;
 
-  // 1. Fetch route stop sequence from TDX
   const routes = await fetchTdxRoute(subRouteId, city);
   if (!routes.length) return null;
 
   const byDir: Record<number, BusRoute["Stops"]> = {};
   for (const r of routes) byDir[r.Direction] = r.Stops;
 
-  // 2. Determine travel direction
   const direction = getRouteDirectionImproved(
     byDir,
     originStopDoc.stopName.Zh_tw,
@@ -314,8 +225,6 @@ export async function buildCandidate(
   if (direction === -1) return null;
 
   const dirStops = byDir[direction] ?? [];
-  // TDX assigns different StopUIDs per direction for the same physical stop,
-  // so match by name (same logic as getRouteDirectionImproved) not by UID.
   const originIdx = dirStops.findIndex((s) =>
     equalStopName(s.StopName?.Zh_tw, originStopDoc.stopName.Zh_tw),
   );
@@ -324,12 +233,10 @@ export async function buildCandidate(
   );
   if (originIdx === -1 || destIdx === -1 || originIdx >= destIdx) return null;
 
-  // 3. Bus polyline from stop coordinate sequence
   const busPolyline: [number, number][] = dirStops
     .slice(originIdx, destIdx + 1)
     .map((s) => [s.StopPosition.PositionLon, s.StopPosition.PositionLat]);
 
-  // 4. Coordinates in [lng, lat] order for ORS / $near
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
   const originStopCoords = originStopDoc.location.coordinates as [
@@ -338,25 +245,15 @@ export async function buildCandidate(
   ];
   const destStopCoords = destStopDoc.location.coordinates as [number, number];
 
-  // 5. Parallel: walking routes + wait info + OsmA11y + nearest bus
-  const [walkTo, walkFrom, waitInfo, originA11y, destA11y, nearestBus] =
+  const [walkTo, walkFrom, waitInfo, originA11y, destA11y] =
     await Promise.all([
-      orsWalkingRoute(originCoords, originStopCoords),
-      orsWalkingRoute(destStopCoords, destCoords),
+      orsWalkingRoute(originCoords, originStopCoords, mode),
+      orsWalkingRoute(destStopCoords, destCoords, mode),
       fetchWaitInfo(subRouteId, city, direction, originStopDoc.stopName.Zh_tw),
       OsmA11y.find(nearQuery(originStopCoords, 150)).limit(5).lean(),
       OsmA11y.find(nearQuery(destStopCoords, 150)).limit(5).lean(),
-      fetchNearestBus(
-        subRouteId,
-        city,
-        direction,
-        originStopCoords,
-        originIdx,
-        dirStops,
-      ),
     ]);
 
-  // 6. Transit time estimate: 2 min per stop
   const waitMinutes = waitInfoMinutes(waitInfo);
   const transitMinutes = (destIdx - originIdx) * 2;
   const totalMinutes = Math.round(
@@ -366,7 +263,6 @@ export async function buildCandidate(
       walkFrom.durationSec / 60,
   );
 
-  // 7. Accessibility highlights
   const tagVal = (nodes: IOsmA11y[], key: string, val: string) =>
     nodes.some((f) => f.tags?.[key] === val);
 
@@ -417,7 +313,7 @@ export async function buildCandidate(
     polyline: busPolyline,
     departureStopA11y: originA11y as IOsmA11y[],
     arrivalStopA11y: destA11y as IOsmA11y[],
-    ...(nearestBus ? { nearestBus } : {}),
+    tdxCity: city,
   };
 
   return {
@@ -450,8 +346,6 @@ export async function buildCandidate(
   };
 }
 
-// ─── Metro helpers ───────────────────────────────────────────────────────────
-
 export const FACILITY_LABELS: Record<number, string> = {
   1: "有電梯",
   2: "有電扶梯",
@@ -480,7 +374,6 @@ export async function fetchMetroTravelTimes(
     );
     if (!resp.ok) return travelMap;
     const records = (await resp.json()) as TdxMetroS2STravelTimeRecord[];
-    // TDX nests travel times under TravelTimes[] with bare StationIDs and RunTime in seconds
     for (const record of records) {
       for (const tt of record.TravelTimes ?? []) {
         const fromUid = `${railSystem}-${tt.FromStationID}`;
@@ -499,7 +392,6 @@ export async function fetchMetroHeadway(
   lineUid: string,
 ): Promise<number> {
   try {
-    // lineUid is e.g. "TMRT-G"; TDX filters by bare LineID e.g. "G"
     const lineId = lineUid.startsWith(`${railSystem}-`)
       ? lineUid.slice(railSystem.length + 1)
       : lineUid;
@@ -512,7 +404,6 @@ export async function fetchMetroHeadway(
 
     const nowMins = taipeiMinutesOfDay();
 
-    // Collect all headway entries across records, find current time window
     const allHeadways = records.flatMap((r) => r.Headways ?? []);
     const hw =
       allHeadways.find((h) => {
@@ -546,12 +437,11 @@ export async function fetchMetroFacilities(
   }
 }
 
-// ─── Metro candidate builder ──────────────────────────────────────────────────
-
 export async function buildMetroCandidate(
   railSystem: string,
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
+  mode: AccessibilityMode = "normal",
 ): Promise<AccessibleRoute | null> {
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -582,15 +472,12 @@ export async function buildMetroCandidate(
     fetchMetroTravelTimes(railSystem),
   ]);
 
-  // Find direction where boardStation appears before alightStation
   let direction: 0 | 1 | null = null;
   let orderedSeq: TdxMetroStationOfLine["Stations"] = [];
   let lineUid = "";
   let boardStation: ITdxMetroStation | null = null;
   let alightStation: ITdxMetroStation | null = null;
 
-  // TDX StationOfLine uses bare StationID (e.g. "G0"); stationUid is prefixed ("TMRT-G0").
-  // lineUid stored in MongoDB is "TMRT-G"; TDX LineID is "G".
   outer: for (const lid of commonLines) {
     const bareLineId = lid.startsWith(`${railSystem}-`)
       ? lid.slice(railSystem.length + 1)
@@ -612,7 +499,7 @@ export async function buildMetroCandidate(
             (s) => s.StationID === bareAlight,
           );
           if (seqBoard !== -1 && seqAlight !== -1 && seqBoard < seqAlight) {
-            direction = 0; // TDX TMRT StationOfLine has no Direction field; 0 = forward along sequence
+            direction = 0;
             orderedSeq = sol.Stations.slice(seqBoard, seqAlight + 1);
             lineUid = lid;
             boardStation = os;
@@ -625,7 +512,6 @@ export async function buildMetroCandidate(
   }
   if (direction === null || !boardStation || !alightStation) return null;
 
-  // Travel time: direct OD pair first, else sum consecutive segments
   let rideMinutes =
     travelMap.get(`${boardStation.stationUid}|${alightStation.stationUid}`) ??
     null;
@@ -641,7 +527,6 @@ export async function buildMetroCandidate(
 
   const avgHeadway = await fetchMetroHeadway(railSystem, lineUid);
   const waitMinutes = Math.round(avgHeadway / 2);
-  // Metro is headway-only (no timetable clock) — numeric expected wait.
   const waitInfo: WaitInfo = { time: waitMinutes, source: "schedule" };
 
   const boardCoords = boardStation.location.coordinates as [number, number];
@@ -655,8 +540,8 @@ export async function buildMetroCandidate(
     boardA11y,
     alightA11y,
   ] = await Promise.all([
-    orsWalkingRoute(originCoords, boardCoords),
-    orsWalkingRoute(alightCoords, destCoords),
+    orsWalkingRoute(originCoords, boardCoords, mode),
+    orsWalkingRoute(alightCoords, destCoords, mode),
     fetchMetroFacilities(railSystem, boardStation.stationUid),
     fetchMetroFacilities(railSystem, alightStation.stationUid),
     OsmA11y.find(nearQuery(boardCoords, 200)).limit(5).lean(),
@@ -776,8 +661,6 @@ export async function buildMetroCandidate(
   };
 }
 
-// ─── Train (THSR / TRA) helpers ──────────────────────────────────────────────
-
 const timetableCache = new Map<string, { data: any; expiresAt: number }>();
 
 function getCachedTimetable<T>(key: string): T | null {
@@ -798,7 +681,6 @@ async function fetchWithCache<T>(
 ): Promise<T | null> {
   const cached = getCachedTimetable<T>(cacheKey);
   if (cached) return cached;
-  // 429 退避已集中在 tdxFetch()，此處不再重複重試。
   const resp = await tdxFetch(url);
   if (!resp.ok) return null;
   const data = (await resp.json()) as T;
@@ -859,19 +741,12 @@ async function findNextThsrTrain(
       rideMinutes: number;
       waitMinutes: number;
     } | null = null;
-    // Rank catchable trains by EARLIEST arrival (not soonest departure) so a
-    // normal service beats a loop/round trip that departs sooner but arrives
-    // later, without ever rejecting the only candidate (which would 404).
     let bestArr = Infinity;
 
     for (const item of data) {
       const gt = item.GeneralTimetable;
       if (gt.ServiceDay && !gt.ServiceDay[todayKey]) continue;
 
-      // A station can appear more than once on one train (loop / round trips),
-      // so consider every boarding occurrence and pair it with the earliest
-      // later-sequence alighting stop, treating arrival-before-departure as an
-      // overnight (+24h) leg rather than mis-reporting it.
       const originStops = gt.StopTimes.filter(
         (s) => s.StationID === originStationID,
       );
@@ -883,13 +758,12 @@ async function findNextThsrTrain(
         const depMins = timeToMins(o.DepartureTime);
         if (Number.isNaN(depMins)) continue;
         const diff = depMins - nowMins;
-        // Accept trains departing up to 30 min ago (may still be catchable)
         if (diff < -30) continue;
 
         let chosen: (typeof destStops)[number] | null = null;
         let chosenArr = Infinity;
         for (const d of destStops) {
-          if (d.StopSequence <= o.StopSequence) continue; // must alight after boarding
+          if (d.StopSequence <= o.StopSequence) continue;
           const arrRaw = timeToMins(d.ArrivalTime);
           if (Number.isNaN(arrRaw)) continue;
           const effArr = arrRaw >= depMins ? arrRaw : arrRaw + 1440;
@@ -921,6 +795,7 @@ async function findNextThsrTrain(
 async function buildThsrCandidate(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
+  mode: AccessibilityMode = "normal",
 ): Promise<AccessibleRoute | null> {
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -955,8 +830,8 @@ async function buildThsrCandidate(
   const alightCoords = alightStation.location.coordinates as [number, number];
 
   const [walkTo, walkFrom, boardA11y, alightA11y] = await Promise.all([
-    orsWalkingRoute(originCoords, boardCoords),
-    orsWalkingRoute(alightCoords, destCoords),
+    orsWalkingRoute(originCoords, boardCoords, mode),
+    orsWalkingRoute(alightCoords, destCoords, mode),
     OsmA11y.find(nearQuery(boardCoords, 300)).limit(5).lean(),
     OsmA11y.find(nearQuery(alightCoords, 300)).limit(5).lean(),
   ]);
@@ -1052,8 +927,6 @@ async function buildThsrCandidate(
   };
 }
 
-// ─── TRA candidate builder ────────────────────────────────────────────────────
-
 async function findNextTraTrain(
   originStationID: string,
   destStationID: string,
@@ -1094,19 +967,11 @@ async function findNextTraTrain(
       rideMinutes: number;
       waitMinutes: number;
     } | null = null;
-    // Rank catchable trains by EARLIEST arrival (not soonest departure): a
-    // normal northbound train naturally beats a round-island/loop service that
-    // departs sooner but arrives a day later, without ever rejecting the only
-    // candidate (which would regress to a 404).
     let bestArr = Infinity;
 
     for (const item of data) {
       const gt = item.GeneralTimetable;
       if (gt.ServiceDay && !gt.ServiceDay[todayKey]) continue;
-      // A station can appear more than once on one train (loop / round-island
-      // services), so consider every boarding occurrence and pair it with the
-      // earliest later-sequence alighting stop, treating arrival-before-
-      // departure as an overnight (+24h) leg rather than mis-reporting it.
       const originStops = gt.StopTimes.filter(
         (s) => s.StationID === originStationID,
       );
@@ -1118,12 +983,12 @@ async function findNextTraTrain(
         const depMins = timeToMins(o.DepartureTime);
         if (Number.isNaN(depMins)) continue;
         const diff = depMins - nowMins;
-        if (diff < -30) continue; // already departed too long ago to catch
+        if (diff < -30) continue;
 
         let chosen: (typeof destStops)[number] | null = null;
         let chosenArr = Infinity;
         for (const d of destStops) {
-          if (d.StopSequence <= o.StopSequence) continue; // must alight after boarding
+          if (d.StopSequence <= o.StopSequence) continue;
           const arrRaw = timeToMins(d.ArrivalTime);
           if (Number.isNaN(arrRaw)) continue;
           const effArr = arrRaw >= depMins ? arrRaw : arrRaw + 1440;
@@ -1156,6 +1021,7 @@ async function findNextTraTrain(
 async function buildTraCandidate(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
+  mode: AccessibilityMode = "normal",
 ): Promise<AccessibleRoute | null> {
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -1190,8 +1056,8 @@ async function buildTraCandidate(
   const alightCoords = alightStation.location.coordinates as [number, number];
 
   const [walkTo, walkFrom, boardA11y, alightA11y] = await Promise.all([
-    orsWalkingRoute(originCoords, boardCoords),
-    orsWalkingRoute(alightCoords, destCoords),
+    orsWalkingRoute(originCoords, boardCoords, mode),
+    orsWalkingRoute(alightCoords, destCoords, mode),
     OsmA11y.find(nearQuery(boardCoords, 300)).limit(5).lean(),
     OsmA11y.find(nearQuery(alightCoords, 300)).limit(5).lean(),
   ]);
@@ -1285,8 +1151,6 @@ async function buildTraCandidate(
   };
 }
 
-// ─── Route facility collector ─────────────────────────────────────────────────
-
 function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
   return r.legs.flatMap((leg) => {
     if (leg.type === "WALK") return leg.a11yFacilities;
@@ -1302,43 +1166,83 @@ function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
   });
 }
 
-// ─── Scoring ─────────────────────────────────────────────────────────────────
-//
-// Uses the evidence-based scoring engine from scoring.ts (this module).
-// See that module for full citation list and weight rationale.
-//
-// Summary of key design choices:
-//   • Accessibility / time split: 65% / 35%
-//     Rationale: wheelchair users accept 14–74% longer routes to avoid barriers
-//     (Karimi 2016; Shanghai transit study 2025). Time matters but is secondary.
-//   • Facility scoring uses scoreFacilitySet() which applies tier-weighted tag
-//     contributions + category-level bonuses from Huang et al. 2025.
-//   • Critical feature bonuses (elevator, flush kerb, ramp) apply independently
-//     of continuous tag scores to ensure Tier 1 barriers are never diluted.
-//   • Time normalization: linear across candidates — fastest = 100, slowest = 0.
+/**
+ * Total walking distance across all WALK legs, in metres — drives the
+ * walk-distance penalty in scoring/ranking and is surfaced on the route.
+ *
+ * @param r Route to measure.
+ * @returns Total walk distance in metres.
+ */
+function totalWalkDistanceM(r: AccessibleRoute): number {
+  return r.legs.reduce(
+    (sum, leg) => (leg.type === "WALK" ? sum + leg.distanceM : sum),
+    0,
+  );
+}
 
+/**
+ * Fraction of legs that carry ANY accessibility evidence (OSM a11y nodes or
+ * facility highlights) — feeds dataConfidence so missing data is flagged as
+ * uncertainty, not scored as bad.
+ *
+ * @param r Route to inspect.
+ * @returns Coverage ratio in [0, 1].
+ */
+function legDataCoverageRatio(r: AccessibleRoute): number {
+  if (!r.legs.length) return 1;
+  let withData = 0;
+  for (const leg of r.legs) {
+    if (leg.type === "WALK") {
+      if (leg.a11yFacilities.length) withData++;
+    } else if (leg.type === "BUS") {
+      if (leg.departureStopA11y.length || leg.arrivalStopA11y.length) withData++;
+    } else if (
+      leg.departureStationA11y.length ||
+      leg.arrivalStationA11y.length ||
+      leg.facilityHighlights.length
+    ) {
+      withData++;
+    }
+  }
+  return withData / r.legs.length;
+}
+
+/**
+ * Score every candidate route with the evidence-based scoring engine
+ * (accessibility 65% / travel time 35%) and rank them by mode-aware route cost.
+ *
+ * @param routes Candidate routes to score and rank.
+ * @param mode Accessibility mode driving the cost weights. Default "normal".
+ * @returns The routes sorted by ascending cost (best first), with score
+ *   metadata attached to each.
+ */
 export function scoreAndRank(
   routes: AccessibleRoute[],
   mode: AccessibilityMode = "normal",
 ): AccessibleRoute[] {
   const maxTime = Math.max(...routes.map((r) => r.totalMinutes), 1);
+  const minTime = Math.min(...routes.map((r) => r.totalMinutes), maxTime);
 
   return routes
     .map((r) => {
       const facilities = collectRouteFacilities(r);
+      const walkDistanceM = totalWalkDistanceM(r);
       const result = scoreRoute(
         facilities,
         r.totalMinutes,
         maxTime,
+        minTime,
         r.accessibilityHighlights.length,
         mode,
+        walkDistanceM,
+        legDataCoverageRatio(r),
       );
-      // Attach score metadata to route for client consumption.
       r.accessibilityScore = result.totalScore;
       r.accessibilityLabel = result.label;
       r.scoreComponents = result.components;
-      // Ranking uses the mode-aware route COST (spec §11.2), not the display
-      // score: cost = time + transfers × 5 × modePenalty + (100 − score) × 0.3.
+      r.dataConfidence = result.dataConfidence;
+      r.scoreWarnings = result.warnings;
+      r.totalWalkDistanceM = walkDistanceM;
       return {
         route: r,
         cost: routeCost(
@@ -1346,6 +1250,7 @@ export function scoreAndRank(
           r.transferCount,
           result.totalScore,
           mode,
+          walkDistanceM,
         ),
       };
     })
@@ -1353,9 +1258,41 @@ export function scoreAndRank(
     .map((s) => s.route);
 }
 
-// ─── Mode-based route exclusion (Phase 11, spec §11.3) ───────────────────────
+/**
+ * Stage-1 pre-ranking for the two-stage pipeline: order candidates by a cheap,
+ * accessibility-aware proxy (time + transfers + walk distance) that needs NO OSM
+ * data, so the top-N can be enriched before the real scoreRoute runs. Without
+ * this, scoring ran on the un-enriched candidate set (facility data still empty)
+ * and the accessibility budget collapsed to pure travel time.
+ *
+ * @param routes Candidate routes.
+ * @param mode Accessibility mode driving the proxy penalties.
+ * @returns Routes sorted by ascending proxy cost (best first).
+ */
+function prerankByProxy(
+  routes: AccessibleRoute[],
+  mode: AccessibilityMode,
+): AccessibleRoute[] {
+  return routes
+    .map((r) => ({
+      route: r,
+      cost: prerankCost(
+        r.totalMinutes,
+        r.transferCount,
+        totalWalkDistanceM(r),
+        mode,
+      ),
+    }))
+    .sort((a, b) => a.cost - b.cost)
+    .map((s) => s.route);
+}
 
-/** True when a walk leg passes a confirmed stairs-only barrier. */
+/**
+ * True when a walk leg passes a confirmed stairs-only barrier.
+ *
+ * @param leg Walk leg to inspect.
+ * @returns Whether the leg crosses a stairs-only barrier.
+ */
 function walkLegHasStairsBarrier(leg: WalkLeg): boolean {
   return leg.a11yFacilities.some(
     (f) =>
@@ -1370,6 +1307,11 @@ function walkLegHasStairsBarrier(leg: WalkLeg): boolean {
  * facility data but no elevator mention, or a walk leg passes a stairs-only
  * barrier. Legs with NO facility data are tolerated (unknown ≠ inaccessible) —
  * over-excluding on missing data would 404 most queries.
+ *
+ * @param route Route to evaluate.
+ * @param mode Accessibility mode; exclusion only applies when its profile
+ *   requires Tier 1 features.
+ * @returns Whether the route should be excluded.
  */
 function isRouteExcluded(
   route: AccessibleRoute,
@@ -1383,13 +1325,10 @@ function isRouteExcluded(
       if (walkLegHasStairsBarrier(leg)) return true;
       continue;
     }
-    if (leg.type === "BUS") continue; // low-floor info not modelled yet
-    // Rail legs: only judge when facility data exists for the stations.
+    if (leg.type === "BUS") continue;
     if (leg.facilityHighlights.length > 0) {
       const text = leg.facilityHighlights.join("|");
-      // Known facilities but no elevator → Tier 1 missing.
       if (!text.includes("電梯")) return true;
-      // Elevator known but flagged out of service (Phase 13 overlay).
       if (/電梯[^|]*(維修|故障|暫停)/.test(text)) return true;
     }
   }
@@ -1400,6 +1339,10 @@ function isRouteExcluded(
  * Apply wheelchair Tier-1 exclusion with a graceful fallback: when EVERY
  * candidate would be excluded, return the originals (a risky route beats a
  * 404) — the low accessibility score + warnings still signal the risk.
+ *
+ * @param routes Candidate routes to filter.
+ * @param mode Accessibility mode driving the exclusion.
+ * @returns The kept routes, or all originals when none survive.
  */
 function applyModeExclusion(
   routes: AccessibleRoute[],
@@ -1426,7 +1369,7 @@ function buildRouteKey(r: AccessibleRoute): string {
   const transitLegs = r.legs.filter(
     (l): l is BusLeg | MetroLeg | ThsrLeg | TraLeg => l.type !== "WALK",
   );
-  if (transitLegs.length === 0) return ""; // walk-only: never deduplicate
+  if (transitLegs.length === 0) return "";
   return transitLegs.map(transitLegKey).join("::");
 }
 
@@ -1434,7 +1377,7 @@ function deduplicateRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
   const seen = new Set<string>();
   return routes.filter((r) => {
     const key = buildRouteKey(r);
-    if (key === "") return true; // walk-only route: always keep
+    if (key === "") return true;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -1442,11 +1385,13 @@ function deduplicateRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
 }
 
 /**
- * Cross-planner normalization: the GTFS graph and the TDX hosted engine can
+ * Cross-planner normalization key: the GTFS graph and the TDX hosted engine can
  * emit the SAME bus line snapped to different stop pairs, which survives the
- * stop-level dedup above as two near-identical candidates. Collapse routes
- * whose transit-leg sequence matches at the line level (bus: routeName +
- * direction; rail legs keep their stop-pair identity), keeping the fastest.
+ * stop-level dedup above as two near-identical candidates. Keys a bus leg at the
+ * line level (routeName + direction); rail legs keep their stop-pair identity.
+ *
+ * @param leg Transit leg to derive a logical key for.
+ * @returns The logical leg key.
  */
 function logicalLegKey(leg: BusLeg | MetroLeg | ThsrLeg | TraLeg): string {
   return leg.type === "BUS"
@@ -1474,30 +1419,24 @@ function collapseLogicalDuplicates(
   return [...best.values(), ...walkOnly];
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
 export interface FindAccessibleRoutesOptions {
-  /** Accessibility mode (Phase 11). Default "normal". */
   mode?: AccessibilityMode;
-  /** Max transfers 0–2 (Phase 12). Default 1. GTFS router path only. */
   maxTransfers?: 0 | 1 | 2;
-  /** Departure time. Default now. GTFS router path only. */
   departureTime?: Date;
-  /**
-   * Response shape (Phase 14). "standard" (default) returns slimmed facility
-   * objects inline per leg; "compact" additionally dedupes them into a
-   * route-level `facilities` dictionary with `a11yRefs` on each leg.
-   */
   format?: "standard" | "compact";
 }
 
 /**
- * Phase 16 (§8.1/§8.3): unified a11y enrichment over the FINAL top routes.
- * Planners that skip internal enrichment (OTP — clean implementation) get
- * their transit legs' OsmA11y arrays, route highlights and rail-leg indoor
- * guidance filled here, so per-request Mongo work is top-3 × stops instead of
- * every-candidate × stops. Legs already enriched by their planner (GTFS/TDX
- * until Phase 16.5) are left untouched. Best-effort and non-throwing.
+ * Unified a11y enrichment over the FINAL top routes. Planners that skip internal
+ * enrichment (OTP) get their transit legs' OsmA11y arrays, route highlights and
+ * rail-leg indoor guidance filled here, so per-request Mongo work is top-3 ×
+ * stops instead of every-candidate × stops. Legs already enriched by their
+ * planner are left untouched. Best-effort and non-throwing.
+ *
+ * @param routes Top routes to enrich in place.
+ * @param origin Journey origin coordinates.
+ * @param destination Journey destination coordinates.
+ * @param mode Accessibility mode used for indoor guidance.
  */
 async function enrichTopRoutes(
   routes: AccessibleRoute[],
@@ -1526,8 +1465,6 @@ async function enrichTopRoutes(
       await Promise.all(
         transitLegs.map(async (leg) => {
           const { board, alight } = legA11y(leg);
-          // Polyline endpoints stand in for stop coords (all planners emit
-          // board → … → alight geometry).
           const boardCoords = leg.polyline[0];
           const alightCoords = leg.polyline[leg.polyline.length - 1];
           if (
@@ -1544,7 +1481,6 @@ async function enrichTopRoutes(
             attachA11yToLeg(leg, boardA11y, alightA11y);
           }
 
-          // Indoor step-free guidance for un-enriched rail legs (§8.3).
           if (
             leg.type !== "BUS" &&
             leg.facilityHighlights.length === 0 &&
@@ -1579,12 +1515,18 @@ async function enrichTopRoutes(
 
 /**
  * Shared finalization: dedupe → cross-planner line-level collapse → mode
- * exclusion (spec §11.3) → mode-aware
- * score + cost ranking (spec §11.2) → top 3 → unified a11y enrichment
- * (Phase 16 §8.1, fail-soft) → realtime facility overlay
- * (Phase 13, fail-soft) → realtime transit overlay (Phase 15: bus ETA + TRA
- * delays, fail-soft) → facility slimming (Phase 14; slimming runs LAST so
- * scoring and the overlays see full documents).
+ * exclusion → mode-aware score + cost ranking → top 3 → unified a11y enrichment
+ * (fail-soft) → realtime facility overlay (fail-soft) → realtime transit overlay
+ * (bus ETA + TRA delays, fail-soft) → facility slimming (runs LAST so scoring
+ * and the overlays see full documents).
+ *
+ * @param routes Candidate routes to finalize.
+ * @param origin Journey origin coordinates.
+ * @param destination Journey destination coordinates.
+ * @param mode Accessibility mode for exclusion and scoring.
+ * @param format Response shape; "compact" dedupes facilities route-level.
+ * @param departureTime Departure time used by the realtime transit overlay.
+ * @returns The top-3 finalized routes.
  */
 async function finalizeRoutes(
   routes: AccessibleRoute[],
@@ -1594,24 +1536,29 @@ async function finalizeRoutes(
   format: "standard" | "compact" = "standard",
   departureTime?: Date,
 ): Promise<AccessibleRoute[]> {
+  const PRERANK_N = 8;
   const t: Record<string, number> = {};
   let t0 = Date.now();
-  const ranked = scoreAndRank(
-    applyModeExclusion(
-      collapseLogicalDuplicates(deduplicateRoutes(routes)),
-      mode,
-    ),
+  // Stage 1: cheap accessibility-aware proxy pre-rank (no OSM data) → top-N.
+  const candidates = applyModeExclusion(
+    collapseLogicalDuplicates(deduplicateRoutes(routes)),
     mode,
   );
-  const top = ranked.slice(0, 3);
-  t.rank = Date.now() - t0;
+  const topN = prerankByProxy(candidates, mode).slice(0, PRERANK_N);
+  t.prerank = Date.now() - t0;
   t0 = Date.now();
+  // Stage 2: a11y enrichment (Mongo) BEFORE scoring, so facility data is real
+  // when scoreRoute runs — otherwise the accessibility budget collapses to 0.
   try {
-    await enrichTopRoutes(top, origin, destination, mode);
+    await enrichTopRoutes(topN, origin, destination, mode);
   } catch (err) {
-    console.warn("[accessible-route] top-3 a11y enrichment failed", err);
+    console.warn("[accessible-route] top-N a11y enrichment failed", err);
   }
   t.enrich = Date.now() - t0;
+  t0 = Date.now();
+  // Stage 3: score with the enriched facility data + rank → final top-3.
+  const top = scoreAndRank(topN, mode).slice(0, 3);
+  t.rank = Date.now() - t0;
   t0 = Date.now();
   try {
     const { overlayFacilityStatus } =
@@ -1623,11 +1570,9 @@ async function finalizeRoutes(
   t.facilityOverlay = Date.now() - t0;
   t0 = Date.now();
   try {
-    const { overlayRealtimeTransit, recoverRailTrainNos } =
+    const { overlayRealtimeTransit, recoverRailTrainNos, annotateBusTdxCity } =
       await import("./planners/realtime-transit");
-    // Rail (TRA+THSR) trainNo/time recovery is schedule-based; run it FIRST so
-    // it backfills the real (snapped) train number before the realtime pass
-    // matches TRA delays against it.
+    annotateBusTdxCity(top);
     await recoverRailTrainNos(top).catch(() => undefined);
     await overlayRealtimeTransit(top, { departureTime });
   } catch (err) {
@@ -1641,9 +1586,12 @@ async function finalizeRoutes(
 }
 
 /**
- * R1 shadow-mode diff line (spec §10): one parseable log entry per request
- * comparing OTP's candidates with the merged baseline (null baseline = legacy
- * path, where only OTP's side is known). grep "[otp-shadow]" to collect.
+ * Shadow-mode diff line: one parseable log entry per request comparing OTP's
+ * candidates with the merged baseline (null baseline = legacy path, where only
+ * OTP's side is known). grep "[otp-shadow]" to collect.
+ *
+ * @param otpRoutes Routes produced by the OTP planner.
+ * @param baseline The merged baseline routes, or null on the legacy path.
  */
 function logOtpShadowDiff(
   otpRoutes: AccessibleRoute[],
@@ -1668,8 +1616,11 @@ function logOtpShadowDiff(
 /**
  * City of a coordinate from the nearest imported bus stop (~10ms local Mongo
  * lookup) instead of Google reverse geocoding (~200–800ms external call).
- * Returns null when the DB has no stops (fresh install) — caller falls back
- * to Google.
+ *
+ * @param lat Latitude.
+ * @param lng Longitude.
+ * @returns The city name, or null when the DB has no stops (caller falls back
+ *   to Google).
  */
 export async function resolveCityFromStops(
   lat: number,
@@ -1684,12 +1635,6 @@ export async function resolveCityFromStops(
     return null;
   }
 }
-
-// ─── Request orchestration ───────────────────────────────────────────────────
-// The controller-free part of POST /accessible-route: resolve a natural-language
-// query into endpoints (optional intent switch), geocode them, pick the city,
-// normalize departureTime, then plan. Returns a tagged result the controller
-// maps straight onto sendResponse — no req/res in here.
 
 export interface PlanRouteRequest {
   origin?: unknown;
@@ -1722,8 +1667,6 @@ export async function planAccessibleRouteFromRequest(
   const { query, userLocation, maxTransfers, departureTime, format } = body;
   let mode = body.mode;
 
-  // Phase 9 — optional intent switch: a natural-language `query` is parsed into
-  // origin/destination (+ mode) when explicit endpoints are not supplied.
   let intent: RouteIntent | null = null;
   if (query && (!origin || !destination)) {
     try {
@@ -1749,7 +1692,6 @@ export async function planAccessibleRouteFromRequest(
         ? userLocation ?? undefined
         : intent.from;
     destination = intent.to;
-    // Explicit body mode wins; otherwise adopt the parsed intent's mode.
     mode = mode ?? intent.mode;
     if (!origin) {
       return {
@@ -1768,7 +1710,6 @@ export async function planAccessibleRouteFromRequest(
     };
   }
 
-  // Resolve coordinates for both ends
   const [originCoords, destCoords] = await Promise.all([
     typeof origin === "string"
       ? getCoordinates(origin)
@@ -1789,14 +1730,9 @@ export async function planAccessibleRouteFromRequest(
   const lat = originCoords.latitude;
   const lng = originCoords.longitude;
 
-  // Local stop-based city lookup (~10ms) replaces the per-request Google
-  // reverse geocode; Google remains the fallback for stop-less areas.
   const city = ((await resolveCityFromStops(lat, lng)) ??
     (await getCity(lat, lng))) as TaiwanCityEn;
 
-  // Phase 11/12: thread mode + transfer budget + departure time through.
-  // A departureTime in the past (stale client state / clock skew) would make
-  // every planner return buses that already left — treat it as "now".
   const parsedDeparture = departureTime ? new Date(departureTime) : undefined;
   const futureDeparture =
     parsedDeparture &&
@@ -1813,7 +1749,6 @@ export async function planAccessibleRouteFromRequest(
       mode: mode ?? "normal",
       maxTransfers: (maxTransfers ?? 1) as 0 | 1 | 2,
       departureTime: futureDeparture,
-      // Phase 14: "compact" dedupes facilities into route.facilities.
       format: format === "compact" ? "compact" : "standard",
     },
   );
@@ -1851,12 +1786,6 @@ export async function findAccessibleRoutes(
   const geoQuery = (coord: { lat: number; lng: number }, dist: number) =>
     nearQuery([coord.lng, coord.lat], dist);
 
-  // Phase 16: planner fan-out. USE_OTP_ROUTER drives the OTP2 sidecar (rollout:
-  // "false" | "shadow" | "true"); USE_TDX_ROUTING adds the TDX MaaS gap-filler.
-  // Both map to AccessibleRoute and merge in finalizeRoutes — no legacy TDX
-  // leg-builders run on this path. Shadow mode runs OTP in parallel but only
-  // logs a diff against the baseline; its results never reach the response.
-  // (The retired local GTFS planner formerly lived behind USE_GTFS_ROUTER.)
   const otpFlag = (process.env.USE_OTP_ROUTER ?? "false").toLowerCase();
   const otpMerged = otpFlag === "true";
   const otpShadow = otpFlag === "shadow";
@@ -1907,13 +1836,10 @@ export async function findAccessibleRoutes(
     );
   }
 
-  // Legacy path with OTP shadow: let the diff log land whenever OTP finishes —
-  // never block or alter the legacy response (R1 exit criteria, spec §10).
   if (otpShadow) {
     otpPromise.then((otpRoutes) => logOtpShadowDiff(otpRoutes, null));
   }
 
-  // Bus search
   const busSearchPromise = (async (): Promise<AccessibleRoute[]> => {
     const [originStops, destStops] = await Promise.all([
       BusStopModel.find(geoQuery(origin, 400)).limit(20).lean<ITdxBusStop[]>(),
@@ -1941,32 +1867,28 @@ export async function findAccessibleRoutes(
           destination,
           originStop,
           destStop,
+          mode,
         );
       }),
     );
     return candidates.filter(Boolean) as AccessibleRoute[];
   })();
 
-  // Metro search — one promise per rail system serving this city
   const systems = CITY_METRO_SYSTEMS[city] ?? [];
   const metroPromises = systems.map((railSystem) =>
-    buildMetroCandidate(railSystem, origin, destination)
+    buildMetroCandidate(railSystem, origin, destination, mode)
       .then((r): AccessibleRoute[] => (r ? [r] : []))
       .catch((): AccessibleRoute[] => []),
   );
 
-  const thsrPromise = buildThsrCandidate(origin, destination)
+  const thsrPromise = buildThsrCandidate(origin, destination, mode)
     .then((r): AccessibleRoute[] => (r ? [r] : []))
     .catch((): AccessibleRoute[] => []);
 
-  const traPromise = buildTraCandidate(origin, destination)
+  const traPromise = buildTraCandidate(origin, destination, mode)
     .then((r): AccessibleRoute[] => (r ? [r] : []))
     .catch((): AccessibleRoute[] => []);
 
-  // Phase 3: one-transfer routes run concurrently with the direct search.
-  // Lazy import avoids a circular dependency at module-eval time (transfer-finder
-  // imports many helpers from this file); starting it here rather than after the
-  // direct Promise.all keeps transfer latency off the critical path.
   const transferPromise = import("./transfer-finder")
     .then((m) => m.findTransferRoutes(origin, destination, city))
     .catch((): AccessibleRoute[] => []);

@@ -27,19 +27,21 @@ export async function getBusEta(params: {
 
   const stopUrl =
     fmt.type === "City"
-      ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=SubRouteName/${lang} eq '${fmt.routeId}'`
-      : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=SubRouteName/${lang} eq '${fmt.routeId}'`;
+      ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/${lang} eq '${fmt.routeId}'`
+      : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/${lang} eq '${fmt.routeId}'`;
 
   const stopRes = await tdxFetch(stopUrl);
   if (!stopRes.ok) return { ok: false, error: "TDX 公車路線資料查詢失敗", status: 500 };
 
   const stopJson = (await stopRes.json()) as BusRoute[];
-  if (!stopJson || stopJson.length < 2) {
+  if (!stopJson || stopJson.length === 0) {
     return { ok: false, error: `找不到路線 ${routeName} 的站點資料`, status: 500 };
   }
 
+  const dir0Stops = stopJson.find((r) => r.Direction === 0)?.Stops || [];
+  const dir1Stops = stopJson.find((r) => r.Direction === 1)?.Stops || [];
   const direction = getRouteDirectionImproved(
-    { 0: stopJson[0].Stops, 1: stopJson[1].Stops },
+    { 0: dir0Stops, 1: dir1Stops },
     departureStop,
     arrivalStop,
     lang,

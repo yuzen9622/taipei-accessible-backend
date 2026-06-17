@@ -1,11 +1,9 @@
 import type { Request, Response } from "express";
-import { openai, model as defaultModel } from "../../config/ai";
+import { openai, model } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import { runToolLoop, type OAIMessage } from "./ai-chat.service";
-
-// ─── System Prompt ────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `你是「無障礙交通導航 AI 助理」，專為輪椅使用者、年長者及視障人士設計。
 你的職責是協助使用者查詢無障礙設施、規劃無障礙路線、查詢公車即時到站資訊，以及提供出行前的空氣品質建議。
@@ -43,17 +41,12 @@ const SYSTEM_PROMPT = `你是「無障礙交通導航 AI 助理」，專為輪�
 - 使用者使用何種語言，就以該語言回覆
 - 不要將 JSON 原始資料直接輸出給使用者，請整理成自然語言`;
 
-// ─── SSE helpers ──────────────────────────────────────────────────────────────
-
 function sendSse(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-// ─── Controller ───────────────────────────────────────────────────────────────
-
 export async function aiChat(req: Request, res: Response): Promise<void> {
   const {
-    model: requestModel,
     messages: rawMessages,
     stream,
     temperature,
@@ -66,10 +59,8 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     userLocation?: { latitude: number; longitude: number };
   };
 
-  const useModel = requestModel || defaultModel;
   const useTemp = temperature ?? 0.2;
 
-  // Build conversation: prepend system prompt when not already supplied
   const messages: OAIMessage[] = [];
   if (!rawMessages.length || rawMessages[0].role !== "system") {
     let systemPrompt = SYSTEM_PROMPT;
@@ -80,7 +71,6 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   }
   messages.push(...rawMessages);
 
-  // ── Streaming path ──────────────────────────────────────────────────────────
   if (stream) {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -89,19 +79,17 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     res.flushHeaders();
 
     try {
-      // Phase 1: tool-calling loop (non-streaming, emits tool_call / tool_result events)
       await runToolLoop(
         messages,
-        useModel,
+        model,
         useTemp,
         userLocation,
         (name, args) => sendSse(res, "tool_call", { name, args }),
-        (name, result) => sendSse(res, "tool_result", { name, result })
+        (name, result) => sendSse(res, "tool_result", { name, result }),
       );
 
-      // Phase 2: final answer streamed token-by-token (flat { text } payload)
       const finalStream = await openai.chat.completions.create({
-        model: useModel,
+        model: model,
         messages,
         temperature: useTemp,
         stream: true,
@@ -126,12 +114,11 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  // ── Non-streaming path ──────────────────────────────────────────────────────
   try {
-    await runToolLoop(messages, useModel, useTemp, userLocation);
+    await runToolLoop(messages, model, useTemp, userLocation);
 
     const response = await openai.chat.completions.create({
-      model: useModel,
+      model: model,
       messages,
       temperature: useTemp,
       stream: false,
@@ -152,7 +139,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      error?.message ?? ERROR_MESSAGE.INTERNAL
+      error?.message ?? ERROR_MESSAGE.INTERNAL,
     );
   }
 }

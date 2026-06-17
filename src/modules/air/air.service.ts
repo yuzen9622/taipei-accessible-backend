@@ -1,8 +1,10 @@
 import type { STAApiResponse, AIResponse } from "../../types/air";
 import { getCityZh } from "../../adapters/google.adapter";
 import { googleGenAi, model } from "../../config/ai";
-import { rankConfig } from "../../config/ai/config";
-import { rankContents } from "../../config/ai/contents";
+import { airConfig } from "../../config/ai/config";
+import { airContents } from "../../config/ai/contents";
+
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 export interface AirReading {
   area: string | null;
@@ -22,17 +24,17 @@ export async function getAirData(lat: number, lng: number): Promise<AirData | nu
   const staUrl =
     `https://sta.ci.taiwan.gov.tw/STA_AirQuality_EPAIoT/v1.0/Datastreams` +
     `?$expand=Thing,Observations($orderby=phenomenonTime desc;$top=1)` +
-    `&$filter=name eq 'PM2.5' and Thing/properties/areaType eq '${city}'`;
+    `&$filter=name eq 'PM2.5' and Thing/properties/city eq '${city}'`;
 
   const staRes = await fetch(staUrl);
   const staData = (await staRes.json()) as STAApiResponse;
 
   const readings: AirReading[] = staData.value
     .map((item) => ({
-      area: item.Thing?.properties?.areaDescription ?? null,
+      area: item.Thing?.properties?.area ?? item.Thing?.properties?.areaDescription ?? null,
       pm25: item.Observations?.[0]?.result ?? null,
       coordinates: item.observedArea?.coordinates,
-      city: item.Thing?.properties?.areaType ?? null,
+      city: item.Thing?.properties?.city ?? null,
     }))
     .filter((v): v is AirReading => v.pm25 !== null);
 
@@ -50,10 +52,12 @@ export function classifyPm25(pm25: number): { quality: string; advice: string } 
 }
 
 /**
- * Full air-quality lookup for the endpoint and the agent tool: fetch the
- * nearest PM2.5 readings, then have Gemini turn them into a user-facing
- * description. Returns null when no sensor covers the area (the caller maps
- * that to 404).
+ * Full air-quality lookup that fetches the nearest PM2.5 readings, then has
+ * Gemini turn them into a user-facing description.
+ *
+ * @param lat Latitude of the location to assess.
+ * @param lng Longitude of the location to assess.
+ * @returns The AI air-quality response, or null when no sensor covers the area.
  */
 export async function getAirQualityWithAI(
   lat: number,
@@ -65,7 +69,7 @@ export async function getAirQualityWithAI(
   const aiResponse = await googleGenAi.models.generateContent({
     model,
     contents: [
-      ...rankContents,
+      ...airContents,
       {
         role: "user",
         parts: [
@@ -75,7 +79,7 @@ export async function getAirQualityWithAI(
         ],
       },
     ],
-    config: rankConfig,
+    config: airConfig,
   });
 
   return JSON.parse(

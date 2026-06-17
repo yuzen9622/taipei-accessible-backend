@@ -10,12 +10,12 @@ import { BusRealtimeNearbyStop, BusRoute } from "../types/transit";
 export function normalizeStopName(name?: string): string {
   if (!name) return "";
   return name
-    .normalize("NFKC") // 全半形統一
-    .replace(/[\(（][^）\)]*[\)）]/g, "") // 移除 () 與 （）中的內容
-    .replace(/站/g, "") // 可選：移除「站」字
-    .replace(/\s+/g, "") // 移除所有空白
-    .replace(/臺/g, "台") // 統一臺/台
-    .replace(/[－–—-]/g, "") // 統一破折號
+    .normalize("NFKC")
+    .replace(/[\(（][^）\)]*[\)）]/g, "")
+    .replace(/站/g, "")
+    .replace(/\s+/g, "")
+    .replace(/臺/g, "台")
+    .replace(/[－–—-]/g, "")
     .replace("副線", "副")
     .replace(".", "")
     .replace("Rd", "")
@@ -28,7 +28,6 @@ export function equalStopName(a?: string, b?: string): boolean {
   const nb = normalizeStopName(b);
   if (!na || !nb) return false;
 
-  // 嚴格相等 + 含括（避免資料來源前後綴差異）
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
@@ -52,7 +51,7 @@ export function getRouteDirectionImproved(
     );
 
     if (startIndex !== -1 && endIndex !== -1) {
-      return direction; // 0 = 去程, 1 = 回程
+      return direction;
     }
   }
 
@@ -63,13 +62,11 @@ export function getBusFrontOfArrivalStop(
   arrivalStopName: string,
   bus: BusRealtimeNearbyStop[]
 ): BusRealtimeNearbyStop | null {
-  // 找到目標站的索引
   const arrivalIndex = stops.findIndex(
     (s) => s.StopName.Zh_tw === arrivalStopName
   );
   if (arrivalIndex === -1) return null;
 
-  // 過濾出還沒到目標站的公車
   const busesInFront = bus.filter((b) => {
     const busIndex = stops.findIndex((s) => s.StopUID === b.StopUID);
     return busIndex !== -1 && busIndex < arrivalIndex;
@@ -77,7 +74,6 @@ export function getBusFrontOfArrivalStop(
 
   if (busesInFront.length === 0) return null;
 
-  // 找到最接近目標站的公車（StopSequence 最大的）
   let closestBus = busesInFront[0];
   let maxStopIndex = stops.findIndex((s) => s.StopUID === closestBus.StopUID);
 
@@ -98,9 +94,7 @@ export function getBusFrontOfArrivalStop(
  * @returns 格式化後的路線名稱 (例如: "307", "紅50延", "藍1區間")
  */
 export function formatRouteName(routeName: string): string {
-  // 要保留的中文字 (顏色和類型)
   const keepChars = [
-    // 顏色
     "紅",
     "藍",
     "綠",
@@ -122,20 +116,15 @@ export function formatRouteName(routeName: string): string {
     "環",
   ];
 
-  // 先去掉括號內容
   const withoutBrackets = routeName.replace(/[\(（][^）\)]*[\)）]/g, "");
 
-  // 逐字過濾，只保留英文、數字和特定中文字
   return withoutBrackets
     .split("")
     .filter((char) => {
-      // 保留英文字母和數字
       if (/[A-Za-z0-9]/.test(char)) return true;
 
-      // 保留指定的中文字符
       if (keepChars.includes(char)) return true;
 
-      // 過濾其他中文字符
       return false;
     })
     .join("");
@@ -150,10 +139,8 @@ export function detectBusApiType(fullName: string): {
   type: "City" | "InterCity";
   routeId: string;
 } {
-  // 先取出路線主要代號（忽略中文敘述、括號、空白）
   const routeId = fullName.match(/^[A-Z]?\d+[A-Z]?/)?.[0] ?? fullName.trim();
 
-  // 判斷邏輯
   let type: "City" | "InterCity";
 
   if (/^1\d{3}[A-Z]?$/.test(routeId)) {

@@ -1,21 +1,15 @@
 /**
- * Phase 3 — one-transfer route finder.
+ * One-transfer route finder.
  *
  * Builds wheelchair-accessible routes that require exactly one transfer between
  * two transit legs (bus↔bus, bus↔metro, metro↔metro). Reuses the direct-route
  * helpers exported from accessible-route.service.ts so TDX-fetch / scoring logic
- * is never duplicated.
+ * is never duplicated. All coordinates are [lng, lat] (GeoJSON / ORS convention).
  *
- * All coordinates are [lng, lat] (GeoJSON / ORS convention).
- *
- * High-level flow (see Phase 3 SPEC §4):
- *   1. findReachableStops(origin) and findReachableStops(destination) in parallel.
- *   2. Enumerate first-leg routes from origin-side stops (bus subRouteIds / metro lines).
- *   3. Enumerate last-leg routes into destination-side stops.
- *   4. Combinatorial join on intermediate stops with an 800 m straight-line prefilter.
- *   5. Resolve transfer walk-times with a single ORS matrix call.
- *   6. Assemble five-leg AccessibleRoute objects (walk → transit → walk → transit → walk).
- *   7. Score with the shared scoreAndRank and return up to 20 routes.
+ * High-level flow: find reachable stops on each side, enumerate first-leg and
+ * last-leg routes, join them on intermediate stops with a straight-line
+ * prefilter, resolve transfer walk-times via one ORS matrix call, assemble
+ * five-leg AccessibleRoute objects, then score with the shared scoreAndRank.
  */
 
 import {
@@ -24,7 +18,6 @@ import {
   fetchTdxRoute,
   fetchWaitInfo,
   waitInfoMinutes,
-  fetchNearestBus,
   fetchMetroStationOfLine,
   fetchMetroTravelTimes,
   fetchMetroHeadway,
@@ -68,44 +61,40 @@ import {
 } from "../../types";
 import { BusRoute, TdxMetroStationFacility } from "../../types/transit";
 
-// ─── Tunables ──────────────────────────────────────────────────────────────
-
-const MAX_WALK_MIN = 20; // reachable-stop budget on each side
-const MAX_ORIGIN_STOPS = 10; // first-leg origin stops to expand
-const MAX_DEST_STOPS = 10; // last-leg destination stops to expand
-const MAX_ROUTES_PER_STOP = 3; // first-leg routes per origin stop
-const TRANSFER_PREFILTER_M = 800; // straight-line cap at the transfer point
-const MAX_TRANSFER_WALK_SEC = 10 * 60; // routed transfer walk ceiling
-const MAX_COMBOS = 20; // hard cap on assembled candidates
-const LAST_LEG_ALIGHT_MAX_M = 2000; // last-leg alighting stop must be within this of dest
-
-// ─── Internal data structures (SPEC §3) ─────────────────────────────────────
+const MAX_WALK_MIN = 20;
+const MAX_ORIGIN_STOPS = 10;
+const MAX_DEST_STOPS = 10;
+const MAX_ROUTES_PER_STOP = 3;
+const TRANSFER_PREFILTER_M = 800;
+const MAX_TRANSFER_WALK_SEC = 10 * 60;
+const MAX_COMBOS = 20;
+const LAST_LEG_ALIGHT_MAX_M = 2000;
 
 interface IntermediateStop {
-  name: string; // Zh_tw
-  coords: [number, number]; // [lng, lat]
-  stopIdx: number; // position in the TDX stop sequence
-  direction: number; // bus direction (0/1); 0 for metro forward
+  name: string;
+  coords: [number, number];
+  stopIdx: number;
+  direction: number;
 }
 
 interface BoardableRoute {
   kind: "BUS" | "METRO";
-  routeId: string; // subRouteId (bus) | lineId, e.g. "TRTC-R" (metro)
-  railSystem?: string; // metro only
-  city: string; // ITdxBusStop.city for bus; city param for metro
-  originStop: ReachableStop; // boarding stop on the origin side
-  boardName: string; // boarding stop/station Zh_tw
+  routeId: string;
+  railSystem?: string;
+  city: string;
+  originStop: ReachableStop;
+  boardName: string;
   boardCoords: [number, number];
-  stopSequence: IntermediateStop[]; // stops forward of the boarding stop
+  stopSequence: IntermediateStop[];
 }
 
 interface ServiceableRoute {
   kind: "BUS" | "METRO";
-  routeId: string; // subRouteId (bus) | lineId (metro)
-  railSystem?: string; // metro only
+  routeId: string;
+  railSystem?: string;
   city: string;
   destStop: ReachableStop;
-  boardName: string; // last-leg boarding stop/station Zh_tw
+  boardName: string;
   boardCoords: [number, number];
   stopDoc: ITdxBusStop | null;
   stationDoc: ITdxMetroStation | null;
@@ -119,9 +108,8 @@ interface TransferCombo {
   midStop: IntermediateStop;
   destStop: ReachableStop;
   lastLeg: ServiceableRoute;
-  transferWalkSec: number; // resolved in Step 5
+  transferWalkSec: number;
 }
-
 
 function bareLineId(railSystem: string, lineId: string): string {
   return lineId.startsWith(`${railSystem}-`)
@@ -141,6 +129,10 @@ const osmTagVal = (nodes: IOsmA11y[], key: string, val: string): boolean =>
 /**
  * OSM-derived accessibility highlights for a single point (mirrors the
  * highlight logic in buildCandidate, scoped to one node set).
+ *
+ * @param nodes OSM a11y nodes near the point.
+ * @param label Location label prefixed onto each highlight string.
+ * @returns The highlight strings for the point.
  */
 function pointHighlights(nodes: IOsmA11y[], label: string): string[] {
   const out: string[] = [];
@@ -156,8 +148,13 @@ function pointHighlights(nodes: IOsmA11y[], label: string): string[] {
 }
 
 /**
- * TRTC exit-info lookup (SPEC §6). Returns the closest elevator/ramp exit at
- * the given station to `near`, or null. Only valid when railSystem === "TRTC".
+ * TRTC exit-info lookup. Returns the closest elevator/ramp exit at the given
+ * station to `near`, or null. Only valid when railSystem === "TRTC".
+ *
+ * @param railSystem Rail system code; only "TRTC" yields a result.
+ * @param stationName Station name to look up exits for.
+ * @param near Reference coordinate the nearest exit is chosen against.
+ * @returns The nearest exit info, or null.
  */
 async function lookupTrtcExit(
   railSystem: string,
@@ -166,9 +163,6 @@ async function lookupTrtcExit(
 ): Promise<WalkLeg["exitInfo"]> {
   if (railSystem !== "TRTC") return null;
   try {
-    // Reuse the single source of truth for exit lookup + parsing instead of
-    // duplicating the query/regex here (keeps exitInfo identical to the
-    // direct-route path in a11y-exit.service.ts).
     const exits = await findAccessibleExits(stationName);
     if (!exits.length) return null;
     const nearest = selectNearestExit(near, exits);
@@ -182,8 +176,6 @@ async function lookupTrtcExit(
     return null;
   }
 }
-
-// ─── Step 2: enumerate first-leg (boardable) routes ──────────────────────────
 
 async function enumerateBoardableRoutes(
   originStops: ReachableStop[],
@@ -228,11 +220,10 @@ async function enumerateBoardableRoutes(
             stopSequence: seq,
           });
         } catch {
-          // skip this route on any TDX failure
+          /* skip this route on any TDX failure */
         }
       }
     } else {
-      // metro
       const doc = stop.doc as ITdxMetroStation;
       const railSystem = doc.railSystem;
       const boardName = doc.stationName.Zh_tw;
@@ -250,7 +241,6 @@ async function enumerateBoardableRoutes(
           if (!sol) continue;
           const boardIdx = sol.Stations.findIndex((s) => s.StationID === bareBoard);
           if (boardIdx === -1) continue;
-          // forward direction along the sequence (coords resolved from DB below)
           const seq: IntermediateStop[] = sol.Stations.slice(boardIdx + 1).map(
             (s, i) => ({
               name: s.StationName.Zh_tw,
@@ -259,8 +249,6 @@ async function enumerateBoardableRoutes(
               direction: 0,
             })
           );
-          // The station-of-line response carries no coordinates; resolve them
-          // via a DB lookup by name. Drop entries with no stored coords.
           const resolved = await resolveMetroSeqCoords(railSystem, seq);
           if (!resolved.length) continue;
           out.push({
@@ -274,7 +262,7 @@ async function enumerateBoardableRoutes(
             stopSequence: resolved,
           });
         } catch {
-          // skip this line on any TDX failure
+          /* skip this line on any TDX failure */
         }
       }
     }
@@ -286,15 +274,16 @@ async function enumerateBoardableRoutes(
  * Resolve [lng,lat] for a metro station sequence by looking the stations up in
  * MongoDB by Zh_tw name on the given rail system. Stations without a stored doc
  * are dropped (they cannot participate in distance prefiltering).
+ *
+ * @param railSystem Rail system the stations belong to.
+ * @param seq Station sequence whose coordinates are resolved.
+ * @returns The sequence with resolved coordinates, dropping unstored stations.
  */
 async function resolveMetroSeqCoords(
   railSystem: string,
   seq: IntermediateStop[]
 ): Promise<IntermediateStop[]> {
   if (!seq.length) return [];
-  // Map each seq entry to its prefixed UID via the name+sequence; we stored the
-  // bare StationID position only, so re-derive UID from railSystem + name match.
-  // Simpler: query all stations on this rail system by name set.
   const names = [...new Set(seq.map((s) => s.name))];
   const MetroStationModel = (await import("../../model/metro-station.model"))
     .default;
@@ -313,8 +302,6 @@ async function resolveMetroSeqCoords(
   }
   return out;
 }
-
-// ─── Step 3: enumerate last-leg (serviceable) routes ─────────────────────────
 
 function enumerateServiceableRoutes(
   destStops: ReachableStop[],
@@ -371,8 +358,6 @@ function enumerateServiceableRoutes(
   return { routes, byName };
 }
 
-// ─── Step 4: combinatorial join ──────────────────────────────────────────────
-
 function findTransferCombos(
   boardables: BoardableRoute[],
   serviceablesByName: Map<string, ServiceableRoute[]>
@@ -386,18 +371,15 @@ function findTransferCombos(
 
   for (const first of boardables) {
     for (const mid of first.stopSequence) {
-      // S_mid cannot be the same physical stop we boarded.
       if (equalStopName(mid.name, first.boardName)) continue;
 
       const candidates = serviceablesByName.get(mid.name);
       if (!candidates) continue;
 
       for (const last of candidates) {
-        // straight-line prefilter at the transfer point
         const d = haversineM(mid.coords, last.boardCoords);
         if (d > TRANSFER_PREFILTER_M) continue;
 
-        // Don't transfer onto the very same route we're already on.
         if (
           first.kind === last.kind &&
           first.routeId === last.routeId &&
@@ -405,8 +387,6 @@ function findTransferCombos(
         )
           continue;
 
-        // Explicit guard: last leg must actually serve its dest stop (trivially
-        // true by construction, but assert it for safety).
         if (last.kind === "BUS") {
           if (!last.stopDoc?.subRouteIds.includes(last.routeId)) continue;
         } else {
@@ -441,12 +421,15 @@ function findTransferCombos(
   return scored.slice(0, MAX_COMBOS).map((s) => s.combo);
 }
 
-// ─── Step 6: leg assembly helpers ────────────────────────────────────────────
-
 /**
- * Build a BusLeg + the alighting coords/name for a transit segment, boarding at
- * `boardName` and alighting at `alightName`. Reuses fetchWaitInfo/fetchNearestBus.
- * Returns null on any failure (bad direction, missing stops, etc.).
+ * Build a BusLeg plus the alighting coords for a transit segment, boarding at
+ * `boardName` and alighting at `alightName`. Reuses fetchWaitInfo.
+ *
+ * @param routeId TDX subRouteId of the bus route.
+ * @param city TDX City segment for the route.
+ * @param boardName Boarding stop name (Zh_tw).
+ * @param alightName Alighting stop name (Zh_tw).
+ * @returns The leg, ride/wait minutes and alighting coords, or null on failure.
  */
 async function buildBusSegment(
   routeId: string,
@@ -492,11 +475,10 @@ async function buildBusSegment(
     .slice(boardIdx, alightIdx + 1)
     .map((s) => [s.StopPosition.PositionLon, s.StopPosition.PositionLat]);
 
-  const [waitInfo, originA11y, destA11y, nearestBus] = await Promise.all([
+  const [waitInfo, originA11y, destA11y] = await Promise.all([
     fetchWaitInfo(routeId, city, direction, boardName),
     OsmA11y.find(nearQuery(boardCoords, 150)).limit(5).lean<IOsmA11y[]>(),
     OsmA11y.find(nearQuery(alightCoords, 150)).limit(5).lean<IOsmA11y[]>(),
-    fetchNearestBus(routeId, city, direction, boardCoords, boardIdx, dirStops),
   ]);
 
   const waitMinutes = waitInfoMinutes(waitInfo);
@@ -513,15 +495,25 @@ async function buildBusSegment(
     polyline,
     departureStopA11y: originA11y,
     arrivalStopA11y: destA11y,
-    ...(nearestBus ? { nearestBus } : {}),
+    tdxCity: city,
   };
 
   return { leg, rideMinutes, waitMinutes, alightCoords };
 }
 
 /**
- * Build a MetroLeg + alighting coords/name for a metro transit segment, boarding
- * at `boardDoc` and alighting at the line station nearest `alightTarget`.
+ * Build a MetroLeg plus alighting coords/name for a metro transit segment,
+ * boarding at `boardName` and alighting at the line station nearest
+ * `alightTarget`.
+ *
+ * @param railSystem Rail system code.
+ * @param lineId Metro line id to ride.
+ * @param boardName Boarding station name (Zh_tw).
+ * @param boardCoords Boarding station coordinates.
+ * @param alightTarget Target coordinate the alighting station is chosen near.
+ * @param metroSeqCache Per-invocation cache of line sequences by rail system.
+ * @returns The leg, ride/wait minutes and alighting name/coords, or null on
+ *   failure.
  */
 async function buildMetroSegment(
   railSystem: string,
@@ -549,7 +541,6 @@ async function buildMetroSegment(
   const sol = stationOfLines.find((s) => s.LineID === bare);
   if (!sol) return null;
 
-  // Resolve coords for every station on the line via DB.
   const names = [...new Set(sol.Stations.map((s) => s.StationName.Zh_tw))];
   const docs = await MetroStationModel.find({
     railSystem,
@@ -563,7 +554,6 @@ async function buildMetroSegment(
   );
   if (boardSeqIdx === -1) return null;
 
-  // Alighting station = station forward of boarding nearest to alightTarget.
   let alightSeqIdx = -1;
   let bestDist = Infinity;
   for (let i = boardSeqIdx + 1; i < sol.Stations.length; i++) {
@@ -601,7 +591,6 @@ async function buildMetroSegment(
       OsmA11y.find(nearQuery(alightCoords, 200)).limit(5).lean<IOsmA11y[]>(),
     ]);
 
-  // Ride time: sum consecutive segments along the ordered sequence.
   let rideMinutes = 0;
   for (let i = 0; i < orderedSeq.length - 1; i++) {
     const fromUid = `${railSystem}-${orderedSeq[i].StationID}`;
@@ -611,7 +600,6 @@ async function buildMetroSegment(
   if (rideMinutes === 0) rideMinutes = Math.max(1, orderedSeq.length - 1) * 2;
 
   const waitMinutes = Math.round(avgHeadway / 2);
-  // Metro is headway-only (no timetable clock) — numeric expected wait.
   const waitInfo: WaitInfo = { time: waitMinutes, source: "schedule" };
 
   const facilityHighlights: string[] = [];
@@ -650,8 +638,6 @@ async function buildMetroSegment(
   return { leg, rideMinutes, waitMinutes, alightName: alightStationName, alightCoords };
 }
 
-// ─── Step 6: assemble a full transfer route from one combo ───────────────────
-
 async function assembleCombo(
   combo: TransferCombo,
   origin: { lat: number; lng: number },
@@ -661,7 +647,6 @@ async function assembleCombo(
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
 
-  // ── Leg 2: first transit leg (board origin stop → S_mid) ──
   let firstLeg: BusLeg | MetroLeg;
   let firstRideMin: number;
   let firstWaitMin: number;
@@ -690,9 +675,7 @@ async function assembleCombo(
       metroSeqCache
     );
     if (!seg) return null;
-    // Force the metro first-leg to alight at S_mid specifically.
     if (!equalStopName(seg.alightName, combo.midName)) {
-      // S_mid wasn't the chosen alighting station — rebuild not possible; skip.
       return null;
     }
     firstLeg = seg.leg;
@@ -701,7 +684,6 @@ async function assembleCombo(
     firstAlightCoords = seg.alightCoords;
   }
 
-  // ── Leg 4: last transit leg (board dest stop → alight near destination) ──
   let lastLeg: BusLeg | MetroLeg;
   let lastRideMin: number;
   let lastWaitMin: number;
@@ -709,13 +691,11 @@ async function assembleCombo(
   let lastAlightCoords: [number, number];
 
   if (combo.lastLeg.kind === "BUS") {
-    // Determine the alighting stop nearest destination on this route.
     const routes = await fetchTdxRoute(combo.lastLeg.routeId, combo.lastLeg.city);
     if (!routes.length) return null;
     const byDir: Record<number, BusRoute["Stops"]> = {};
     for (const r of routes) byDir[r.Direction] = r.Stops;
 
-    // Find direction where the board stop appears, then nearest-to-dest stop after it.
     let chosen: { name: string; coords: [number, number] } | null = null;
     let bestDist = Infinity;
     for (const dirStr of Object.keys(byDir)) {
@@ -769,7 +749,6 @@ async function assembleCombo(
     lastAlightCoords = seg.alightCoords;
   }
 
-  // ── Walks (Legs 1, 3, 5) + A11y facility lookups, parallel ──
   const [walk1, walk3, walk5, walk1A11y, walk3A11y, walk5A11y] = await Promise.all([
     orsWalkingRoute(originCoords, combo.firstLeg.boardCoords),
     orsWalkingRoute(combo.midCoords, combo.lastLeg.boardCoords),
@@ -779,7 +758,6 @@ async function assembleCombo(
     OsmA11y.find(nearQuery(lastAlightCoords, 150)).limit(5).lean<IOsmA11y[]>(),
   ]);
 
-  // exitInfo enrichment for TRTC metro endpoints.
   const [leg1Exit, leg3Exit] = await Promise.all([
     combo.firstLeg.kind === "METRO" && combo.firstLeg.railSystem === "TRTC"
       ? lookupTrtcExit("TRTC", combo.firstLeg.boardName, combo.firstLeg.boardCoords)
@@ -844,7 +822,6 @@ async function assembleCombo(
       ? (combo.destStop.doc as ITdxBusStop).stopUid
       : (combo.destStop.doc as ITdxMetroStation).stationUid;
 
-  // Highlights: collect from all legs, dedupe.
   const highlightSet = new Set<string>();
   for (const h of pointHighlights(walk1A11y, "上車站")) highlightSet.add(h);
   for (const h of pointHighlights(walk3A11y, "轉乘站")) highlightSet.add(h);
@@ -866,42 +843,34 @@ async function assembleCombo(
   };
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
 export async function findTransferRoutes(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
   city: TaiwanCityEn
 ): Promise<AccessibleRoute[]> {
-  void CITY_METRO_SYSTEMS; // city→metro mapping (metro stops carry railSystem directly)
+  void CITY_METRO_SYSTEMS;
   void BusStopModel;
 
-  // Step 1
   const [originStops, destStops] = await Promise.all([
     findReachableStops(origin, { maxWalkMin: MAX_WALK_MIN }),
     findReachableStops(destination, { maxWalkMin: MAX_WALK_MIN }),
   ]);
   if (!originStops.length || !destStops.length) return [];
 
-  // Per-invocation cache of metro line sequences, keyed by railSystem.
   const metroSeqCache = new Map<
     string,
     Awaited<ReturnType<typeof fetchMetroStationOfLine>>
   >();
 
-  // Steps 2 & 3
   const [boardables, serviceable] = await Promise.all([
     enumerateBoardableRoutes(originStops, metroSeqCache),
     Promise.resolve(enumerateServiceableRoutes(destStops, city)),
   ]);
   if (!boardables.length || !serviceable.routes.length) return [];
 
-  // Step 4
   const combos = findTransferCombos(boardables, serviceable.byName);
   if (!combos.length) return [];
 
-  // Step 5: resolve transfer walk-times in one ORS matrix call.
-  // Build a de-duplicated set of (S_mid → last-leg board) pairs.
   const pairKey = (a: [number, number], b: [number, number]) =>
     `${a[0]},${a[1]}|${b[0]},${b[1]}`;
   const uniquePairs = new Map<
@@ -914,7 +883,6 @@ export async function findTransferRoutes(
       to: c.lastLeg.boardCoords,
     });
   }
-  // ORS matrix is one-source-to-many; run one matrix call per unique S_mid origin.
   const byOrigin = new Map<string, [number, number][]>();
   const originOf = new Map<string, [number, number]>();
   for (const { from, to } of uniquePairs.values()) {
@@ -935,7 +903,6 @@ export async function findTransferRoutes(
     })
   );
 
-  // Map matrix results back; discard unreachable / too-long transfers.
   const survivors: TransferCombo[] = [];
   for (const c of combos) {
     const sec = walkSecByPair.get(pairKey(c.midCoords, c.lastLeg.boardCoords));
@@ -946,7 +913,6 @@ export async function findTransferRoutes(
   }
   if (!survivors.length) return [];
 
-  // Step 6: assemble (each combo wrapped so a failure yields null).
   const assembled = await Promise.all(
     survivors.map((c) =>
       assembleCombo(c, origin, destination, metroSeqCache).catch(() => null)
@@ -955,6 +921,5 @@ export async function findTransferRoutes(
   const valid = assembled.filter((r): r is AccessibleRoute => r !== null);
   if (!valid.length) return [];
 
-  // Step 7: score & return (caller merges + re-ranks with direct routes).
   return scoreAndRank(valid);
 }

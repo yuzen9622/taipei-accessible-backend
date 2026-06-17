@@ -53,7 +53,6 @@ const METRO_AGENCIES = new Set([
   "TRTCMG",
 ]);
 
-// ── Raw response shapes (only fields we consume) ──
 interface TdxPlace {
   name?: string;
   type?: string;
@@ -87,15 +86,12 @@ interface TdxRoute {
 
 export interface PlanTdxRouteOptions {
   departureTime?: Date;
-  /** 0=cheapest … 1=fastest (TDX `gc`). Default 1. */
   preferFastest?: number;
   top?: number;
-  /** TDX transit mode codes; default all public modes. */
   transitModes?: string;
 }
 
 function hhmm(iso: string): string {
-  // "2026-06-10T09:01:00" → "09:01"
   const m = iso.match(/T(\d{2}):(\d{2})/);
   return m ? `${m[1]}:${m[2]}` : "";
 }
@@ -105,7 +101,13 @@ function minutesBetween(a: string, b: string): number {
   return Math.max(1, Math.round((t(b) - t(a)) / 60000));
 }
 
-/** Wait minutes between arriving somewhere and a later departure (floor 0). */
+/**
+ * Wait minutes between arriving somewhere and a later departure (floored at 0).
+ *
+ * @param arriveIso ISO timestamp of arrival at the boarding point
+ * @param departIso ISO timestamp of the later departure
+ * @returns Whole minutes of wait, never below 0
+ */
 function waitMinutesBetween(arriveIso: string, departIso: string): number {
   const t = (s: string) => new Date(s).getTime();
   const diff = Math.round((t(departIso) - t(arriveIso)) / 60000);
@@ -116,7 +118,12 @@ function coord(p: TdxPlace): [number, number] {
   return [p.location.lng, p.location.lat];
 }
 
-/** A TDX "transfer wait" placeholder section (same stop, no real ride). */
+/**
+ * Whether a section is a TDX "transfer wait" placeholder (same stop, no real ride).
+ *
+ * @param s TDX route section
+ * @returns True when the section is a waiting placeholder
+ */
 function isWaitingSection(s: TdxSection): boolean {
   const name = (s.transport?.name ?? s.transport?.shortName ?? "").toUpperCase();
   if (name === "WAITING") return true;
@@ -124,7 +131,12 @@ function isWaitingSection(s: TdxSection): boolean {
   return len === 0 && s.departure.place.name === s.arrival.place.name;
 }
 
-/** A walking segment, even when TDX tags it type="transit" with a pedestrian mode. */
+/**
+ * Whether a section is a walking segment, even when TDX tags it type="transit" with a pedestrian mode.
+ *
+ * @param s TDX route section
+ * @returns True when the section is pedestrian travel
+ */
 function isPedestrianSection(s: TdxSection): boolean {
   if (s.type === "pedestrian") return true;
   const tag = `${s.transport?.mode ?? ""} ${s.transport?.category ?? ""} ${
@@ -133,7 +145,12 @@ function isPedestrianSection(s: TdxSection): boolean {
   return /PEDESTRIAN|WALK|FOOT/.test(tag);
 }
 
-/** Approximate a transit polyline from departure → intermediate stops → arrival. */
+/**
+ * Approximate a transit polyline from departure → intermediate stops → arrival.
+ *
+ * @param s TDX route section
+ * @returns Ordered [lng, lat] points along the section
+ */
 function sectionPolyline(s: TdxSection): [number, number][] {
   const pts: [number, number][] = [coord(s.departure.place)];
   for (const is of s.intermediateStops ?? []) {
@@ -143,7 +160,13 @@ function sectionPolyline(s: TdxSection): [number, number][] {
   return pts;
 }
 
-/** Build the transit leg variant for a transit section (a11y arrays filled later). */
+/**
+ * Build the transit leg variant for a transit section (a11y arrays filled later).
+ *
+ * @param s TDX transit section
+ * @param waitMinutes Estimated wait before this leg departs
+ * @returns The typed transit leg (bus, metro, THSR or TRA)
+ */
 function transitSectionToLeg(
   s: TdxSection,
   waitMinutes: number
@@ -170,9 +193,6 @@ function transitSectionToLeg(
   if (isThsr) {
     return {
       type: "THSR",
-      // headsign is the DESTINATION (e.g. "南港"), never a train number — when
-      // MaaS omits number, fall back to the line label like TRA; the real
-      // TrainNo is recovered later via recoverThsrTrainNos (OD timetable).
       trainNo: t.number || lineName,
       departureStation: fromName,
       arrivalStation: toName,
@@ -233,10 +253,6 @@ function transitSectionToLeg(
       facilityHighlights: [],
     };
   }
-  // default: bus
-  // agency_id carries the TDX system code as its leading segment
-  // ("NWT_1104_1102" → "NWT", intercity → "THB"); MaaS gives no stop ids,
-  // so this is the realtime overlay's only endpoint hint (Phase 15).
   const cityCode = agencyId.split("_")[0] || undefined;
   return {
     type: "BUS",
@@ -268,15 +284,19 @@ function pedestrianToWalkLeg(s: TdxSection): WalkLeg {
   };
 }
 
-/** TDX expects feed-local (Asia/Taipei) datetimes, not server-local. */
 const toIsoLocal = taipeiIsoLocal;
+
+const ymdDash = taipeiYmdDash;
 
 /**
  * Plan accessible routes via the TDX hosted routing engine, mapped into
  * AccessibleRoute objects and enriched with nearby OsmA11y facilities.
+ *
+ * @param origin Journey start as latitude/longitude
+ * @param destination Journey end as latitude/longitude
+ * @param opts Optional routing preferences (departure time, fastest/cheapest, mode filter, result count)
+ * @returns Accessible routes ranked by the TDX engine, possibly for the next service day
  */
-const ymdDash = taipeiYmdDash;
-
 export async function planTdxRoute(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
@@ -309,14 +329,10 @@ export async function planTdxRoute(
     const transitLegs: (BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
     const realTransitSections: TdxSection[] = [];
 
-    // Track when the rider reaches each boarding point so every transit leg
-    // gets a real wait (departure − arrival-at-stop). Waiting placeholder
-    // sections must NOT advance the clock — their span IS the wait.
     let atStopSince = r.start_time;
     for (const s of r.sections) {
-      if (isWaitingSection(s)) continue; // TDX transfer-wait placeholder, not a leg
+      if (isWaitingSection(s)) continue;
       if (isPedestrianSection(s)) {
-        // Skip zero-length pedestrian stubs (transfer connectors, no real walk).
         if ((s.travelSummary?.length ?? 0) > 0) legs.push(pedestrianToWalkLeg(s));
         atStopSince = s.arrival.time;
         continue;
@@ -332,7 +348,6 @@ export async function planTdxRoute(
     }
     if (!transitLegs.length) continue;
 
-    // Enrich each transit leg's board/alight with nearby OsmA11y facilities.
     await Promise.all(
       realTransitSections.map(async (s, idx) => {
         const leg = transitLegs[idx];
@@ -344,7 +359,6 @@ export async function planTdxRoute(
       })
     );
 
-    // Route-level highlights from first board + last alight transit stops.
     const firstTransit = realTransitSections[0];
     const lastTransit = realTransitSections[realTransitSections.length - 1];
     const [boardA11y, alightA11y] = await Promise.all([
@@ -379,9 +393,6 @@ export async function planTdxRoute(
   return out;
   };
 
-  // Try the caller's time (or now). If nothing comes back, retry at the next
-  // service-day morning (05:00). When `now` is before 05:00 that morning is
-  // still TODAY (not tomorrow) — so an overnight gap doesn't wrongly skip a day.
   const base = opts?.departureTime ?? new Date();
   const todayRoutes = await runOnce(opts?.departureTime, false);
   if (todayRoutes.length) return todayRoutes;

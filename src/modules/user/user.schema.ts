@@ -4,7 +4,6 @@ import { registry } from "../../openapi/registry";
 
 extendZodWithOpenApi(z);
 
-// Register Bearer security scheme once
 registry.registerComponent("securitySchemes", "BearerAuth", {
   type: "http",
   scheme: "bearer",
@@ -43,8 +42,6 @@ export const UpdateConfigBodySchema = z
   })
   .strict();
 
-// ── Domain entity schemas ───────────────────────────────────────────────────
-
 const UserSchema = z
   .object({
     _id: z.string().openapi({ example: "665f1a2b3c4d5e6f7a8b9c0d" }),
@@ -68,8 +65,6 @@ const ConfigSchema = z
   })
   .openapi("Config");
 
-// ── Generic API response envelope ───────────────────────────────────────────
-
 const apiResponse = <T extends z.ZodTypeAny>(data?: T) =>
   z.object({
     ok: z.boolean().openapi({ example: true }),
@@ -79,8 +74,6 @@ const apiResponse = <T extends z.ZodTypeAny>(data?: T) =>
     ...(data ? { data: data.optional() } : {}),
     accessToken: z.string().optional().openapi({ description: "短期有效的 JWT 存取權杖" }),
   });
-
-// ── Response schemas ────────────────────────────────────────────────────────
 
 export const LoginResponseSchema = apiResponse(
   z.object({
@@ -115,8 +108,6 @@ export const UpdateConfigResponseSchema = apiResponse(ConfigSchema).openapi("Upd
 export const LogoutResponseSchema = apiResponse().openapi("LogoutResponse");
 
 export const ErrorResponseSchema = apiResponse().openapi("ErrorResponse");
-
-// ── OpenAPI path registrations ──────────────────────────────────────────────
 
 registry.registerPath({
   method: "post",

@@ -98,7 +98,7 @@ export type BusRealtimeNearbyStop = {
     Zh_tw: string;
     En: string;
   };
-  Direction: 0 | 1; // 0 或 1
+  Direction: 0 | 1;
   StopUID: string;
   StopID: string;
   StopName: {
@@ -110,7 +110,7 @@ export type BusRealtimeNearbyStop = {
   DutyStatus: number;
   BusStatus: number;
   A2EventType: number;
-  GPSTime: string; // ISO 8601 日期字串
+  GPSTime: string;
   TripStartTimeType: number;
   TripStartTime: string;
   TransTime: string;
@@ -120,22 +120,18 @@ export type BusRealtimeNearbyStop = {
   UpdateTime: string;
 };
 
-// ─── Metro TDX response shapes ────────────────────────────────────────────────
-// Note: TDX Metro APIs use bare IDs (e.g. "G0") not prefixed UIDs ("TMRT-G0").
-// The import script and service construct full UIDs by prepending the railSystem.
-
 export type TdxMetroStation = {
-  StationUID: string;        // prefixed, e.g. "TMRT-G0"
-  StationID: string;         // bare, e.g. "G0"
+  StationUID: string;
+  StationID: string;
   StationName: { Zh_tw: string; En: string };
   StationPosition: { PositionLon: number; PositionLat: number };
 };
 
 export type TdxMetroStationOfLine = {
-  LineID: string;            // bare, e.g. "G" (no system prefix, no Direction field)
+  LineID: string;
   Stations: Array<{
     Sequence: number;
-    StationID: string;       // bare, e.g. "G0"
+    StationID: string;
     StationName: { Zh_tw: string; En: string };
     CumulativeDistance?: number;
   }>;
@@ -146,9 +142,9 @@ export type TdxMetroS2STravelTimeRecord = {
   RouteID?: string;
   TravelTimes: Array<{
     Sequence: number;
-    FromStationID: string;   // bare, e.g. "G0"
+    FromStationID: string;
     ToStationID: string;
-    RunTime: number;         // SECONDS
+    RunTime: number;
     StopTime: number;
   }>;
 };
@@ -157,7 +153,7 @@ export type TdxMetroFrequencyRecord = {
   LineID: string;
   RouteID?: string;
   Headways: Array<{
-    StartTime?: string;      // "HH:mm"
+    StartTime?: string;
     EndTime?: string;
     MinHeadwayMins: number;
     MaxHeadwayMins: number;
@@ -174,11 +170,9 @@ export type TdxMetroStationFacility = {
   }>;
 };
 
-// ─── THSR TDX response shapes ─────────────────────────────────────────────────
-
 export type TdxThsrStation = {
-  StationUID: string;        // e.g. "THSR-0990"
-  StationID: string;         // e.g. "0990"
+  StationUID: string;
+  StationID: string;
   StationName: { Zh_tw: string; En: string };
   StationAddress?: string;
   StationPosition: { PositionLon: number; PositionLat: number };
@@ -197,8 +191,8 @@ export type TdxThsrGeneralTimetableItem = {
       StopSequence: number;
       StationID: string;
       StationName: { Zh_tw: string; En: string };
-      ArrivalTime: string;    // "HH:mm"
-      DepartureTime: string;  // "HH:mm"
+      ArrivalTime: string;
+      DepartureTime: string;
     }>;
     ServiceDay?: {
       Sunday: boolean; Monday: boolean; Tuesday: boolean;
@@ -216,11 +210,9 @@ export type TdxThsrStationFacility = {
   }>;
 };
 
-// ─── TRA TDX response shapes ──────────────────────────────────────────────────
-
 export type TdxTraStation = {
-  StationUID: string;        // e.g. "TRA-1000"
-  StationID: string;         // e.g. "1000"
+  StationUID: string;
+  StationID: string;
   StationName: { Zh_tw: string; En: string };
   StationAddress?: string;
   StationPosition: { PositionLon: number; PositionLat: number };

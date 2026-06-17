@@ -1,10 +1,10 @@
 /**
- * 單例 Token 管理器：負責以 client_credentials 換取/快取/續期 TDX Access Token
+ * 單例 Token 管理器：負責以 client_credentials 換取、快取與續期 TDX Access Token。
  */
 class TdxTokenManager {
   private static _instance: TdxTokenManager;
   private accessToken: string | null = null;
-  private expiresAt = 0; // epoch ms
+  private expiresAt = 0;
   private refreshing: Promise<string> | null = null;
   private readonly tokenEndpoint =
     process.env.TDX_TOKEN_ENDPOINT ||
@@ -57,7 +57,7 @@ class TdxTokenManager {
       const json = (await res.json()) as {
         access_token: string;
         token_type: string;
-        expires_in: number; // seconds
+        expires_in: number;
       };
 
       const expiresInMs = Math.max(

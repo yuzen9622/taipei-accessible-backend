@@ -31,7 +31,6 @@ const gtfsStopSchema = new Schema<IGtfsStop>({
 });
 
 gtfsStopSchema.index({ stopId: 1 }, { unique: true });
-// 2dsphere only on boarding stops and entrances (locationType 0 or 2)
 gtfsStopSchema.index(
   { location: "2dsphere" },
   { partialFilterExpression: { locationType: { $in: [0, 2] } } }

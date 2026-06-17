@@ -2,11 +2,13 @@ import axios from "axios";
 
 const MAPS_KEY = () => process.env.GOOGLE_MAPS_API_KEY ?? "";
 
-// ─── Reverse Geocoding ────────────────────────────────────────────────────────
-
 /**
  * Returns the English-style administrative area name used by TDX
  * (e.g. "Taipei", "NewTaipei", "Taichung").
+ *
+ * @param lat Latitude
+ * @param lng Longitude
+ * @returns The TDX-style city name
  */
 export async function getCity(lat: number, lng: number): Promise<string> {
   const geocode = await fetch(
@@ -25,6 +27,10 @@ export async function getCity(lat: number, lng: number): Promise<string> {
 /**
  * Returns the Chinese city name used by STA air-quality API
  * (e.g. "臺北市", "臺中市").
+ *
+ * @param lat Latitude
+ * @param lng Longitude
+ * @returns The Chinese city name
  */
 export async function getCityZh(lat: number, lng: number): Promise<string> {
   const geocode = await fetch(
@@ -39,11 +45,14 @@ export async function getCityZh(lat: number, lng: number): Promise<string> {
   return city;
 }
 
-// ─── Places Text Search → Coordinates ────────────────────────────────────────
-
 /**
  * Resolves a free-text query to coordinates via Google Places Text Search.
  * Returns null when the query matches no places or the API key is missing.
+ *
+ * @param query Free-text place query
+ * @param latitude Optional bias latitude
+ * @param longitude Optional bias longitude
+ * @returns The matched coordinates, or null
  */
 export async function getCoordinates(
   query: string,
@@ -75,8 +84,6 @@ export async function getCoordinates(
   }
 }
 
-// ─── Places Text Search → Place List ─────────────────────────────────────────
-
 export interface GooglePlace {
   name: string;
   place_id: string;
@@ -88,6 +95,10 @@ export interface GooglePlace {
 /**
  * Searches for up to `maxResults` places matching the query, optionally biased
  * toward the given coordinates.
+ *
+ * @param query Free-text place query
+ * @param opts Optional bias coordinates and result limit
+ * @returns The matched places
  */
 export async function searchPlaces(
   query: string,

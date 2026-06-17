@@ -35,17 +35,20 @@ const WEEKDAY_INDEX: Record<string, number> = {
 
 export interface TaipeiParts {
   year: number;
-  /** 1–12 */
   month: number;
   day: number;
   hour: number;
   minute: number;
   second: number;
-  /** 0 = Sunday … 6 = Saturday (same convention as Date#getDay). */
   weekday: number;
 }
 
-/** Decompose an instant into Taipei wall-clock components. */
+/**
+ * Decompose an instant into Taipei wall-clock components.
+ *
+ * @param d The instant to decompose (defaults to now).
+ * @returns The Taipei wall-clock components of `d`.
+ */
 export function taipeiParts(d: Date = new Date()): TaipeiParts {
   const parts: Record<string, string> = {};
   for (const { type, value } of TPE_FMT.formatToParts(d)) parts[type] = value;
@@ -60,18 +63,33 @@ export function taipeiParts(d: Date = new Date()): TaipeiParts {
   };
 }
 
-/** 0 = Sunday … 6 = Saturday, in Taipei. */
+/**
+ * 0 = Sunday … 6 = Saturday, in Taipei.
+ *
+ * @param d The instant to evaluate (defaults to now).
+ * @returns The Taipei weekday index (0 = Sunday … 6 = Saturday).
+ */
 export function taipeiWeekday(d: Date = new Date()): number {
   return taipeiParts(d).weekday;
 }
 
-/** Minutes since Taipei midnight (0–1439). */
+/**
+ * Minutes since Taipei midnight (0–1439).
+ *
+ * @param d The instant to evaluate (defaults to now).
+ * @returns Minutes since Taipei midnight (0–1439).
+ */
 export function taipeiMinutesOfDay(d: Date = new Date()): number {
   const p = taipeiParts(d);
   return p.hour * 60 + p.minute;
 }
 
-/** Seconds since Taipei midnight (0–86399). */
+/**
+ * Seconds since Taipei midnight (0–86399).
+ *
+ * @param d The instant to evaluate (defaults to now).
+ * @returns Seconds since Taipei midnight (0–86399).
+ */
 export function taipeiSecondsOfDay(d: Date = new Date()): number {
   const p = taipeiParts(d);
   return p.hour * 3600 + p.minute * 60 + p.second;
@@ -79,25 +97,45 @@ export function taipeiSecondsOfDay(d: Date = new Date()): number {
 
 const p2 = (n: number) => String(n).padStart(2, "0");
 
-/** Taipei date as "YYYYMMDD" (GTFS calendar format). */
+/**
+ * Taipei date as "YYYYMMDD" (GTFS calendar format).
+ *
+ * @param d The instant to format (defaults to now).
+ * @returns The Taipei date as "YYYYMMDD".
+ */
 export function taipeiYmd(d: Date = new Date()): string {
   const p = taipeiParts(d);
   return `${p.year}${p2(p.month)}${p2(p.day)}`;
 }
 
-/** Taipei date as "YYYY-MM-DD". */
+/**
+ * Taipei date as "YYYY-MM-DD".
+ *
+ * @param d The instant to format (defaults to now).
+ * @returns The Taipei date as "YYYY-MM-DD".
+ */
 export function taipeiYmdDash(d: Date = new Date()): string {
   const p = taipeiParts(d);
   return `${p.year}-${p2(p.month)}-${p2(p.day)}`;
 }
 
-/** Taipei clock as "HH:mm". */
+/**
+ * Taipei clock as "HH:mm".
+ *
+ * @param d The instant to format (defaults to now).
+ * @returns The Taipei clock as "HH:mm".
+ */
 export function taipeiHHmm(d: Date = new Date()): string {
   const p = taipeiParts(d);
   return `${p2(p.hour)}:${p2(p.minute)}`;
 }
 
-/** Taipei datetime as "YYYY-MM-DDTHH:mm:ss" (TDX API query format). */
+/**
+ * Taipei datetime as "YYYY-MM-DDTHH:mm:ss" (TDX API query format).
+ *
+ * @param d The instant to format (defaults to now).
+ * @returns The Taipei datetime as "YYYY-MM-DDTHH:mm:ss".
+ */
 export function taipeiIsoLocal(d: Date = new Date()): string {
   const p = taipeiParts(d);
   return `${p.year}-${p2(p.month)}-${p2(p.day)}T${p2(p.hour)}:${p2(p.minute)}:${p2(p.second)}`;
@@ -106,6 +144,12 @@ export function taipeiIsoLocal(d: Date = new Date()): string {
 /**
  * The instant corresponding to the given Taipei wall-clock time on the same
  * Taipei calendar date as `d`. Exact because Asia/Taipei is fixed UTC+8.
+ *
+ * @param d The reference instant whose Taipei calendar date is used.
+ * @param hour The Taipei wall-clock hour.
+ * @param minute The Taipei wall-clock minute.
+ * @param second The Taipei wall-clock second.
+ * @returns The instant for that Taipei wall-clock time.
  */
 export function taipeiWallClock(
   d: Date,
@@ -117,7 +161,13 @@ export function taipeiWallClock(
   return new Date(Date.UTC(p.year, p.month - 1, p.day, hour - 8, minute, second));
 }
 
-/** The instant n×24h later — safe day arithmetic for a DST-free zone. */
+/**
+ * The instant n×24h later — safe day arithmetic for a DST-free zone.
+ *
+ * @param d The starting instant.
+ * @param n The number of days to add.
+ * @returns The instant n×24h later.
+ */
 export function addTaipeiDays(d: Date, n: number): Date {
   return new Date(d.getTime() + n * 86_400_000);
 }

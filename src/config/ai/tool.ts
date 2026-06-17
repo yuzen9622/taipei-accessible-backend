@@ -9,7 +9,6 @@ const findGooglePlacesDeclaration: FunctionDeclaration = {
     type: Type.OBJECT,
     properties: {
       query: {
-        // 參數名稱建議改為 query 或保持 keyword 但描述要變
         type: Type.STRING,
         description: "搜尋關鍵字，例如：'附近的咖啡廳' 或 '台中歌劇院'。",
       },
@@ -21,9 +20,8 @@ const findGooglePlacesDeclaration: FunctionDeclaration = {
         type: Type.NUMBER,
         description: "使用者當前經度 (選填，用於優化搜尋結果)",
       },
-      // 移除 radius
     },
-    required: ["query"], // 現在只需要 query 是必填
+    required: ["query"],
   },
 };
 const findA11yPlacesDeclaration: FunctionDeclaration = {
@@ -33,7 +31,6 @@ const findA11yPlacesDeclaration: FunctionDeclaration = {
   parameters: {
     type: Type.OBJECT,
     properties: {
-      // 🌟 新增這個參數：讓 AI 可以傳 "台北車站" 進來
       query: {
         type: Type.STRING,
         description: "地點名稱，例如：'台北車站'、'淡水捷運站'。",
@@ -42,9 +39,6 @@ const findA11yPlacesDeclaration: FunctionDeclaration = {
       longitude: { type: Type.NUMBER, description: "如果有經緯度則填入" },
       range: { type: Type.NUMBER, description: "搜尋範圍，預設200，單位公尺" },
     },
-    // 🌟 關鍵：不要強制要求 latitude/longitude，只要 query 或 lat/lng 其中之一即可
-    // 但在 function calling 定義中很難寫 OR 邏輯，所以我們通常把它們都設為 optional (不放在 required 裡)
-    // 或者只 require 'query' (如果不清楚經緯度，query 就填地點名)
     required: ["query"],
   },
 };
@@ -81,8 +75,6 @@ export {
   findA11yPlacesDeclaration,
   planRouteDeclaration,
 };
-
-// ─── OpenAI SDK ChatCompletionTool format (for Agent Chat) ────────────────────
 
 export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {

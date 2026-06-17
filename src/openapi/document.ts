@@ -1,7 +1,6 @@
 import { OpenApiGeneratorV3 } from "@asteasolutions/zod-to-openapi";
 import { registry } from "./registry";
 
-// Import schema files for side-effects — each file calls registry.registerPath()
 import "../modules/a11y/a11y.schema";
 import "../modules/accessible-route/accessible-route.schema";
 import "../modules/transit/transit.schema";

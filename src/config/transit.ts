@@ -23,7 +23,6 @@ export const busUrl = {
 
 export const trainUrl = {
   liveBoardUrl: "https://tdx.transportdata.tw/api/basic/v2/Rail/TRA/LiveBoard",
-  // v3: realtime position + delay of every currently-running TRA train.
   trainLiveBoardUrl:
     "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/TrainLiveBoard",
 };
@@ -50,10 +49,12 @@ export const CITY_METRO_SYSTEMS: Partial<Record<TaiwanCityEn, string[]>> = {
 /**
  * Bare metro line code the frontend uses to colour/label a line
  * (淡水信義線 "R" 紅, 板南線 "BL" 藍, 松山新店線 "G" 綠, 中和新蘆線 "O" 橘, 文湖線 "BR" 棕…).
- * Recovers the code from the two id shapes the routers emit:
- *   - OTP GTFS route id  "TRTC_BL_BL-1_0" → "BL"   (SYSTEM_LINE_LINE-VARIANT_DIRECTION)
- *   - TDX line uid       "TRTC-R" | "R"   → "R"
- * Returns the input unchanged when it matches neither shape.
+ * Recovers the code from the two id shapes the routers emit. Returns the input
+ * unchanged when it matches neither shape.
+ *
+ * @param railSystem The rail system prefix, e.g. "TRTC".
+ * @param raw The raw route id or line uid to extract the code from.
+ * @returns The bare metro line code, or the input unchanged.
  */
 export function metroLineCode(railSystem: string, raw: string): string {
   if (!raw) return "";
@@ -82,8 +83,6 @@ export const traUrl = {
   stationUrl: `${RAIL_BASE}/TRA/Station`,
   generalTimetableUrl: `${RAIL_BASE}/TRA/GeneralTimetable`,
   dailyTimetableUrl: `${RAIL_BASE}/TRA/DailyTrainTimetable/Today`,
-  // OD timetable: all trains from→to on a date — used to recover the TrainNo
-  // of MaaS-built TRA legs (station names + departure time, no train number).
   dailyTimetableOdUrl: (from: string, to: string, date: string) =>
     `${RAIL_BASE}/TRA/DailyTimetable/OD/${from}/to/${to}/${date}`,
   stationFacilityUrl: `${RAIL_BASE}/TRA/StationFacility`,

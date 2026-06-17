@@ -1,24 +1,30 @@
 /**
- * Phase 1 — walk-time cache (FR-04).
+ * Walk-time cache.
  *
  * Caches origin→destination walking time/distance under a stable geocoded key.
  * All Redis interaction goes through src/config/redis.ts, which degrades
  * gracefully when Redis is unavailable, so these helpers also never throw.
  *
- * Cache key format (FR-04, exact):
+ * Cache key format (exact):
  *   walk:{o_lng.toFixed(6)},{o_lat.toFixed(6)}:{d_lng.toFixed(6)},{d_lat.toFixed(6)}
  * TTL: 86400 seconds (24h).
  */
 import { redisGet, redisSet } from "../../../config/redis";
 
-const WALK_TTL_SEC = 86400; // 24h
+const WALK_TTL_SEC = 86400;
 
 export interface WalkCacheEntry {
   durationSec: number;
   distanceM: number;
 }
 
-/** Builds the FR-04 cache key. Coordinates are [lng, lat] (GeoJSON order). */
+/**
+ * Builds the cache key. Coordinates are [lng, lat] (GeoJSON order).
+ *
+ * @param origin The [lng, lat] origin coordinate.
+ * @param dest The [lng, lat] destination coordinate.
+ * @returns The cache key string.
+ */
 export function walkCacheKey(
   origin: [number, number],
   dest: [number, number],
@@ -29,7 +35,13 @@ export function walkCacheKey(
   );
 }
 
-/** Returns the cached entry, or null on miss / parse-error / unavailable. */
+/**
+ * Returns the cached entry, or null on miss / parse-error / unavailable.
+ *
+ * @param origin The [lng, lat] origin coordinate.
+ * @param dest The [lng, lat] destination coordinate.
+ * @returns The cached walk entry, or null.
+ */
 export async function getWalkCache(
   origin: [number, number],
   dest: [number, number],
@@ -50,7 +62,14 @@ export async function getWalkCache(
   }
 }
 
-/** Stores a walk-time entry. No-ops on unavailable / error. */
+/**
+ * Stores a walk-time entry. No-ops on unavailable / error.
+ *
+ * @param origin The [lng, lat] origin coordinate.
+ * @param dest The [lng, lat] destination coordinate.
+ * @param durationSec The walking duration in seconds.
+ * @param distanceM The walking distance in meters.
+ */
 export async function setWalkCache(
   origin: [number, number],
   dest: [number, number],

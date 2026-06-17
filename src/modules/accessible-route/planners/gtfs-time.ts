@@ -10,7 +10,12 @@
 
 const SECONDS_PER_DAY = 24 * 3600;
 
-/** "HH:MM:SS" (may exceed "24:00:00" for after-midnight trips) → seconds since service-day midnight. */
+/**
+ * Convert a GTFS time string to seconds since service-day midnight.
+ *
+ * @param t "HH:MM:SS" (may exceed "24:00:00" for after-midnight trips).
+ * @returns Seconds since service-day midnight, or NaN when unparseable.
+ */
 export function gtfsTimeToSeconds(t: string): number {
   const parts = t.split(":");
   if (parts.length < 2) return NaN;
@@ -21,7 +26,12 @@ export function gtfsTimeToSeconds(t: string): number {
   return h * 3600 + m * 60 + s;
 }
 
-/** Seconds since midnight → "HH:mm" (wraps past 24h for display). */
+/**
+ * Convert seconds since midnight to an "HH:mm" string (wraps past 24h for display).
+ *
+ * @param sec Seconds since midnight.
+ * @returns The "HH:mm" formatted time.
+ */
 export function secondsToHHmm(sec: number): string {
   const wrapped = ((sec % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY;
   const h = Math.floor(wrapped / 3600);

@@ -1,10 +1,8 @@
 export enum ResponseCode {
-  // 成功
   OK = 200,
   CREATED = 201,
   UPDATED = 204,
   DELETED = 205,
-  // 失敗
   INVALID_INPUT = 400,
   FORBIDDEN = 403,
   NOT_FOUND = 404,

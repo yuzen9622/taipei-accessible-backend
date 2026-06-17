@@ -10,6 +10,7 @@ import { sendResponse } from "./config/lib";
 import middleware from "./middleware/middleware";
 import { createA11yRouter } from "./modules/a11y";
 import { createAccessibleRouteRouter } from "./modules/accessible-route";
+import { createNavInstructionsRouter } from "./modules/nav-instructions";
 import { createTransitRouter } from "./modules/transit";
 import { createUserRouter } from "./modules/user";
 import { createAirRouter } from "./modules/air";
@@ -18,15 +19,12 @@ import { generateOpenAPIDocument } from "./openapi/document";
 
 const app: Express = express();
 
-// Security middleware
 app.use(
   helmet({
-    // Allow Scalar UI to load its CDN assets
     contentSecurityPolicy: false,
   }),
 );
 
-// CORS
 const corsOrigins = process.env.CORS_ORIGINS?.split(",")
   .map((o) => o.trim())
   .filter(Boolean) ?? ["http://localhost:3000"];
@@ -37,7 +35,6 @@ app.use(cookieParser());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Health check
 app.get("/health", (_req: Request, res: Response) => {
   res.status(ResponseCode.OK).json({
     status: "OK",
@@ -46,13 +43,11 @@ app.get("/health", (_req: Request, res: Response) => {
   });
 });
 
-// OpenAPI spec
 app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
   res.setHeader("Content-Type", "application/json");
   res.send(generateOpenAPIDocument());
 });
 
-// Scalar API docs UI
 app.use(
   "/docs",
   apiReference({
@@ -61,15 +56,14 @@ app.use(
   }),
 );
 
-// Routes
 app.use("/api/v1/user", middleware, createUserRouter());
 app.use("/api/v1/transit", createTransitRouter());
 app.use("/api/v1/a11y", createA11yRouter());
 app.use("/api/v1/a11y", createAccessibleRouteRouter());
+app.use("/api/v1/a11y", createNavInstructionsRouter());
 app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/ai", createAiRouter());
 
-// 404 handler
 app.use("*", (req: Request, res: Response<ApiResponse<null>>) => {
   sendResponse(
     res,

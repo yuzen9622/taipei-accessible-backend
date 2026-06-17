@@ -41,7 +41,6 @@ async function importCity(city: string): Promise<number> {
     return 0;
   }
 
-  // Aggregate: stopUid → { stop info, subRouteIds set }
   const stopMap = new Map<
     string,
     {
@@ -113,7 +112,6 @@ async function main() {
   await mongoose.connect(dbUrl);
   console.log("Connected to MongoDB\n");
 
-  // Allow --city=CityName argument to import a single city
   const cityArg = process.argv
     .find((a) => a.startsWith("--city="))
     ?.split("=")[1];

@@ -6,13 +6,10 @@ extendZodWithOpenApi(z);
 
 export const IntentBodySchema = z
   .object({
-    query: z
-      .string()
-      .min(1)
-      .openapi({
-        description: "自然語言的交通查詢",
-        example: "我要從台中火車站坐到高鐵新竹站，我坐輪椅",
-      }),
+    query: z.string().min(1).openapi({
+      description: "自然語言的交通查詢",
+      example: "我要從台中火車站坐到高鐵新竹站，我坐輪椅",
+    }),
   })
   .strict();
 
@@ -56,8 +53,6 @@ const IntentErrorSchema = z
     data: z.unknown().optional(),
   })
   .openapi("IntentErrorResponse");
-
-// ─── Phase 10 — /ai/explain ──────────────────────────────────────────────────
 
 export const ExplainBodySchema = z
   .object({
@@ -115,8 +110,7 @@ registry.registerPath({
   path: "/ai/explain",
   tags: ["AI"],
   summary: "路線說明生成",
-  description:
-    "為規劃路線生成可讀說明：摘要、無障礙重點、警告與備援建議。",
+  description: "為規劃路線生成可讀說明：摘要、無障礙重點、警告與備援建議。",
   request: {
     body: {
       content: { "application/json": { schema: ExplainBodySchema } },
@@ -135,8 +129,6 @@ registry.registerPath({
   },
 });
 
-// ─── Phase 17 — /ai/chat (Agent Streaming) ───────────────────────────────────
-
 export const ToolCallSchema = z
   .object({
     id: z.string(),
@@ -152,41 +144,50 @@ export const ChatMessageSchema = z
   .object({
     role: z.enum(["system", "user", "assistant", "tool"]),
     content: z.string().nullable().optional(),
-    name: z.string().optional().openapi({ description: "role 為 tool 時必填，對應工具名稱" }),
+    name: z
+      .string()
+      .optional()
+      .openapi({ description: "role 為 tool 時必填，對應工具名稱" }),
     tool_calls: z.array(ToolCallSchema).optional(),
-    tool_call_id: z.string().optional().openapi({ description: "role 為 tool 時必填" }),
+    tool_call_id: z
+      .string()
+      .optional()
+      .openapi({ description: "role 為 tool 時必填" }),
   })
   .openapi("ChatMessage");
 
 export const AgentChatRequestSchema = z
   .object({
-    model: z
-      .string()
-      .optional()
-      .openapi({
-        description: "模型名稱，未設定時使用環境變數 GEMINI_MODEL 或 gemini-2.5-flash",
-        example: "gemini-2.5-flash",
-      }),
     messages: z
       .array(ChatMessageSchema)
       .min(1)
       .openapi({
         description: "對話歷程，格式與 OpenAI Chat Completions API 一致",
-        example: [{ role: "user", content: "我坐輪椅，從台北車站到台北101怎麼去？" }],
+        example: [
+          { role: "user", content: "我坐輪椅，從台北車站到台北101怎麼去？" },
+        ],
       }),
     stream: z
       .boolean()
       .optional()
       .default(false)
       .openapi({ description: "是否啟用 SSE 串流回應", example: true }),
-    temperature: z.number().min(0).max(2).optional().default(0.2).openapi({ example: 0.2 }),
+    temperature: z
+      .number()
+      .min(0)
+      .max(2)
+      .optional()
+      .default(0.2)
+      .openapi({ example: 0.2 }),
     userLocation: z
       .object({
         latitude: z.number().openapi({ example: 25.0478 }),
         longitude: z.number().openapi({ example: 121.517 }),
       })
       .optional()
-      .openapi({ description: "使用者目前位置，供路線規劃與無障礙設施查詢使用" }),
+      .openapi({
+        description: "使用者目前位置，供路線規劃與無障礙設施查詢使用",
+      }),
   })
   .openapi("AgentChatRequest");
 

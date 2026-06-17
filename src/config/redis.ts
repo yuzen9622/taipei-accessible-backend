@@ -13,14 +13,9 @@ let redisClient: Redis | null = null;
 
 if (process.env.REDIS_URL) {
   redisClient = new Redis(process.env.REDIS_URL, {
-    // Defer the TCP handshake until first command — avoids crashing on startup
-    // if Redis is down.
     lazyConnect: true,
-    // Reject commands immediately when disconnected instead of queuing forever.
     enableOfflineQueue: false,
-    // Disable per-command retries to prevent request stalls.
     maxRetriesPerRequest: 0,
-    // Fail fast on the initial handshake instead of blocking for the 10s default.
     connectTimeout: 3000,
   });
 
@@ -31,7 +26,6 @@ if (process.env.REDIS_URL) {
     }
   });
 
-  // Fire-and-forget connect; failures surface via the "error" handler above.
   redisClient.connect().catch(() => {
     /* handled by "error" event */
   });
@@ -39,7 +33,12 @@ if (process.env.REDIS_URL) {
 
 export { redisClient };
 
-/** Returns the stored string, or null on miss / unavailable / error. */
+/**
+ * Returns the stored string, or null on miss / unavailable / error.
+ *
+ * @param key The cache key to look up.
+ * @returns The stored string, or null on miss / unavailable / error.
+ */
 export async function redisGet(key: string): Promise<string | null> {
   if (!redisClient) return null;
   try {
@@ -49,7 +48,13 @@ export async function redisGet(key: string): Promise<string | null> {
   }
 }
 
-/** Stores a string with a TTL in seconds. No-ops on unavailable / error. */
+/**
+ * Stores a string with a TTL in seconds. No-ops on unavailable / error.
+ *
+ * @param key The cache key to store under.
+ * @param value The string value to store.
+ * @param ttlSec Time-to-live in seconds.
+ */
 export async function redisSet(
   key: string,
   value: string,

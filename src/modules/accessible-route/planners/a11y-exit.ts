@@ -1,5 +1,5 @@
 /**
- * Phase 5 — FR-07: A11y station exit navigation.
+ * A11y station exit navigation.
  *
  * Resolves the nearest catalogued accessible exit (elevator / ramp) at a TRTC
  * metro station from the `Accessibility` collection, and builds an arrival
@@ -7,7 +7,7 @@
  *
  * Data coverage: the A11y exit dataset covers ONLY TRTC. The collection has no
  * explicit `type` or `exitNumber` field — both are parsed at runtime from the
- * "出入口電梯/無障礙坡道名稱" name string (see VERIFIED FACTS / SPEC §3c).
+ * "出入口電梯/無障礙坡道名稱" name string.
  *
  * All coordinates are [lng, lat] (GeoJSON order); no conversion is performed.
  */
@@ -18,17 +18,12 @@ import { orsWalkingRoute, haversineCoords } from "./ors";
 import type { WalkLeg } from "../../../types/route";
 import { getStationAccess } from "./indoor-graph";
 
-/** Raw lean()'d A11y document — the stored DB shape, before parsing. */
 type RawA11yDoc = IA11y;
 
-/** A parsed, derived accessible exit. */
 export interface A11yExit {
-  /** Full raw value of "出入口電梯/無障礙坡道名稱". */
   exitName: string;
-  /** Best-effort extracted exit identifier, or "" when not parseable. */
   exitNumber: string;
   type: "elevator" | "ramp";
-  /** [lng, lat] from location.coordinates. */
   coords: [number, number];
 }
 
@@ -38,10 +33,10 @@ function escapeRegExp(s: string): string {
 
 /**
  * Look up all catalogued accessible exits (elevator / ramp) for a station by
- * name prefix. `stationName` is the MetroStationModel Zh_tw value (no trailing
- * "站"); A11y name strings start with "{name}站".
+ * name prefix. Returns only exits whose type could be determined; never throws.
  *
- * Returns only exits whose type could be determined; never throws.
+ * @param stationName MetroStationModel Zh_tw value (no trailing "站"); A11y name strings start with "{name}站".
+ * @returns The catalogued accessible exits for the station.
  */
 export async function findAccessibleExits(
   stationName: string
@@ -62,7 +57,7 @@ export async function findAccessibleExits(
         : name.includes("坡道")
           ? "ramp"
           : null;
-      if (!type) continue; // skip docs that are neither elevator nor ramp
+      if (!type) continue;
 
       const m = name.match(/出口?\s*(\d+|電梯\d*|單一出口)/);
       const exitNumber = m ? m[1] : "";
@@ -83,6 +78,10 @@ export async function findAccessibleExits(
 /**
  * Pick the exit closest to `userCoords` by Haversine distance.
  * Precondition: `exits.length >= 1`.
+ *
+ * @param userCoords The user's [lng, lat] coordinates.
+ * @param exits Candidate accessible exits.
+ * @returns The exit nearest to the user.
  */
 export function selectNearestExit(
   userCoords: [number, number],
@@ -110,6 +109,11 @@ export function selectNearestExit(
  * Never throws: any error degrades to a station-centroid walk with
  * `exitInfo: null`. The OSM facility lookup is NOT this function's
  * responsibility — `a11yFacilities` is returned empty for the caller to merge.
+ *
+ * @param userCoords The user's [lng, lat] coordinates.
+ * @param station The destination station with name, coords, and railSystem.
+ * @param from Label for the walk origin.
+ * @returns The arrival WalkLeg into the station.
  */
 export async function buildExitWalkLeg(
   userCoords: [number, number],
@@ -117,10 +121,6 @@ export async function buildExitWalkLeg(
   from = "出發地"
 ): Promise<WalkLeg> {
   try {
-    // Phase 8 (spec §10.5): the GTFS pathways indoor graph is the primary,
-    // system-agnostic source. It covers every system with indoor data, so it is
-    // tried first regardless of operator. The TRTC-only A11y collection below
-    // remains as a fallback when the feed carries no pathways for the station.
     if (process.env.USE_INDOOR_GRAPH !== "false") {
       const access = await getStationAccess(
         { name: station.name, coords: station.coords },
@@ -168,7 +168,6 @@ export async function buildExitWalkLeg(
           },
         };
       }
-      // TRTC but no catalogued exit — degrade to station centroid.
       const walk = await orsWalkingRoute(userCoords, station.coords);
       return {
         type: "WALK",
@@ -182,7 +181,6 @@ export async function buildExitWalkLeg(
       };
     }
 
-    // Non-TRTC (TRA / THSR / bus / other) — no exit lookup.
     const walk = await orsWalkingRoute(userCoords, station.coords);
     return {
       type: "WALK",

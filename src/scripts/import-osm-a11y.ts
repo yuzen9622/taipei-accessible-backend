@@ -14,9 +14,8 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
 ];
-const DELAY_MS = 6000; // respect Overpass rate limits between queries
+const DELAY_MS = 6000;
 
-// Four focused queries — splitting avoids timeout and keeps result sets manageable
 const QUERIES: { label: string; query: string }[] = [
   {
     label: "wheelchair accessible places",
@@ -148,7 +147,6 @@ async function main() {
       };
     });
 
-    // Process in chunks of 500 to avoid large write payloads
     const CHUNK = 500;
     for (let i = 0; i < ops.length; i += CHUNK) {
       const result = await OsmA11y.bulkWrite(ops.slice(i, i + CHUNK), {

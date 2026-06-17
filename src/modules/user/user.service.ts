@@ -3,9 +3,11 @@ import Config from "../../model/config.model";
 import type { IUser, IConfig } from "../../types";
 
 /**
- * Look up a user by client_id, creating the user + a default config on first
- * login. Returns both documents. Mirrors the original login flow: an existing
- * user's stored config is returned as-is; a new user gets a fresh default config.
+ * Look up a user by client_id, creating the user and a default config on first
+ * login.
+ *
+ * @param input User details ({ name, email, avatar?, client_id }) from the OAuth provider.
+ * @returns The user document and its config (a fresh default for new users).
  */
 export async function findOrCreateUser(input: {
   name: string;

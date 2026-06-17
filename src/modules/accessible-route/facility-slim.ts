@@ -1,20 +1,14 @@
 /**
- * Phase 14 — response payload slimming for OSM a11y facilities.
+ * Response payload slimming for OSM a11y facilities.
  *
- * Problem: every leg's facility arrays embed the FULL OsmA11y document — up to
- * ~50 `tags` fields (addr:*, network:*, contact:*, multilingual names…), ~2KB
- * per facility, and the same facility repeats across adjacent transit/walk
- * legs. 3 routes × 100+ facilities → 200KB+ responses.
- *
- * Stage A (`slimRoutes`) — always on: project each facility down to the fields
- * the frontend and the re-scoring endpoints (/route-rank, /route-select)
- * actually consume. The tag whitelist is EXACTLY the keys read by
- * scoring.ts (this module) (so slimmed routes re-score identically) plus a
- * few display keys. Full documents stay available via GET /api/a11y/place.
- *
- * Stage B (`compactRoutes`) — opt-in via body `format: "compact"`: dedupe
- * facilities into a route-level `facilities` dictionary keyed by osmId; legs
- * keep empty arrays plus `a11yRefs` (osmId references).
+ * Every leg's facility arrays embed the FULL OsmA11y document — up to ~50
+ * `tags` fields, ~2KB per facility, and the same facility repeats across
+ * adjacent transit/walk legs. `slimRoutes` (always on) projects each facility
+ * down to the fields the frontend and re-scoring endpoints actually consume.
+ * `compactRoutes` (opt-in via body `format: "compact"`) dedupes facilities into
+ * a route-level `facilities` dictionary keyed by osmId, leaving each leg with an
+ * empty array plus `a11yRefs` (osmId references). Full documents stay available
+ * via GET /api/a11y/place.
  */
 
 import type { IOsmA11y } from "../../types";
@@ -28,52 +22,43 @@ import type {
   SlimA11y,
 } from "../../types/route";
 
-// SlimA11y now lives in the neutral types layer; re-exported here so existing
-// importers of this module continue to resolve it.
 export type { SlimA11y } from "../../types/route";
 
-/**
- * Tags that survive slimming.
- * Scoring keys: every key read by scoring.ts (ALL_TAG_WEIGHTS tiers 1–4
- * plus the numeric width/incline helpers) — keeps /route-rank & /route-select
- * re-scoring of slimmed payloads identical to first-pass scoring.
- * Display keys: name / opening_hours / level / amenity for frontend rendering.
- */
 const A11Y_TAG_WHITELIST = new Set<string>([
-  // Tier 1
   "wheelchair",
   "elevator",
   "highway",
   "ramp:wheelchair",
   "ramp",
   "kerb",
-  // Tier 2 + numeric helpers
   "smoothness",
   "surface",
   "width",
   "incline",
-  // Tier 3
   "toilets:wheelchair",
   "traffic_signals:sound",
   "traffic_signals:vibration",
   "tactile_paving",
   "crossing",
   "pedestrian arcade:wheelchair",
-  // Tier 4
   "shelter",
   "bench",
   "automatic_door",
   "door",
   "lit",
   "capacity:disabled",
-  // Display
   "name",
   "opening_hours",
   "level",
   "amenity",
 ]);
 
-/** Project one facility document down to the slim response shape. */
+/**
+ * Project one facility document down to the slim response shape.
+ *
+ * @param f Full OSM a11y facility document.
+ * @returns The slimmed facility (whitelisted tags only).
+ */
 export function slimFacility(f: IOsmA11y): SlimA11y {
   const slim: SlimA11y = {
     osmId: f.osmId,
@@ -95,10 +80,13 @@ export function slimFacility(f: IOsmA11y): SlimA11y {
 type AnyLeg = WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg;
 
 /**
- * The facility arrays a leg carries, by leg type. The leg interfaces type
- * them as IOsmA11y[]; after slimming they hold SlimA11y objects (a structural
- * subset — every SlimA11y field exists on IOsmA11y with the same type), so the
- * in-place replacement below casts once and stays contained to this module.
+ * The facility-array property names a leg carries, by leg type. The leg
+ * interfaces type them as IOsmA11y[]; after slimming they hold SlimA11y objects
+ * (a structural subset), so the in-place replacement casts once and stays
+ * contained to this module.
+ *
+ * @param leg Leg whose facility-array keys are needed.
+ * @returns The property names holding facility arrays for this leg type.
  */
 function facilityArrayKeys(leg: AnyLeg): string[] {
   switch (leg.type) {
@@ -111,7 +99,11 @@ function facilityArrayKeys(leg: AnyLeg): string[] {
   }
 }
 
-/** Stage A: replace every facility array's documents with slim projections. */
+/**
+ * Replace every facility array's documents with slim projections, in place.
+ *
+ * @param routes Routes whose leg facility arrays are slimmed.
+ */
 export function slimRoutes(routes: AccessibleRoute[]): void {
   for (const route of routes) {
     for (const leg of route.legs) {
@@ -120,14 +112,16 @@ export function slimRoutes(routes: AccessibleRoute[]): void {
         const arr = bag[key];
         if (Array.isArray(arr)) bag[key] = arr.map(slimFacility);
       }
+      if (leg.type === "BUS") delete bag.cityCode;
     }
   }
 }
 
 /**
- * Stage B: per route, move (already slim) facilities into a route-level
- * dictionary keyed by osmId; each leg keeps an empty array plus `a11yRefs`.
- * Run AFTER slimRoutes.
+ * Per route, move (already slim) facilities into a route-level dictionary keyed
+ * by osmId; each leg keeps an empty array plus `a11yRefs`. Run AFTER slimRoutes.
+ *
+ * @param routes Routes to compact in place.
  */
 export function compactRoutes(routes: AccessibleRoute[]): void {
   for (const route of routes) {

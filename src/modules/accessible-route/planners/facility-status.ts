@@ -1,5 +1,5 @@
 /**
- * Realtime metro facility status overlay (Functional Spec Phase 13).
+ * Realtime metro facility status overlay.
  *
  * After route planning has produced the final top-3, this service overlays
  * TDX data onto METRO legs:
@@ -31,11 +31,8 @@ const OUTAGE_RE = /維修|故障|暫停|停用/;
 const ALERT_CACHE_TTL_MS = 5 * 60 * 1000;
 const FACILITY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
-// ── TDX shapes (verified against the live v2 API) ────────────────────────────
-
-/** One station record of /Rail/Metro/StationFacility/{system}. */
 interface TdxStationFacilityItem {
-  StationID: string; // e.g. "BL01"
+  StationID: string;
   StationName?: { Zh_tw?: string };
   Elevators?: Array<{
     Description?: string;
@@ -45,7 +42,6 @@ interface TdxStationFacilityItem {
   Toilets?: Array<{ Description?: string; FloorLevel?: string }>;
 }
 
-/** /Rail/Metro/Alert/{system} wraps alerts in an envelope object. */
 interface TdxMetroAlertEnvelope {
   Alerts?: TdxMetroAlertItem[];
 }
@@ -57,8 +53,6 @@ interface TdxMetroAlertItem {
     Stations?: Array<{ StationID?: string; StationName?: { Zh_tw?: string } }>;
   };
 }
-
-// ── Caches (per rail system — one TDX call each) ─────────────────────────────
 
 type CacheEntry<T> = { data: T; expiresAt: number };
 const facilityCache = new Map<string, CacheEntry<Map<string, TdxStationFacilityItem>>>();
@@ -81,8 +75,6 @@ async function fetchFacilityIndex(
   if (hit) return hit;
   let index = new Map<string, TdxStationFacilityItem>();
   try {
-    // No $filter: the entity is keyed by StationID (filtering on StationUID
-    // 400s) and the whole list is small — one cached call per system.
     const resp = await tdxFetch(
       `${metroUrl.stationFacilityUrl(railSystem)}?$format=JSON`
     );
@@ -93,7 +85,6 @@ async function fetchFacilityIndex(
       }
     }
   } catch {
-    /* fail-soft: empty index */
   }
   facilityCache.set(railSystem, {
     data: index,
@@ -113,7 +104,6 @@ async function fetchMetroAlerts(railSystem: string): Promise<TdxMetroAlertItem[]
       alerts = Array.isArray(data) ? data : data?.Alerts ?? [];
     }
   } catch {
-    /* fail-soft: no alerts */
   }
   alertCache.set(railSystem, {
     data: alerts,
@@ -125,6 +115,9 @@ async function fetchMetroAlerts(railSystem: string): Promise<TdxMetroAlertItem[]
 /**
  * Bare TDX StationID from either UID convention:
  * GTFS-built legs carry "TRTC_O12", legacy TDX legs carry "TRTC-O12" → "O12".
+ *
+ * @param uid The station UID in either convention.
+ * @returns The bare StationID, or null when not parseable.
  */
 function toStationId(uid: string): string | null {
   if (!uid) return null;
@@ -134,13 +127,19 @@ function toStationId(uid: string): string | null {
   return id || null;
 }
 
-// ── Overlay logic ────────────────────────────────────────────────────────────
-
 function pushUnique(arr: string[], text: string): void {
   if (!arr.includes(text)) arr.push(text);
 }
 
-/** Positive-signal facility highlights + outage warnings for one station. */
+/**
+ * Positive-signal facility highlights + outage warnings for one station.
+ *
+ * @param leg The metro leg to annotate.
+ * @param route The route the leg belongs to.
+ * @param item The TDX facility record for the station, if any.
+ * @param prefix Whether this is the boarding or alighting station.
+ * @param stationName The station name for warning messages.
+ */
 function applyStationFacility(
   leg: MetroLeg,
   route: AccessibleRoute,
@@ -167,7 +166,13 @@ function applyStationFacility(
   }
 }
 
-/** Alert overlay: elevator-related service alerts touching this leg's stations. */
+/**
+ * Alert overlay: elevator-related service alerts touching this leg's stations.
+ *
+ * @param leg The metro leg to annotate.
+ * @param route The route the leg belongs to.
+ * @param alerts The service alerts to evaluate.
+ */
 function applyAlerts(
   leg: MetroLeg,
   route: AccessibleRoute,
@@ -175,11 +180,11 @@ function applyAlerts(
 ): void {
   for (const alert of alerts) {
     const text = `${alert.Title ?? ""} ${alert.Description ?? ""}`;
-    if (!/電梯|電扶梯/.test(text)) continue; // also skips "正常營運" heartbeats
+    if (!/電梯|電扶梯/.test(text)) continue;
 
     const stations = alert.Scope?.Stations ?? [];
     const touchesLeg =
-      !stations.length || // system-wide alert
+      !stations.length ||
       stations.some((s) => {
         const name = s.StationName?.Zh_tw ?? "";
         const byName =
@@ -208,8 +213,11 @@ function applyAlerts(
 
 /**
  * Overlay realtime TDX facility/alert status onto the final routes (top-3),
- * in place. METRO legs only — THSR/TRA facility status is out of Phase 13
- * scope. At most two TDX calls per rail system involved (both cached).
+ * in place. METRO legs only — THSR/TRA facility status is out of scope. At
+ * most two TDX calls per rail system involved (both cached).
+ *
+ * @param routes The final candidate routes to annotate in place.
+ * @param _mode The accessibility mode (unused).
  */
 export async function overlayFacilityStatus(
   routes: AccessibleRoute[],
@@ -225,7 +233,6 @@ export async function overlayFacilityStatus(
   }
   if (!metroLegs.length) return;
 
-  // One facility index + one alert list per rail system involved.
   const systems = [...new Set(metroLegs.map(({ leg }) => leg.railSystem))];
   const bySystem = new Map<
     string,

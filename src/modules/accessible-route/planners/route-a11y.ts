@@ -9,7 +9,7 @@
  *   - nearbyA11y       : OSM accessibility facilities around a stop coordinate
  *   - deriveHighlights : route-level a11y highlight strings from board/alight sets
  *   - attachA11yToLeg  : attach board/alight a11y arrays to a transit leg
- *   - enrichLegIndoor  : Indoor Graph (Phase 8) step-free exit/elevator guidance
+ *   - enrichLegIndoor  : Indoor Graph step-free exit/elevator guidance
  *
  * Leg/route types are imported as TYPES only so this service has no runtime
  * dependency on the accessible-route module.
@@ -29,7 +29,12 @@ import type {
 const A11Y_RADIUS_M = 200;
 const A11Y_LIMIT = 5;
 
-/** Nearby OSM accessibility facilities around a stop coordinate. */
+/**
+ * Nearby OSM accessibility facilities around a stop coordinate.
+ *
+ * @param coords The stop's [lng, lat] coordinates.
+ * @returns The nearby OSM accessibility facilities.
+ */
 export async function nearbyA11y(coords: [number, number]): Promise<IOsmA11y[]> {
   return OsmA11y.find({
     location: {
@@ -43,7 +48,13 @@ export async function nearbyA11y(coords: [number, number]): Promise<IOsmA11y[]> 
     .lean() as Promise<IOsmA11y[]>;
 }
 
-/** Derive route-level accessibility highlights (same rules as the TDX path). */
+/**
+ * Derive route-level accessibility highlights (same rules as the TDX path).
+ *
+ * @param boardA11y Accessibility facilities at the boarding stop.
+ * @param alightA11y Accessibility facilities at the alighting stop.
+ * @returns The derived highlight strings.
+ */
 export function deriveHighlights(
   boardA11y: IOsmA11y[],
   alightA11y: IOsmA11y[]
@@ -80,7 +91,13 @@ export function deriveHighlights(
   return h;
 }
 
-/** Attach board/alight a11y arrays to a transit leg (field name varies by type). */
+/**
+ * Attach board/alight a11y arrays to a transit leg (field name varies by type).
+ *
+ * @param leg The transit leg to annotate.
+ * @param boardA11y Accessibility facilities at the boarding stop.
+ * @param alightA11y Accessibility facilities at the alighting stop.
+ */
 export function attachA11yToLeg(
   leg: BusLeg | MetroLeg | ThsrLeg | TraLeg,
   boardA11y: IOsmA11y[],
@@ -95,13 +112,6 @@ export function attachA11yToLeg(
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Indoor Graph enrichment (Phase 8) — step-free exit/elevator guidance per
-// rail station, derived from GTFS pathways. System-agnostic: works for any
-// station with indoor data (TRTC/NTMC/KLRT/TMRT/KRTC/TYMC/THSR/TRA).
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Rail leg types that carry station-level indoor data worth enriching. */
 type RailLeg = MetroLeg | ThsrLeg | TraLeg;
 
 /**
@@ -113,6 +123,15 @@ type RailLeg = MetroLeg | ThsrLeg | TraLeg;
  *
  * Best-effort and non-throwing: stations without indoor data are left untouched.
  * Gated by env so the extra DB work can be disabled (USE_INDOOR_GRAPH=false).
+ *
+ * @param leg The rail leg to enrich.
+ * @param walkIn The walk leg into the boarding station, or null.
+ * @param walkOut The walk leg out of the alighting station, or null.
+ * @param originCoords The user's [lng, lat] origin.
+ * @param destCoords The user's [lng, lat] destination.
+ * @param boardCoords The boarding station's [lng, lat] coordinates.
+ * @param alightCoords The alighting station's [lng, lat] coordinates.
+ * @param mode The accessibility mode for traversal constraints.
  */
 export async function enrichLegIndoor(
   leg: RailLeg,
@@ -138,8 +157,6 @@ export async function enrichLegIndoor(
     (a.usesElevator ? "elevator" : "ramp") as "elevator" | "ramp";
 
   if (board?.entrance) {
-    // Only advertise a specific exit when it is a PROVEN step-free entrance —
-    // otherwise the nearest entrance may be stairs-only, which would mislead.
     if (walkIn && board.stepFree) {
       walkIn.exitInfo = {
         exitName: board.entrance.name,
