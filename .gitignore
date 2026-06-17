@@ -126,3 +126,6 @@ otp-data/*
 
 
 /reports
+# Python bytecode cache (build scripts)
+__pycache__/
+*.pyc
