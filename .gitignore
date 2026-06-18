@@ -129,3 +129,6 @@ otp-data/*
 # Python bytecode cache (build scripts)
 __pycache__/
 *.pyc
+
+
+.obsidian

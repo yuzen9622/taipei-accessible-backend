@@ -19,11 +19,13 @@
 #   OTP_JAVA_XMX     build heap (default 12g — national feed + full Taiwan OSM;
 #                    a single-city clip builds fine with 8g)
 #   OTP_METRO_SYSTEMS  space-separated TDX metro systems to gap-fill (default
-#                    "TRTC NTMC TMRT TYMC TRTCMG" — the feed's 0-trips systems
-#                    that the TDX Metro API accepts. 淡海/安坑輕軌 (feed prefix
-#                    NTDLRT/NTALRT) are NOT valid Metro RailSystem codes and
-#                    stay 0-trips until their real codes are known. See
-#                    inject-metro-gtfs.py.
+#                    "TRTC NTMC TMRT TYMC" — the feed's 0-trips systems that the
+#                    TDX Metro S2STravelTime API actually serves). Deliberately
+#                    dropped — no usable TDX data, so they stay 0-trips and the
+#                    MaaS planner covers the leg: 貓空纜車 (TRTCMG — has no
+#                    S2STravelTime/Frequency, only static endpoints) and 淡海/安坑
+#                    輕軌 (feed prefix NTDLRT/NTALRT are not valid Metro RailSystem
+#                    codes). See inject-metro-gtfs.py.
 #
 # Suggested cron (spec §9):  0 4 * * 0  /path/to/build-otp-graph.sh
 set -euo pipefail
@@ -87,17 +89,19 @@ fi
 
 # ── 1c. Metro/LRT frequency injection — same gap as TRA, one tier down: the
 # national feed defines these lines' routes + stops but ships ZERO trips for
-# 文湖線(TRTC BR)、環狀線(NTMC Y)、台中綠線(TMRT G)、機捷一方向、淡海/安坑輕軌、
-# 貓空纜車, so OTP can't board them and the leg falls back to the MaaS planner
-# (which returns bus). TDX has no per-train metro timetable — it runs on
-# headways — so the schedule is synthesised from S2STravelTime (ride pattern)
-# + Frequency (headway) into a frequency-based GTFS, injected into feed-1.
-# Calls are spaced (TDX 429s on bursts); each is fail-soft and the injector
-# skips any line whose TDX data is absent — a build missing some metro lines
-# beats no build at all.
+# 文湖線(TRTC BR)、環狀線(NTMC Y)、台中綠線(TMRT G)、機捷一方向, so OTP can't
+# board them and the leg falls back to the MaaS planner (which returns bus).
+# TDX has no per-train metro timetable — it runs on headways — so the schedule
+# is synthesised from S2STravelTime (ride pattern) + Frequency (headway) into a
+# frequency-based GTFS, injected into feed-1. 淡海/安坑輕軌、貓空纜車 are NOT
+# gap-filled by design: TDX serves no S2STravelTime for them (the gondola has
+# none; the LRTs aren't valid Metro RailSystem codes), so they stay 0-trips on
+# the MaaS fallback — the injector still lists them under "skipped". Calls are
+# spaced (TDX 429s on bursts); each is fail-soft and the injector skips any line
+# whose TDX data is absent — a build missing some metro lines beats no build.
 METRO_DIR="$WORK_DIR/metro"
 mkdir -p "$METRO_DIR"
-METRO_SYSTEMS="${OTP_METRO_SYSTEMS:-TRTC NTMC TMRT TYMC TRTCMG}"
+METRO_SYSTEMS="${OTP_METRO_SYSTEMS:-TRTC NTMC TMRT TYMC}"
 METRO_BASE="https://tdx.transportdata.tw/api/basic/v2/Rail/Metro"
 log "fetching metro S2STravelTime + Frequency: $METRO_SYSTEMS"
 for sys in $METRO_SYSTEMS; do
@@ -122,12 +126,14 @@ python3 "$SCRIPT_DIR/inject-metro-gtfs.py" \
 # Metro StationFacility API lists each station's Elevators; this sets
 # wheelchair_boarding=1 on stations that have one, so OTP's wheelchair routing
 # prefers them. See inject-station-wheelchair.py for the (top-level Elevators list,
-# StationID-keyed) response shape. Coverage: KRTC/TYMC/TMRT/NTMC/KLRT carry data;
-# TRTC returns 0 (known gap → OSM backfill later); TRA/THSR StationFacility 404 (no
-# such API) so rail stations aren't covered here. FACILITY_SYSTEMS is its own list
-# (NOT OTP_METRO_SYSTEMS, which is only the 0-trips gap-fill set and omits KRTC).
+# StationID-keyed) response shape. Coverage: KRTC/TYMC/TMRT/NTMC carry data;
+# TRTC returns 0 (known gap → OSM backfill later); 高雄輕軌 (KLRT) has NO
+# StationFacility (400 — not in that endpoint's RailSystem enum) so it's dropped
+# and left to OSM backfill; TRA/THSR StationFacility 404 (no such API) so rail
+# stations aren't covered here. FACILITY_SYSTEMS is its own list (NOT
+# OTP_METRO_SYSTEMS, which is only the 0-trips gap-fill set and omits KRTC).
 # Fail-soft: a build without these flags (today's behaviour) beats no build at all.
-FACILITY_SYSTEMS="${OTP_FACILITY_SYSTEMS:-TRTC KRTC TYMC TMRT NTMC KLRT}"
+FACILITY_SYSTEMS="${OTP_FACILITY_SYSTEMS:-TRTC KRTC TYMC TMRT NTMC}"
 FACILITY_DIR="$WORK_DIR/facility"
 mkdir -p "$FACILITY_DIR"
 log "fetching Metro StationFacility (wheelchair): $FACILITY_SYSTEMS"

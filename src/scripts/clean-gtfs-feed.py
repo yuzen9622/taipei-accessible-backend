@@ -7,7 +7,12 @@ worse — builds a graph that crashes on load (self-loop pathways):
 
   1. trips.txt        duplicate trip_id rows (keep first)
   2. trips.txt        route_id references to nonexistent routes (drop, ferry strays)
-  3. stop_times.txt   rows of trips dropped in (2); "HH:MM" times -> "HH:MM:SS"
+  3. stop_times.txt   rows of trips dropped in (2); "HH:MM" times -> "HH:MM:SS";
+                      rows whose stop_id is blank/absent from stops.txt (these
+                      resolve to a null stop and NPE OTP's StopTimeMapper), then
+                      trips left with < 2 valid stops (OTP rejects 0/1-stop trips)
+  3b.frequencies.txt  rows whose trip_id was dropped in (2)/(3) — an orphan
+                      frequency reference aborts OTP's entire GTFS load
   4. levels.txt       duplicate level_id rows (keep first)
   5. stops.txt        level_id references to nonexistent levels (blank out)
   6. pathways.txt     endpoints referencing nonexistent stops (drop),
@@ -21,6 +26,7 @@ worse — builds a graph that crashes on load (self-loop pathways):
 
 Usage: clean-gtfs-feed.py <feed.zip>   (rewrites the zip in place)
 """
+from collections import Counter
 import csv
 import io
 import re
@@ -49,7 +55,7 @@ def main(zip_path: str) -> None:
         names = set(zf.namelist())
         tables = {}
         for name in ("trips.txt", "stop_times.txt", "levels.txt", "stops.txt",
-                     "pathways.txt", "routes.txt"):
+                     "pathways.txt", "routes.txt", "frequencies.txt"):
             if name in names:
                 tables[name] = read_rows(zf, name)
 
@@ -69,11 +75,19 @@ def main(zip_path: str) -> None:
             clean_trips.append(r)
         log(f"trips: kept={len(clean_trips)} dropped={len(trips) - len(clean_trips)}")
 
-        # 3. stop_times: drop orphans, normalize HH:MM
+        # 3. stop_times: drop orphans + dangling stop refs, normalize HH:MM.
+        #    A stop_time whose stop_id is blank or absent from stops.txt
+        #    resolves to a null StopLocation and NPEs OTP's StopTimeMapper
+        #    ("contains stop_time with no stop, location or group"); the TDX
+        #    feed ships these on some city-bus trips (e.g. TNN_16303_*).
+        stop_ids = col_ids(stops, "stop_id")
         st_fields, stop_times = tables["stop_times.txt"]
-        clean_st, fixed_times = [], 0
+        clean_st, fixed_times, dangling = [], 0, 0
         for r in stop_times:
             if r["trip_id"] in orphan_trips:
+                continue
+            if r.get("stop_id", "") not in stop_ids:
+                dangling += 1
                 continue
             for col in ("arrival_time", "departure_time"):
                 v = r.get(col, "")
@@ -81,7 +95,27 @@ def main(zip_path: str) -> None:
                     r[col] = v + ":00"
                     fixed_times += 1
             clean_st.append(r)
-        log(f"stop_times: kept={len(clean_st)} time_fixed={fixed_times}")
+        log(f"stop_times: kept={len(clean_st)} time_fixed={fixed_times} dangling_stop={dangling}")
+
+        # 3b. drop trips left with < 2 valid stops — OTP rejects 0/1-stop trips
+        st_counts = Counter(r["trip_id"] for r in clean_st)
+        short_trips = {t["trip_id"] for t in clean_trips if st_counts[t["trip_id"]] < 2}
+        if short_trips:
+            clean_trips = [t for t in clean_trips if t["trip_id"] not in short_trips]
+            clean_st = [r for r in clean_st if r["trip_id"] not in short_trips]
+            log(f"trips: dropped {len(short_trips)} trips left with < 2 valid stops")
+
+        # 3c. frequencies: drop rows for trips dropped in (2)/(3b). A frequency
+        #     row whose trip_id no longer exists raises onebusaway's
+        #     EntityReferenceNotFoundException and aborts OTP's whole GTFS load.
+        #     The TDX feed ships single-stop "_F_" frequency trips (e.g.
+        #     THB180202_45_1_F_*) that 3b drops, orphaning their frequency rows.
+        clean_freq, freq_fields = [], None
+        if "frequencies.txt" in tables:
+            freq_fields, freqs = tables["frequencies.txt"]
+            kept_trips = {t["trip_id"] for t in clean_trips}
+            clean_freq = [r for r in freqs if r.get("trip_id", "") in kept_trips]
+            log(f"frequencies: kept={len(clean_freq)} dropped={len(freqs) - len(clean_freq)}")
 
         # 4. levels: dedupe
         clean_levels, levels_fields = [], None
@@ -135,6 +169,8 @@ def main(zip_path: str) -> None:
             cleaned["levels.txt"] = (levels_fields, clean_levels)
         if pathways_fields:
             cleaned["pathways.txt"] = (pathways_fields, clean_pathways)
+        if freq_fields:
+            cleaned["frequencies.txt"] = (freq_fields, clean_freq)
 
         dropped_files = [n for n in zf.namelist() if n.startswith("fare_")]
         if dropped_files:
