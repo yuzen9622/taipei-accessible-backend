@@ -1,5 +1,6 @@
 {
   "routingDefaults": {
+    "walkReluctance": 3.0,
     "wheelchairAccessibility": {
       "trip": {
         "onlyConsiderAccessible": false,
