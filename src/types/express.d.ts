@@ -1,4 +1,5 @@
 import { Express } from "express";
+import type { IUser } from "./index";
 declare global {
   namespace Express {
     interface Request {
@@ -7,7 +8,7 @@ declare global {
         query?: unknown;
         params?: unknown;
       };
-      auth?: { sessionId: string };
+      auth?: { userId: string; user: IUser };
     }
   }
 }

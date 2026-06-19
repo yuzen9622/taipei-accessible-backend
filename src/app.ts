@@ -15,6 +15,7 @@ import { createTransitRouter } from "./modules/transit";
 import { createUserRouter } from "./modules/user";
 import { createAirRouter } from "./modules/air";
 import { createAiRouter } from "./modules/ai";
+import { createHazardReportRouter } from "./modules/hazard-report";
 import { generateOpenAPIDocument } from "./openapi/document";
 
 const app: Express = express();
@@ -61,6 +62,7 @@ app.use("/api/v1/transit", createTransitRouter());
 app.use("/api/v1/a11y", createA11yRouter());
 app.use("/api/v1/a11y", createAccessibleRouteRouter());
 app.use("/api/v1/a11y", createNavInstructionsRouter());
+app.use("/api/v1/a11y", createHazardReportRouter());
 app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/ai", createAiRouter());
 

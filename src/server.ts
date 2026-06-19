@@ -1,5 +1,6 @@
 import app from "./app";
 import mongoose from "mongoose";
+import { startHazardExpiryJob } from "./modules/hazard-report/hazard-report.expire";
 const PORT = process.env.PORT || 3000;
 
 const server = app.listen(PORT, () => {
@@ -13,6 +14,7 @@ mongoose
   .connect(uri)
   .then(() => {
     console.log("Connected to MongoDB");
+    startHazardExpiryJob();
   })
   .catch((err) => {
     console.error("Error connecting to MongoDB:", err);

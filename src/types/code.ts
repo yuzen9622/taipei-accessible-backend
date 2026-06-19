@@ -7,6 +7,8 @@ export enum ResponseCode {
   FORBIDDEN = 403,
   NOT_FOUND = 404,
   UNAUTHORIZED = 401,
+  GONE = 410,
+  TOO_MANY_REQUESTS = 429,
   INTERNAL_ERROR = 500,
 }
 
@@ -19,5 +21,7 @@ export const ResponseMessage: Record<keyof typeof ResponseCode, string> = {
   FORBIDDEN: "Forbidden",
   NOT_FOUND: "Not found",
   UNAUTHORIZED: "Unauthorized",
+  GONE: "Gone",
+  TOO_MANY_REQUESTS: "Too many requests",
   INTERNAL_ERROR: "Internal server error",
 };
