@@ -9,8 +9,21 @@
  */
 
 import type { IOsmA11y } from "../../types";
+import type { AccessibilityMode } from "../../types/route";
+import type {
+  TagWeightMap,
+  ScoreLabel,
+  ModeProfile,
+  DataConfidence,
+  RouteAccessibilityScore,
+} from "./accessible-route.types";
 
-type TagWeightMap = Record<string, Record<string, number>>;
+export type {
+  ScoreLabel,
+  ModeProfile,
+  DataConfidence,
+  RouteAccessibilityScore,
+};
 
 const TIER1_WEIGHTS: TagWeightMap = {
   wheelchair: {
@@ -277,36 +290,12 @@ export function scoreFacilitySet(nodes: IOsmA11y[]): number {
   return Math.min(score, 100);
 }
 
-export type ScoreLabel = "excellent" | "good" | "fair" | "poor" | "critical";
-
 export function scoreLabel(score: number): ScoreLabel {
   if (score >= 80) return "excellent";
   if (score >= 60) return "good";
   if (score >= 40) return "fair";
   if (score >= 20) return "poor";
   return "critical";
-}
-
-export type AccessibilityMode =
-  | "wheelchair"
-  | "elderly"
-  | "visual_impaired"
-  | "normal";
-
-export interface ModeProfile {
-  a11yWeight: number;
-  timeWeight: number;
-  transferPenaltyMultiplier: number;
-  tier1Required: boolean;
-  criticalWeights: {
-    elevator: number;
-    flushKerb: number;
-    ramp: number;
-    wheelchairYes: number;
-    accessibleToilet: number;
-    audioSignal: number;
-    tactilePaving: number;
-  };
 }
 
 export const MODE_PROFILES: Record<AccessibilityMode, ModeProfile> = {
@@ -431,8 +420,6 @@ export function walkSpeedMps(mode: AccessibilityMode = "wheelchair"): number {
   return WALK_SPEED_MPS[mode] ?? WALK_SPEED_MPS.wheelchair;
 }
 
-export type DataConfidence = "high" | "medium" | "low";
-
 /**
  * Map an accessibility-data coverage ratio (fraction of legs carrying any a11y
  * evidence) to a confidence label. Kept separate from the score so missing data
@@ -499,19 +486,6 @@ export function prerankCost(
     transferCount * 5 * profile.transferPenaltyMultiplier +
     walkPenaltyScore(walkDistanceM, mode)
   );
-}
-
-export interface RouteAccessibilityScore {
-  totalScore: number;
-  label: ScoreLabel;
-  dataConfidence: DataConfidence;
-  warnings: string[];
-  components: {
-    facilityScore: number;
-    timeScore: number;
-    criticalFeatureScore: number;
-    walkPenalty: number;
-  };
 }
 
 /**

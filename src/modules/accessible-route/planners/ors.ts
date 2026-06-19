@@ -7,20 +7,21 @@
  */
 
 import { getWalkCache, setWalkCache } from "./walk-cache";
-import { walkSpeedMps, type AccessibilityMode } from "../scoring";
+import { walkSpeedMps } from "../scoring";
+import { WHEELCHAIR_SPEED_M_PER_MIN } from "../../../constants/accessibility";
+import type { AccessibilityMode } from "../../../types/route";
+import type {
+  WalkingRoute,
+} from "./ors.types";
+export type {
+  WalkingRoute,
+};
 
 const ORS_BASE = "https://api.openrouteservice.org/v2";
-export const WHEELCHAIR_SPEED_M_PER_MIN = 60;
 
 /** Walk duration (seconds) for a distance at the mode's walking speed. */
 function durationForMode(distanceM: number, mode: AccessibilityMode): number {
   return distanceM / walkSpeedMps(mode);
-}
-
-export interface WalkingRoute {
-  polyline: [number, number][];
-  distanceM: number;
-  durationSec: number;
 }
 
 export function haversineCoords(a: [number, number], b: [number, number]): number {

@@ -9,6 +9,12 @@
 
 import type { IOsmA11y } from "./index";
 
+export type AccessibilityMode =
+  | "wheelchair"
+  | "elderly"
+  | "visual_impaired"
+  | "normal";
+
 export interface SlimA11y {
   osmId: string;
   category: IOsmA11y["category"];

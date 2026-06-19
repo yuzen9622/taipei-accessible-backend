@@ -39,6 +39,15 @@ import type {
   ThsrLeg,
   TraLeg,
 } from "../../../types/route";
+import type {
+  TdxPlace,
+  TdxSection,
+  TdxRoute,
+  PlanTdxRouteOptions,
+} from "./tdx-routing.types";
+export type {
+  PlanTdxRouteOptions,
+};
 
 const ROUTING_URL = "https://tdx.transportdata.tw/api/maas/routing";
 const METRO_AGENCIES = new Set([
@@ -52,44 +61,6 @@ const METRO_AGENCIES = new Set([
   "NTALRT",
   "TRTCMG",
 ]);
-
-interface TdxPlace {
-  name?: string;
-  type?: string;
-  location: { lat: number; lng: number };
-}
-interface TdxSection {
-  type: "pedestrian" | "transit";
-  travelSummary?: { duration: number; length: number };
-  departure: { time: string; place: TdxPlace };
-  arrival: { time: string; place: TdxPlace };
-  transport?: {
-    mode?: string;
-    name?: string;
-    category?: string;
-    headsign?: string;
-    shortName?: string;
-    longName?: string;
-    number?: string;
-    type?: string;
-  };
-  intermediateStops?: { departure?: { place?: TdxPlace } }[];
-  agency?: { agency_id?: string; name?: string };
-}
-interface TdxRoute {
-  travel_time: number;
-  start_time: string;
-  end_time: string;
-  transfers: number;
-  sections: TdxSection[];
-}
-
-export interface PlanTdxRouteOptions {
-  departureTime?: Date;
-  preferFastest?: number;
-  top?: number;
-  transitModes?: string;
-}
 
 function hhmm(iso: string): string {
   const m = iso.match(/T(\d{2}):(\d{2})/);

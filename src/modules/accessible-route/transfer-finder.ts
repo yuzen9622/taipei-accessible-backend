@@ -22,7 +22,6 @@ import {
   fetchMetroTravelTimes,
   fetchMetroHeadway,
   fetchMetroFacilities,
-  FACILITY_LABELS,
   scoreAndRank,
   type WalkLeg,
   type BusLeg,
@@ -36,13 +35,13 @@ import {
   type ReachableStop,
 } from "./planners/reachable-stops";
 
-import {
-  orsWalkingRoute,
-  orsWalkingMatrix,
-  WHEELCHAIR_SPEED_M_PER_MIN,
-} from "./planners/ors";
+import { orsWalkingRoute, orsWalkingMatrix } from "./planners/ors";
 
-import { CITY_METRO_SYSTEMS } from "../../config/transit";
+import {
+  FACILITY_LABELS,
+  WHEELCHAIR_SPEED_M_PER_MIN,
+} from "../../constants/accessibility";
+import { CITY_METRO_SYSTEMS } from "../../constants/transit";
 import { TaiwanCityEn } from "../../types/transit";
 
 import { getRouteDirectionImproved, equalStopName } from "../../utils/transit-text";
@@ -60,6 +59,12 @@ import {
   IOsmA11y,
 } from "../../types";
 import { BusRoute, TdxMetroStationFacility } from "../../types/transit";
+import type {
+  IntermediateStop,
+  BoardableRoute,
+  ServiceableRoute,
+  TransferCombo,
+} from "./accessible-route.types";
 
 const MAX_WALK_MIN = 20;
 const MAX_ORIGIN_STOPS = 10;
@@ -70,46 +75,6 @@ const MAX_TRANSFER_WALK_SEC = 10 * 60;
 const MAX_COMBOS = 20;
 const LAST_LEG_ALIGHT_MAX_M = 2000;
 
-interface IntermediateStop {
-  name: string;
-  coords: [number, number];
-  stopIdx: number;
-  direction: number;
-}
-
-interface BoardableRoute {
-  kind: "BUS" | "METRO";
-  routeId: string;
-  railSystem?: string;
-  city: string;
-  originStop: ReachableStop;
-  boardName: string;
-  boardCoords: [number, number];
-  stopSequence: IntermediateStop[];
-}
-
-interface ServiceableRoute {
-  kind: "BUS" | "METRO";
-  routeId: string;
-  railSystem?: string;
-  city: string;
-  destStop: ReachableStop;
-  boardName: string;
-  boardCoords: [number, number];
-  stopDoc: ITdxBusStop | null;
-  stationDoc: ITdxMetroStation | null;
-}
-
-interface TransferCombo {
-  originStop: ReachableStop;
-  firstLeg: BoardableRoute;
-  midCoords: [number, number];
-  midName: string;
-  midStop: IntermediateStop;
-  destStop: ReachableStop;
-  lastLeg: ServiceableRoute;
-  transferWalkSec: number;
-}
 
 function bareLineId(railSystem: string, lineId: string): string {
   return lineId.startsWith(`${railSystem}-`)

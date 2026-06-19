@@ -1,22 +1,13 @@
 import type { STAApiResponse, AIResponse } from "../../types/air";
+import type { AirReading, AirData } from "./air.types";
 import { getCityZh } from "../../adapters/google.adapter";
 import { googleGenAi, model } from "../../config/ai";
 import { airConfig } from "../../config/ai/config";
 import { airContents } from "../../config/ai/contents";
 
+export type { AirReading, AirData };
+
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
-export interface AirReading {
-  area: string | null;
-  pm25: number;
-  coordinates: [number, number] | undefined;
-  city: string | null;
-}
-
-export interface AirData {
-  city: string;
-  readings: AirReading[];
-}
 
 export async function getAirData(lat: number, lng: number): Promise<AirData | null> {
   const city = await getCityZh(lat, lng);

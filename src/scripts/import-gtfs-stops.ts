@@ -9,8 +9,8 @@ import path from "path";
 import readline from "readline";
 import mongoose from "mongoose";
 import { GtfsStop } from "../model/gtfs-stop.model";
+import { GTFS_DIR } from "../constants/gtfs";
 
-const GTFS_DIR = path.resolve(__dirname, "../../data/gtfs");
 const BATCH = 1000;
 
 function parseLine(headers: string[], values: string[]) {

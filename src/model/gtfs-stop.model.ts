@@ -1,19 +1,5 @@
 import { model, Schema } from "mongoose";
-
-export interface IGtfsStop {
-  stopId: string;
-  stopName: string;
-  stopLat: number;
-  stopLon: number;
-  zoneId?: string;
-  locationType: 0 | 1 | 2 | 3;
-  parentStation?: string;
-  levelId?: string;
-  location: {
-    type: "Point";
-    coordinates: [number, number];
-  };
-}
+import type { IGtfsStop } from "../types";
 
 const gtfsStopSchema = new Schema<IGtfsStop>({
   stopId: { type: String, required: true },

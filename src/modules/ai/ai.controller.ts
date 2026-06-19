@@ -3,13 +3,9 @@ import { sendResponse } from "../../config/lib";
 import { ResponseMessage, ResponseCode } from "../../types/code";
 import { MSG } from "../../constants/messages";
 import { ApiResponse } from "../../types/response";
-import {
-  parseRouteIntent,
-  generateRouteExplanation,
-  type RouteIntent,
-  type RouteExplanation,
-  type AccessibilityMode,
-} from "./ai.service";
+import { parseRouteIntent, generateRouteExplanation } from "./ai.service";
+import type { RouteIntent, RouteExplanation } from "../../types/ai";
+import type { AccessibilityMode } from "../../types/route";
 
 /**
  * POST /api/v1/ai/explain — AccessibleRoute → RouteExplanation.

@@ -3,16 +3,9 @@ import { busUrl } from "../../config/transit";
 import { tdxFetch } from "../../config/fetch";
 import type { BusRoute } from "../../types/transit";
 import type { TaiwanCityEn } from "../../types/transit";
+import type { Lang, BusEtaResult, BusPositionResult } from "./transit.types";
 
-type Lang = "Zh_tw" | "En";
-
-export type BusEtaResult =
-  | { ok: true; routeId: string; direction: number; city: TaiwanCityEn; etaData: any }
-  | { ok: false; error: string; status: 400 | 500 };
-
-export type BusPositionResult =
-  | { ok: true; positionData: any }
-  | { ok: false; error: string; status: 400 | 500 };
+export type { BusEtaResult, BusPositionResult };
 
 export async function getBusEta(params: {
   routeName: string;

@@ -9,8 +9,8 @@ import path from "path";
 import readline from "readline";
 import mongoose from "mongoose";
 import { GtfsLevel } from "../model/gtfs-level.model";
+import { GTFS_DIR } from "../constants/gtfs";
 
-const GTFS_DIR = path.resolve(__dirname, "../../data/gtfs");
 const BATCH = 1000;
 
 async function main() {

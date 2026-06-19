@@ -1,13 +1,5 @@
 import { model, Schema } from "mongoose";
-
-export interface IGtfsTrip {
-  tripId: string;
-  routeId: string;
-  serviceId: string;
-  shapeId?: string;
-  directionId: 0 | 1;
-  bikesAllowed?: 0 | 1 | 2;
-}
+import type { IGtfsTrip } from "../types";
 
 const gtfsTripSchema = new Schema<IGtfsTrip>({
   tripId: { type: String, required: true },

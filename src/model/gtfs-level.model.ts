@@ -1,10 +1,5 @@
 import { model, Schema } from "mongoose";
-
-export interface IGtfsLevel {
-  levelId: string;
-  levelIndex: number;
-  levelName: string;
-}
+import type { IGtfsLevel } from "../types";
 
 const gtfsLevelSchema = new Schema<IGtfsLevel>({
   levelId: { type: String, required: true },

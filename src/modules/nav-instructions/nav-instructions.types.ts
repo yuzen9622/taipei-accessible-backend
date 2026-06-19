@@ -1,0 +1,53 @@
+/**
+ * nav-instructions module type declarations — the turn-by-turn instruction
+ * shapes the service produces and the result envelope it returns.
+ */
+
+import type { ResponseCode } from "../../types/code";
+
+export type RelativeDirection =
+  | "正前方"
+  | "左前方"
+  | "右前方"
+  | "左側"
+  | "右側"
+  | "左後方"
+  | "右後方"
+  | "正後方";
+
+export type NavInstructionType =
+  | "turn"
+  | "transit_board"
+  | "transit_alight"
+  | "facility"
+  | "depart"
+  | "arrive";
+
+export type NavLegType = "WALK" | "BUS" | "METRO" | "THSR" | "TRA";
+
+export interface NavInstruction {
+  text: string;
+  type: NavInstructionType;
+  bearing: number | null;
+  relativeDirection: RelativeDirection | null;
+  distanceM: number | null;
+  streetName: string | null;
+  legType: NavLegType;
+  polylineIndex: number | null;
+}
+
+export interface NavInstructionsResult {
+  instructions: NavInstruction[];
+  initialBearing: number;
+  totalSteps: number;
+  warnings: string[];
+}
+
+export interface NavRouteInput {
+  routeId?: string;
+  legs: unknown[];
+}
+
+export type GenerateNavResult =
+  | { ok: true; data: NavInstructionsResult }
+  | { ok: false; status: ResponseCode; reason: string; message: string };

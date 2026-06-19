@@ -1,9 +1,10 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { openai } from "../../config/ai";
 import { openAiChatTools } from "../../config/ai/tool";
 import { executeLocalTool } from "./agent-tools";
+import type { OAIMessage } from "./ai.types";
 
-export type OAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+export type { OAIMessage };
 
 /**
  * Run the OpenAI tool-calling loop (max 5 rounds) over `messages`, executing

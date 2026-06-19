@@ -1,14 +1,5 @@
 import { model, Schema } from "mongoose";
-
-export interface IGtfsPathway {
-  pathwayId: string;
-  fromStopId: string;
-  toStopId: string;
-  pathwayMode: 1 | 2 | 3 | 4 | 5 | 6 | 7;
-  isBidirectional: 0 | 1;
-  traversalTime?: number;
-  stairCount?: number;
-}
+import type { IGtfsPathway } from "../types";
 
 const gtfsPathwaySchema = new Schema<IGtfsPathway>({
   pathwayId: { type: String, required: true },

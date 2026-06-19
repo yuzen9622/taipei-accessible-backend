@@ -15,8 +15,9 @@ import { GtfsTrip } from "../../../model/gtfs-trip.model";
 import { haversineCoords } from "./ors";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
-import { walkSpeedMps, type AccessibilityMode } from "../scoring";
+import { walkSpeedMps } from "../scoring";
 import type {
+  AccessibilityMode,
   AccessibleRoute,
   WalkLeg,
   WalkStep,
@@ -26,6 +27,18 @@ import type {
   TraLeg,
   WaitInfo,
 } from "../../../types/route";
+import type {
+  OtpStop,
+  OtpPlace,
+  OtpLeg,
+  OtpStep,
+  OtpItinerary,
+  PlanOtpRouteOptions,
+  SnapStop,
+} from "./otp-routing.types";
+export type {
+  PlanOtpRouteOptions,
+};
 
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
 const OTP_NUM_ITINERARIES = 5;
@@ -65,59 +78,6 @@ function recordFailure(): void {
 function recordSuccess(): void {
   consecutiveFailures = 0;
   circuitOpenUntil = 0;
-}
-
-interface OtpStop {
-  gtfsId: string;
-  code?: string;
-  lat?: number;
-  lon?: number;
-}
-interface OtpPlace {
-  name?: string;
-  stop?: OtpStop | null;
-}
-interface OtpLeg {
-  mode: string;
-  startTime: number;
-  endTime: number;
-  duration?: number;
-  distance?: number;
-  from: OtpPlace;
-  to: OtpPlace;
-  route?: {
-    gtfsId?: string;
-    shortName?: string;
-    longName?: string;
-    type?: number;
-    agency?: { gtfsId?: string };
-  } | null;
-  trip?: { gtfsId?: string; wheelchairAccessible?: string } | null;
-  legGeometry?: { points?: string } | null;
-  intermediatePlaces?: { stop?: OtpStop | null }[] | null;
-  steps?: OtpStep[] | null;
-}
-interface OtpStep {
-  distance?: number;
-  lon?: number;
-  lat?: number;
-  relativeDirection?: string | null;
-  absoluteDirection?: string | null;
-  streetName?: string | null;
-  area?: boolean | null;
-  bogusName?: boolean | null;
-}
-interface OtpItinerary {
-  duration: number;
-  walkDistance?: number;
-  legs: OtpLeg[];
-}
-
-export interface PlanOtpRouteOptions {
-  departureTime?: Date;
-  maxTransfers?: 0 | 1 | 2;
-  mode?: AccessibilityMode;
-  limit?: number;
 }
 
 function hhmm(epochMs: number): string {
@@ -366,12 +326,6 @@ query NearbyStops($lat: Float!, $lon: Float!, $radius: Int!, $first: Int!) {
     }
   }
 }`;
-
-interface SnapStop {
-  lat: number;
-  lng: number;
-  name: string;
-}
 
 /**
  * Nearest stop within SNAP_RADIUS_M that has ≥1 route serving it (results come

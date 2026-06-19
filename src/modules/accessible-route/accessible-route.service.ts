@@ -4,9 +4,10 @@ import {
   metroUrl,
   thsrUrl,
   traUrl,
-  CITY_METRO_SYSTEMS,
   metroLineCode,
 } from "../../config/transit";
+import { CITY_METRO_SYSTEMS } from "../../constants/transit";
+import { FACILITY_LABELS } from "../../constants/accessibility";
 import { getRouteDirectionImproved, equalStopName } from "../../utils/transit-text";
 import { orsWalkingRoute } from "./planners/ors";
 import {
@@ -19,7 +20,6 @@ import {
   routeCost,
   prerankCost,
   MODE_PROFILES,
-  AccessibilityMode,
 } from "./scoring";
 import BusStopModel from "../../model/bus-stop.model";
 import MetroStationModel from "../../model/metro-station.model";
@@ -43,11 +43,23 @@ import {
 import { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
 import { getCity, getCoordinates } from "../../adapters/google.adapter";
-import { parseRouteIntent, type RouteIntent } from "../ai/ai.service";
+import { parseRouteIntent } from "../ai/ai.service";
+import type { RouteIntent } from "../../types/ai";
 import { ResponseCode } from "../../types/code";
 import { ERROR_MESSAGE } from "../../constants/messages";
+import type {
+  FindAccessibleRoutesOptions,
+  PlanRouteRequest,
+  PlanRouteResult,
+} from "./accessible-route.types";
+export type {
+  FindAccessibleRoutesOptions,
+  PlanRouteRequest,
+  PlanRouteResult,
+};
 
 import type {
+  AccessibilityMode,
   SlimA11y,
   WaitInfo,
   WalkLeg,
@@ -345,14 +357,6 @@ export async function buildCandidate(
     accessibilityHighlights: highlights,
   };
 }
-
-export const FACILITY_LABELS: Record<number, string> = {
-  1: "有電梯",
-  2: "有電扶梯",
-  3: "有無障礙廁所",
-  4: "有無障礙停車位",
-  5: "有導盲磚",
-};
 
 export async function fetchMetroStationOfLine(
   railSystem: string,
@@ -1419,13 +1423,6 @@ function collapseLogicalDuplicates(
   return [...best.values(), ...walkOnly];
 }
 
-export interface FindAccessibleRoutesOptions {
-  mode?: AccessibilityMode;
-  maxTransfers?: 0 | 1 | 2;
-  departureTime?: Date;
-  format?: "standard" | "compact";
-}
-
 /**
  * Unified a11y enrichment over the FINAL top routes. Planners that skip internal
  * enrichment (OTP) get their transit legs' OsmA11y arrays, route highlights and
@@ -1635,30 +1632,6 @@ export async function resolveCityFromStops(
     return null;
   }
 }
-
-export interface PlanRouteRequest {
-  origin?: unknown;
-  destination?: unknown;
-  query?: string;
-  userLocation?: { latitude: number; longitude: number };
-  maxTransfers?: number;
-  departureTime?: string;
-  format?: string;
-  mode?: RouteIntent["mode"];
-}
-
-export type PlanRouteResult =
-  | {
-      ok: true;
-      data: {
-        origin: { lat: number; lng: number };
-        destination: { lat: number; lng: number };
-        city: TaiwanCityEn;
-        routes: AccessibleRoute[];
-        intent?: RouteIntent;
-      };
-    }
-  | { ok: false; status: ResponseCode; error: string };
 
 export async function planAccessibleRouteFromRequest(
   body: PlanRouteRequest,

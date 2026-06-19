@@ -10,13 +10,14 @@
  * TTL: 86400 seconds (24h).
  */
 import { redisGet, redisSet } from "../../../config/redis";
+import type {
+  WalkCacheEntry,
+} from "./walk-cache.types";
+export type {
+  WalkCacheEntry,
+};
 
 const WALK_TTL_SEC = 86400;
-
-export interface WalkCacheEntry {
-  durationSec: number;
-  distanceM: number;
-}
 
 /**
  * Builds the cache key. Coordinates are [lng, lat] (GeoJSON order).

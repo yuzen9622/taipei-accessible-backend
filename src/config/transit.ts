@@ -1,5 +1,3 @@
-import { TaiwanCityEn } from "../types/transit";
-
 export const TDX_API_KEY = process.env.TDX_API_KEY || "";
 
 export const busUrl = {
@@ -36,14 +34,6 @@ export const metroUrl = {
   frequencyUrl: (s: string) => `${METRO_BASE}/Frequency/${s}`,
   stationFacilityUrl: (s: string) => `${METRO_BASE}/StationFacility/${s}`,
   alertUrl: (s: string) => `${METRO_BASE}/Alert/${s}`,
-};
-
-export const CITY_METRO_SYSTEMS: Partial<Record<TaiwanCityEn, string[]>> = {
-  [TaiwanCityEn.Taipei]: ["TRTC"],
-  [TaiwanCityEn.NewTaipei]: ["NTMC", "KLRT"],
-  [TaiwanCityEn.Taoyuan]: ["TYMC"],
-  [TaiwanCityEn.Taichung]: ["TMRT"],
-  [TaiwanCityEn.Kaohsiung]: ["KRTC"],
 };
 
 /**

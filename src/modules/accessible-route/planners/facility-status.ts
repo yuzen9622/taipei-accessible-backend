@@ -21,40 +21,22 @@
 
 import { tdxFetch } from "../../../config/fetch";
 import { metroUrl } from "../../../config/transit";
-import type { AccessibilityMode } from "../scoring";
 import type {
+  AccessibilityMode,
   AccessibleRoute,
   MetroLeg,
 } from "../../../types/route";
+import type {
+  TdxStationFacilityItem,
+  TdxMetroAlertEnvelope,
+  TdxMetroAlertItem,
+  CacheEntry,
+} from "./facility-status.types";
 
 const OUTAGE_RE = /維修|故障|暫停|停用/;
 const ALERT_CACHE_TTL_MS = 5 * 60 * 1000;
 const FACILITY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
-interface TdxStationFacilityItem {
-  StationID: string;
-  StationName?: { Zh_tw?: string };
-  Elevators?: Array<{
-    Description?: string;
-    FloorLevel?: string;
-    Title?: { Zh_tw?: string };
-  }>;
-  Toilets?: Array<{ Description?: string; FloorLevel?: string }>;
-}
-
-interface TdxMetroAlertEnvelope {
-  Alerts?: TdxMetroAlertItem[];
-}
-interface TdxMetroAlertItem {
-  Title?: string;
-  Description?: string;
-  Status?: number;
-  Scope?: {
-    Stations?: Array<{ StationID?: string; StationName?: { Zh_tw?: string } }>;
-  };
-}
-
-type CacheEntry<T> = { data: T; expiresAt: number };
 const facilityCache = new Map<string, CacheEntry<Map<string, TdxStationFacilityItem>>>();
 const alertCache = new Map<string, CacheEntry<TdxMetroAlertItem[]>>();
 

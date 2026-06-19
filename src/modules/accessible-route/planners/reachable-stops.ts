@@ -11,25 +11,13 @@
 import BusStopModel from "../../../model/bus-stop.model";
 import MetroStationModel from "../../../model/metro-station.model";
 import { ITdxBusStop, ITdxMetroStation } from "../../../types";
-import {
-  orsWalkingMatrix,
-  haversineCoords,
-  WHEELCHAIR_SPEED_M_PER_MIN,
-} from "./ors";
+import { orsWalkingMatrix, haversineCoords } from "./ors";
+import { WHEELCHAIR_SPEED_M_PER_MIN } from "../../../constants/accessibility";
 import { setWalkCache } from "./walk-cache";
+import type { ReachableStop, RawStop } from "./reachable-stops.types";
+export type { ReachableStop };
 
 const GEO_QUERY_RADIUS_M = 2000;
-
-export interface ReachableStop {
-  kind: "bus" | "metro";
-  doc: ITdxBusStop | ITdxMetroStation;
-  coords: [number, number];
-  walkMinutes: number;
-}
-
-type RawStop =
-  | { kind: "bus"; doc: ITdxBusStop; coords: [number, number] }
-  | { kind: "metro"; doc: ITdxMetroStation; coords: [number, number] };
 
 export async function findReachableStops(
   point: { lat: number; lng: number },

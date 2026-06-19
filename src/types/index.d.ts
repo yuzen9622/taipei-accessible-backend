@@ -109,3 +109,86 @@ export interface AgentResponse {
   destination?: object | string;
   query?: string;
 }
+
+export interface IGtfsLevel {
+  levelId: string;
+  levelIndex: number;
+  levelName: string;
+}
+
+export interface IGtfsPathway {
+  pathwayId: string;
+  fromStopId: string;
+  toStopId: string;
+  pathwayMode: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  isBidirectional: 0 | 1;
+  traversalTime?: number;
+  stairCount?: number;
+}
+
+export interface IGtfsStop {
+  stopId: string;
+  stopName: string;
+  stopLat: number;
+  stopLon: number;
+  zoneId?: string;
+  locationType: 0 | 1 | 2 | 3;
+  parentStation?: string;
+  levelId?: string;
+  location: {
+    type: "Point";
+    coordinates: [number, number];
+  };
+}
+
+export interface IGtfsTrip {
+  tripId: string;
+  routeId: string;
+  serviceId: string;
+  shapeId?: string;
+  directionId: 0 | 1;
+  bikesAllowed?: 0 | 1 | 2;
+}
+
+export type HazardType = "obstacle" | "construction" | "data_error";
+export type AiVerdict = "verified" | "suspicious" | "rejected" | "skipped";
+export type HazardStatus = "pending" | "verified" | "rejected" | "expired";
+
+export interface IHazardReport {
+  _id: string;
+  reporterId: string;
+  reportedLocation: { type: "Point"; coordinates: [number, number] };
+  reporterLocation: { type: "Point"; coordinates: [number, number] };
+  distanceM: number;
+  hazardType: HazardType;
+  description?: string;
+  photoUrl: string;
+  photoStoragePath: string;
+  exifValidation: {
+    timestampFresh: boolean;
+    gpsPresent: boolean;
+    gpsMatchesClaimed: boolean;
+    rawExifTime?: string;
+    rawExifLat?: number;
+    rawExifLng?: number;
+  };
+  aiVerification: {
+    verdict: AiVerdict;
+    confidence: number;
+    reason: string;
+    prefilter?: {
+      passed?: boolean;
+      detectedLabels?: string[];
+      safeSearchBlocked?: boolean;
+    };
+    attemptedAt?: Date;
+  };
+  status: HazardStatus;
+  confirmCount: number;
+  denyCount: number;
+  confirmedBy: string[];
+  deniedBy: string[];
+  createdAt: Date;
+  updatedAt: Date;
+  expiredAt: Date;
+}

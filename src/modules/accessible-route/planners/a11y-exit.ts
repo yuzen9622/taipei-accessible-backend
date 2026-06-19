@@ -13,19 +13,16 @@
  */
 
 import A11y from "../../../model/a11y.model";
-import { IA11y } from "../../../types";
 import { orsWalkingRoute, haversineCoords } from "./ors";
 import type { WalkLeg } from "../../../types/route";
 import { getStationAccess } from "./indoor-graph";
-
-type RawA11yDoc = IA11y;
-
-export interface A11yExit {
-  exitName: string;
-  exitNumber: string;
-  type: "elevator" | "ramp";
-  coords: [number, number];
-}
+import type {
+  RawA11yDoc,
+  A11yExit,
+} from "./a11y-exit.types";
+export type {
+  A11yExit,
+};
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -23,6 +23,7 @@ import type {
 } from "../../types/route";
 
 export type { SlimA11y } from "../../types/route";
+import type { AnyLeg } from "./accessible-route.types";
 
 const A11Y_TAG_WHITELIST = new Set<string>([
   "wheelchair",
@@ -76,8 +77,6 @@ export function slimFacility(f: IOsmA11y): SlimA11y {
   if (tags) slim.tags = tags;
   return slim;
 }
-
-type AnyLeg = WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg;
 
 /**
  * The facility-array property names a leg carries, by leg type. The leg

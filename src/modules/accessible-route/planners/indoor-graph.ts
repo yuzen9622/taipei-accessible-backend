@@ -23,17 +23,28 @@
  * All coordinates are [lng, lat] (GeoJSON order); no conversion is performed.
  */
 
-import { GtfsStop, IGtfsStop } from "../../../model/gtfs-stop.model";
-import { GtfsPathway, IGtfsPathway } from "../../../model/gtfs-pathway.model";
+import { GtfsStop } from "../../../model/gtfs-stop.model";
+import { GtfsPathway } from "../../../model/gtfs-pathway.model";
 import { GtfsLevel } from "../../../model/gtfs-level.model";
+import type { IGtfsStop, IGtfsPathway } from "../../../types";
+import type { AccessibilityMode } from "../../../types/route";
 import { equalStopName } from "../../../utils/transit-text";
 import { haversineCoords } from "./ors";
-
-export type AccessibilityMode =
-  | "wheelchair"
-  | "elderly"
-  | "visual_impaired"
-  | "normal";
+import type {
+  IndoorStation,
+  Edge,
+  IndoorPathStep,
+  IndoorPath,
+  FindIndoorPathOptions,
+  StationAccess,
+} from "./indoor-graph.types";
+export type {
+  IndoorStation,
+  IndoorPathStep,
+  IndoorPath,
+  FindIndoorPathOptions,
+  StationAccess,
+};
 
 const DEFAULT_TRAVERSAL_SEC: Record<number, number> = {
   1: 15,
@@ -50,12 +61,6 @@ const WHEELCHAIR_BLOCKED_MODES = new Set([2]);
 const ESCALATOR_WHEELCHAIR_PENALTY = 120;
 
 const STATION_MATCH_RADIUS_M = 600;
-
-export interface IndoorStation {
-  stationId: string;
-  stopName: string;
-  coords: [number, number];
-}
 
 /**
  * Resolve the indoor station node (location_type=1) that corresponds to a
@@ -103,31 +108,6 @@ export async function findIndoorStation(
     stopName: best.stopName,
     coords: best.location.coordinates as [number, number],
   };
-}
-
-interface Edge {
-  to: string;
-  mode: number;
-  cost: number;
-}
-
-export interface IndoorPathStep {
-  stopId: string;
-  viaMode?: number;
-}
-
-export interface IndoorPath {
-  steps: IndoorPathStep[];
-  totalSeconds: number;
-  usesElevator: boolean;
-  usesStairs: boolean;
-}
-
-export interface FindIndoorPathOptions {
-  excludePathwayModes?: number[];
-  preferPathwayModes?: number[];
-  mode?: AccessibilityMode;
-  allowedNodeIds?: Set<string>;
 }
 
 function edgeCost(
@@ -368,21 +348,6 @@ export async function stationHasElevator(stationId: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-export interface StationAccess {
-  stationId: string;
-  stationName: string;
-  entrance: {
-    stopId: string;
-    name: string;
-    exitNumber: string;
-    coords: [number, number];
-  } | null;
-  hasElevator: boolean;
-  stepFree: boolean | null;
-  usesElevator: boolean;
-  elevatorLevelName?: string;
 }
 
 function escapeRegExp(s: string): string {

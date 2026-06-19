@@ -53,6 +53,18 @@ import type {
   TraLeg,
   ThsrLeg,
 } from "../../../types/route";
+import type {
+  CacheEntry,
+  TdxEtaRecord,
+  TdxTrainLiveBoardItem,
+  TdxTrainLiveBoardEnvelope,
+  TdxTraStation,
+  TdxTraOdItem,
+  TdxThsrStation,
+  TdxThsrOdItem,
+  RailOdRow,
+  RailMatch,
+} from "./realtime-transit.types";
 
 const CACHE_TTL_MS = 30 * 1000;
 const MAX_DEPARTURE_SKEW_MS = 15 * 60 * 1000;
@@ -82,22 +94,6 @@ const CITY_BY_STOP_PREFIX: Record<string, string> = {
   LIE: "LienchiangCounty",
 };
 
-interface TdxEtaRecord {
-  EstimateTime?: number | null;
-  StopStatus?: number;
-  StopName?: { Zh_tw?: string };
-  Direction?: number;
-}
-
-interface TdxTrainLiveBoardItem {
-  TrainNo?: string;
-  DelayTime?: number;
-}
-interface TdxTrainLiveBoardEnvelope {
-  TrainLiveBoards?: TdxTrainLiveBoardItem[];
-}
-
-type CacheEntry<T> = { data: T; expiresAt: number };
 const etaCache = new Map<string, CacheEntry<TdxEtaRecord[]>>();
 let liveBoardCache: CacheEntry<Map<string, number>> | null = null;
 
@@ -351,16 +347,6 @@ const STATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const OD_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
 
-interface TdxTraStation {
-  StationID: string;
-  StationName?: { Zh_tw?: string };
-}
-interface TdxTraOdItem {
-  DailyTrainInfo?: { TrainNo?: string; TrainTypeName?: { Zh_tw?: string } };
-  OriginStopTime?: { DepartureTime?: string };
-  DestinationStopTime?: { ArrivalTime?: string };
-}
-
 let traStationCache: CacheEntry<Map<string, string>> | null = null;
 const odCache = new Map<string, CacheEntry<TdxTraOdItem[]>>();
 
@@ -521,16 +507,6 @@ async function applyTraDelays(
   }
 }
 
-interface TdxThsrStation {
-  StationID: string;
-  StationName?: { Zh_tw?: string };
-}
-interface TdxThsrOdItem {
-  DailyTrainInfo?: { TrainNo?: string };
-  OriginStopTime?: { DepartureTime?: string };
-  DestinationStopTime?: { ArrivalTime?: string };
-}
-
 let thsrStationCache: CacheEntry<Map<string, string>> | null = null;
 const thsrOdCache = new Map<string, CacheEntry<TdxThsrOdItem[]>>();
 
@@ -640,18 +616,6 @@ async function railGeometry(
     });
     return geo;
   });
-}
-
-interface RailOdRow {
-  DailyTrainInfo?: { TrainNo?: string; TrainTypeName?: { Zh_tw?: string } };
-  OriginStopTime?: { DepartureTime?: string };
-  DestinationStopTime?: { ArrivalTime?: string };
-}
-interface RailMatch {
-  trainNo: string;
-  trainType?: string;
-  dep: string;
-  arr: string;
 }
 
 /**

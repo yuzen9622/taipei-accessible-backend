@@ -1,30 +1,8 @@
 import { googleGenAi, model } from "../../config/ai";
 import { intentConfig, explainConfig } from "../../config/ai/config";
 import { intentContents, explainContents } from "../../config/ai/contents";
-
-export type AccessibilityMode =
-  | "wheelchair"
-  | "elderly"
-  | "visual_impaired"
-  | "normal";
-
-export interface RouteIntent {
-  from: string;
-  to: string;
-  mode: AccessibilityMode;
-  departureTime: string;
-  preferences: {
-    minimizeTransfers: boolean;
-    preferElevator: boolean;
-  };
-}
-
-export interface RouteExplanation {
-  summary: string;
-  accessibilityHighlights: string[];
-  warnings: string[];
-  alternatives: string | null;
-}
+import type { AccessibilityMode } from "../../types/route";
+import type { RouteIntent, RouteExplanation } from "../../types/ai";
 
 const VALID_MODES: AccessibilityMode[] = [
   "wheelchair",

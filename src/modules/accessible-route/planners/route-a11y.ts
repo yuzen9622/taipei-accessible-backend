@@ -16,15 +16,22 @@
  */
 
 import OsmA11y from "../../../model/osm-a11y.model";
-import { getStationAccess, AccessibilityMode } from "./indoor-graph";
+import { getStationAccess } from "./indoor-graph";
 import type { IOsmA11y } from "../../../types";
 import type {
+  AccessibilityMode,
   WalkLeg,
   BusLeg,
   MetroLeg,
   ThsrLeg,
   TraLeg,
 } from "../../../types/route";
+import type {
+  RailLeg,
+} from "./route-a11y.types";
+export type {
+  RailLeg,
+};
 
 const A11Y_RADIUS_M = 200;
 const A11Y_LIMIT = 5;
@@ -111,8 +118,6 @@ export function attachA11yToLeg(
     leg.arrivalStationA11y = alightA11y;
   }
 }
-
-type RailLeg = MetroLeg | ThsrLeg | TraLeg;
 
 /**
  * Enrich a rail leg + its adjacent walk legs with indoor-graph guidance:
