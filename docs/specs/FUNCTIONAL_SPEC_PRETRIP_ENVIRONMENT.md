@@ -1,9 +1,9 @@
 # 出發前環境資訊查詢
 ## Functional Specification — Pre-Trip Environment Aggregation
 
-**版本**：v1.0.0  
+**版本**：v1.0.3  
 **狀態**：Proposed — 未實作  
-**日期**：2026-06-17  
+**日期**：2026-06-17（最後更新：2026-06-19）  
 **作者**：yuzen9622
 
 ---
@@ -115,30 +115,54 @@ src/modules/environment/
 | 文件網址 | `https://opendata.cwa.gov.tw/dist/opendata-swagger.html` |
 | 授權金鑰 | CWA 開放資料平台申請，免費方案每日呼叫上限 100,000 次 |
 | 環境變數 | `CWA_API_KEY` |
-| 採用端點 | `GET /v1/rest/datastore/F-D0047-{locationCode}` — 36 小時鄉鎮天氣預報 |
+| 採用端點（兩段式，方案 E′） | **① 定縣市**：`GET /v1/rest/datastore/F-D0047-089` — 全台 22 縣市代表點（含 `Latitude`/`Longitude`），Haversine 取最近縣市。**② 定區**：依縣市查靜態表取該縣市鄉鎮檔（如臺北市 → `F-D0047-061`），Haversine 取最近區。皆每 6 小時更新（詳見 §4.1.2、§8） |
 
 #### 4.1.2 請求範例
 
 ```http
-GET https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-091
-  ?Authorization={CWA_API_KEY}
-  &locationName=大安區
-  &elementName=T,PoP6h,WS,WD,Wx
-  &timeFrom=2026-06-17T08:00:00
-  &timeTo=2026-06-17T18:00:00
+# ① 定縣市：全台 22 縣市代表點（含座標）→ 後端 Haversine 取最近縣市
+GET https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-089
+  ?Authorization={CWA_API_KEY}&format=JSON
+
+# ② 定區：對 ① 找到的縣市（例：臺北市 → F-D0047-061）取該縣市鄉鎮檔
+#    → 後端 Haversine 取最近區的 Location
+GET https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-061
+  ?Authorization={CWA_API_KEY}&format=JSON
 ```
 
-> **⚠️ 待確認**：CWA API 依縣市分鄉鎮代碼（如 `F-D0047-091` 為台北市），後端需先以座標反查所在縣市，再選用對應資料集代碼。此反查邏輯建議整合 Google Maps Reverse Geocoding（現有 `src/config/map.ts`），或以 GeoJSON 縣市邊界靜態對應。
+> 經實測（2026-06-19，實打 API）：過濾參數為 **PascalCase** —— `ElementName=溫度,3小時降雨機率,…`、`LocationName=<區>` 才會生效；舊版小寫 `elementName` / `locationName` 會被**靜默忽略**（回傳全部，這也是早期草稿誤以為可用的原因）。兩段式 stage ② 需全縣市各區座標做 Haversine，故**不**用 `LocationName` 過濾，但可用 `ElementName` 只取所需元素以縮小 payload。
 
-#### 4.1.3 欄位對應表
+> **方案演進**：原規劃方案 E（單一全台鄉鎮檔 `F-D0047-093` + 就近比對）經 2026-06-19 實打 API 確認**不可行**——`F-D0047-093` 在 REST datastore 為 404，且 API 上唯一的全台檔（`089`/`091`）只有 **22 個縣市代表點**、非全鄉鎮。改採**方案 E′（兩段式就近比對）**：先用 `089`（22 縣市點）Haversine 定縣市，再抓該縣市鄉鎮檔 Haversine 定區，全程**免 Google 反查**、僅需一張靜態縣市→ID 表。座標 → 行政區 反查方案比較（仍列為參考）：
+>
+| 方案 | 類型 | 成本 / 配額 | 精度 | 備註 |
+> |------|------|------------|------|------|
+> | **A. Google Maps Reverse Geocoding** | 外部 API | 付費、有配額 | 縣市 + 區 | 現有 `getCityZh()`，§4.2 空品已使用，可直接重用 |
+> | **B. 靜態 GeoJSON 鄉鎮市區界 + point-in-polygon** | 離線 | 免費、無配額、無網路 | 鄉鎮/區（精確含括判斷） | 資料源：政府資料開放平臺「鄉鎮市區界線(TWD97經緯度)」（dataset 7441）；以 turf.js `booleanPointInPolygon` 判斷 |
+> | **C. TGOS 地理資訊圖資雲服務平台（內政部）** | 外部 gov API | 免費（需註冊金鑰） | 鄉鎮/區/門牌 | 官方門牌資料（約 800 萬點）；端點：坐標查詢最近鄰地址 `PointAddr`、行政區定位 |
+> | **D. OSM Nominatim reverse** | 外部 API | 免費但限速 1 req/s | 行政區未必對齊台灣界線 | 正式環境須自架，不建議 |
+> | **E. （否決）單一全台鄉鎮檔 `F-D0047-093` + 就近比對** | — | — | — | ❌ 實測 `F-D0047-093` API 為 404，且全台檔 `089`/`091` 僅 22 縣市點，無法達鄉鎮粒度 |
+> | **E′. 兩段式：`089` 定縣市 → 縣市鄉鎮檔定區（採用）** | 無需 geocoder | 免費（2 次呼叫） | 鄉鎮/區 | ① `089`（22 縣市點）Haversine 定縣市 → ② 靜態 22 筆「縣市→ID」表抓該縣市鄉鎮檔 → Haversine 定區 |
+> | **F. 改用縣市層級預報 `F-C0032-001`** | 降低需求 | 免費 | 僅縣市 | 只需 `getCityZh()` 的縣市即足夠；天氣較粗、無需鄉鎮反查 |
+>
+> **採用：方案 E′（兩段式）**。fallback：若僅需縣市粒度可退至單段 `089`（方案 F 精神）；若需離線可改 **B**（GeoJSON）。靜態縣市→ID 對照表見 §8 Phase E-2（已實打 API 驗證，每 4 號一個、共 22 縣市）。
+>
+> **背景（實打 API 驗證，2026-06-19）**：`F-D0047-093`（全台鄉鎮）在 REST datastore = **404**；全台聚合檔 `089`（3天逐3小時）/ `091`（1週逐12小時）僅含 **22 縣市代表點**。鄉鎮/區粒度只能用逐縣市檔（臺北市 `F-D0047-061`、新北市 `F-D0047-069` …，每 4 號遞增）。座標欄位為 **`Latitude`/`Longitude`**（非 `Lat`/`Lon`）。
 
-| CWA 欄位 | 回應欄位 | 說明 |
-|---------|---------|------|
-| `T` | `weather.temperature` | 氣溫（°C） |
-| `PoP6h` | `weather.precipitationProbability` | 6 小時降雨機率（%） |
-| `WS` | `weather.windSpeed` | 風速（m/s） |
-| `WD` | `weather.windDirection` | 風向（中文，如「北北東風」） |
-| `Wx` | `weather.condition` | 天氣描述（如「晴」「多雲時陰」） |
+#### 4.1.3 欄位對應表（✅ 已對照實際回應，2026-06-19）
+
+每個 `Location` 結構：`{ LocationName, Latitude, Longitude, WeatherElement[] }`。各 `WeatherElement` 以中文 `ElementName` 標示，值位於 `WeatherElement[].Time[].ElementValue[0].<key>`（瞬時值用 `Time[].DataTime`；區間值如降雨機率/天氣現象用 `Time[].StartTime`/`EndTime`）。
+
+| CWA `ElementName`                          | `ElementValue` key              | 回應欄位                               | 範例值                            |
+| ------------------------------------------ | ------------------------------- | ---------------------------------- | ------------------------------ |
+| `溫度`                                       | `Temperature`                   | `weather.temperature`              | `"36"`（°C）                     |
+| `3小時降雨機率`                                  | `ProbabilityOfPrecipitation`    | `weather.precipitationProbability` | `"10"`（%，**3 小時**非 6 小時）       |
+| `風速`                                       | `WindSpeed`（另有 `BeaufortScale`） | `weather.windSpeed`                | `"2"`（m/s）                     |
+| `風向`                                       | `WindDirection`                 | `weather.windDirection`            | `"西北風"`                        |
+| `天氣現象`                                     | `Weather`（另有 `WeatherCode`）     | `weather.condition`                | `"晴"`                          |
+| `天氣預報綜合描述`                                 | `WeatherDescription`            | （選用，整段描述）                          | `"晴。降雨機率10%。溫度…"`              |
+| `Location.Latitude` / `Location.Longitude` | —                               | （Haversine 就近比對用）                  | `"25.051608"` / `"121.568983"` |
+
+> 其餘可用元素：`露點溫度`(`DewPoint`)、`相對濕度`(`RelativeHumidity`)、`體感溫度`(`ApparentTemperature`)、`舒適度指數`(`ComfortIndex`/`ComfortIndexDescription`)。`F-D0047-091`（1週）改為 `平均溫度`/`最高溫度`/`最低溫度`、`12小時降雨機率`、`紫外線指數` 等彙總元素。
 
 #### 4.1.4 錯誤處理
 
@@ -188,35 +212,59 @@ const { quality, advice } = classifyPm25(pm25);
 
 #### 4.3.1 API 資訊
 
-| 項目 | 內容 |
-|------|------|
-| 文件網址 | `https://www.twipcam.com/api/document` |
-| 授權方式 | ⚠️ 待確認（文件未明確說明是否需要 API Key；請於實作前確認 twipcam 授權條款） |
-| 環境變數 | `TWIPCAM_API_KEY`（若需要） |
-| 採用端點 | ⚠️ 待確認（依 twipcam 文件，預期為座標範圍查詢，如 `GET /api/cameras?lat=&lng=&radius=`） |
+| 項目     | 內容                                                                                                                     |
+| ------ | ---------------------------------------------------------------------------------------------------------------------- |
+| 文件網址   | `https://www.twipcam.com/api/document`                                                                                 |
+| 授權方式   | ✅ 已確認 — **不需要 API Key**（兩個端點皆為公開存取）                                                                                    |
+| 環境變數   | 無（不需金鑰）                                                                                                                |
+| 全台清單端點 | `GET https://www.twipcam.com/api/v1/cam-list.json` — 回傳全台攝影機清單（JSON 陣列，約 800+ 筆），無參數、無認證                               |
+| 座標查詢端點 | `GET https://www.twipcam.com/widget/v1/query-cam-list-by-coordinate?lat=&lon=` — ⚠️ 回傳 **HTML widget（非 JSON）**，不適合後端聚合 |
 
-#### 4.3.2 預期請求（⚠️ 待確認實際端點格式）
+> **採用策略（✅ 已確認）**：twipcam **沒有**「座標 + 半徑」的 JSON 查詢端點，座標端點僅回傳 HTML。因此後端採 **全台清單（`cam-list.json`）+ 本地 Haversine 過濾** 策略（見 §4.3.2、§8 Phase E-3）。
+
+#### 4.3.2 請求方式（✅ 已確認）
+
+後端只呼叫**全台清單端點**，再於本地過濾。無參數、無認證：
 
 ```http
-GET https://www.twipcam.com/api/cameras
-  ?lat=25.0478
-  &lng=121.5318
-  &radius=500
-  &limit=5
+GET https://www.twipcam.com/api/v1/cam-list.json
 ```
 
-#### 4.3.3 欄位對應表（預期，⚠️ 待對照實際回應）
+取得約 800+ 筆全台攝影機後，由後端：
 
-| twipcam 欄位 | 回應欄位 | 說明 |
-|------------|---------|------|
-| `id` | `cctv.id` | 攝影機識別碼 |
-| `name` | `cctv.name` | 攝影機名稱 / 地點描述 |
-| `lat`, `lng` | `cctv.location` | 攝影機座標 |
-| `snapshot_url` | `cctv.snapshotUrl` | 靜態快照圖片 URL |
-| `stream_url` | `cctv.streamUrl` | 影音串流 URL（m3u8 或 RTSP） |
-| （計算值） | `cctv.distanceM` | 與查詢座標的距離（公尺），後端計算 |
+1. 以 Haversine 計算各攝影機（`lat` / `lon`）與查詢座標的距離（公尺）。
+2. 依 `radius`（§5.1 請求參數，公尺）過濾，距離升冪排序。
+3. 取前 N 筆（`limit` 由後端固定上限，預設 5）。
 
-> **後端職責**：僅回傳 `snapshotUrl` 與 `streamUrl`，**不**代理影像流量。串流渲染由前端處理（見第 11 節）。
+> **twipcam 端點本身不接受 `radius` / `limit`**；半徑與筆數限制皆由後端套用。座標查詢端點 `query-cam-list-by-coordinate?lat=&lon=` 僅回傳 HTML widget，**不採用**。注意座標欄位 twipcam 使用 `lon`（非 `lng`）。
+
+#### 4.3.3 欄位對應表（✅ 已對照 `cam-list.json` 實際回應）
+
+實測單筆回應結構：
+
+```json
+{
+  "id": "n2-w-1k-000",
+  "lat": 25.0587,
+  "lon": 121.2137,
+  "name": "國道二號 1K+000 西向 大園交流道到桃園機場端",
+  "cam_url": "https://cctvn.freeway.gov.tw/abs2mjpg/bmjpg?camera=20100"
+}
+```
+
+| twipcam 欄位  | 回應欄位                | 說明                                                                                                   |
+| ----------- | ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `id`        | `cctv.id`           | 攝影機識別碼（如 `n2-w-1k-000`、`tpe-000313`）                                                                 |
+| `name`      | `cctv.name`         | 地點描述（中文）                                                                                             |
+| `lat`       | `cctv.location.lat` | 緯度                                                                                                   |
+| `lon`       | `cctv.location.lng` | 經度（twipcam 欄位名為 `lon`，回應正規化為 `lng`）                                                                  |
+| `cam_url`   | `cctv.streamUrl`    | 影像來源 URL（國道為 MJPEG `abs2mjpg` 串流，可直接於 `<img>` 或播放器呈現）                                                |
+| （由 `id` 推導） | `cctv.snapshotUrl`  | twipcam 快照代理 `https://c01.twipcam.com/cam/snapshot/{id}.jpg`（⚠️ 待驗證：僅於座標 widget 觀察到市區攝影機適用，國道攝影機未驗證） |
+| （計算值）       | `cctv.distanceM`    | 與查詢座標的距離（公尺），後端以 Haversine 計算                                                                        |
+
+> **無 `m3u8` / `RTSP` / `snapshot_url` 欄位**：實測 `cam-list.json` 僅提供單一 `cam_url`（MJPEG / 來源影像）；原規格假設的 `snapshot_url` / `stream_url` 欄位**不存在**。`snapshotUrl` 改由 `id` 推導 twipcam 快照代理 URL。
+
+> **後端職責**：僅回傳影像 URL，**不**代理影像流量。串流渲染由前端處理（見第 11 節）。
 
 #### 4.3.4 錯誤處理
 
@@ -292,19 +340,19 @@ GET /api/v1/a11y/environment?lat=25.0478&lng=121.5318&radius=500
       "status": "ok",
       "cameras": [
         {
-          "id": "cam_001",
-          "name": "忠孝東路四段（與復興南路口）",
-          "location": { "lat": 25.0413, "lng": 121.5431 },
+          "id": "tpe-000313",
+          "name": "台北市道路 313-松江路與長安東路口",
+          "location": { "lat": 25.0501, "lng": 121.5333 },
           "distanceM": 340,
-          "snapshotUrl": "https://www.twipcam.com/snapshot/cam_001.jpg",
-          "streamUrl": "https://www.twipcam.com/stream/cam_001.m3u8"
+          "snapshotUrl": "https://c01.twipcam.com/cam/snapshot/tpe-000313.jpg",
+          "streamUrl": "https://c01.twipcam.com/cam/snapshot/tpe-000313.jpg"
         },
         {
-          "id": "cam_002",
-          "name": "仁愛路四段（近大安森林公園）",
+          "id": "tpe-000208",
+          "name": "台北市道路 208-仁愛路四段（近大安森林公園）",
           "location": { "lat": 25.0338, "lng": 121.5347 },
           "distanceM": 480,
-          "snapshotUrl": "https://www.twipcam.com/snapshot/cam_002.jpg",
+          "snapshotUrl": "https://c01.twipcam.com/cam/snapshot/tpe-000208.jpg",
           "streamUrl": null
         }
       ]
@@ -404,8 +452,10 @@ Key 格式：env:{type}:{lat_rounded}:{lng_rounded}
 範例：
   env:weather:25.048:121.532
   env:air:25.048:121.532
-  env:cctv:25.048:121.532
+  env:cctv:all              ← 見下方說明
 ```
+
+> **CCTV 例外（§4.3.2 已確認）**：twipcam 僅提供**全台單一清單** `cam-list.json`（與查詢座標無關），故 CCTV **不以座標分鍵**，而以單一 key `env:cctv:all` 快取整份清單（TTL 10 分鐘）。每次請求從快取讀全清單後於後端 Haversine 過濾，避免依座標重複抓取相同的 800+ 筆資料。天氣與空品仍維持座標分鍵。
 
 ### 6.4 快取讀寫流程
 
@@ -539,17 +589,32 @@ router.get("/environment", validate(EnvironmentQuerySchema), getEnvironmentInfo)
 
 ```
 src/modules/environment/
-└── weather.service.ts    # CWA API 呼叫、縣市代碼對應
+├── weather.service.ts        # 兩段式就近比對、CWA API 呼叫、欄位正規化
+└── cwa-county-codes.ts       # 靜態「縣市名 → F-D0047 resource ID」對照表（22 筆）
 ```
 
-**關鍵實作事項**：
+**關鍵實作事項（方案 E′ 兩段式，**免** Google 反查）**：
 
-1. 座標 → 縣市名稱：重用現有 Google Maps Reverse Geocoding（`getCityZh(lat, lng)`，已在 `src/adapters/google.adapter.ts`）。
-2. 縣市名稱 → CWA 資料集代碼：維護靜態對照表（台北市 → `F-D0047-091`，新北市 → `F-D0047-069`，…）。
-3. 實作 Redis 快取層，套用 §6.3 key 格式與 §6.2 TTL。
+1. **Stage ① 定縣市**：呼叫 `GET /v1/rest/datastore/F-D0047-089`（全台 22 縣市代表點），以 Haversine 比較查詢座標與各 `Location` 的 `Latitude` / `Longitude`，取最近者的 `LocationName`（縣市）。
+2. **Stage ② 定區**：以 Stage ① 縣市名查 `cwa-county-codes.ts` 取該縣市鄉鎮檔 resource ID → 呼叫該檔（可加 `ElementName=溫度,3小時降雨機率,風速,風向,天氣現象` 縮小 payload）→ 再 Haversine 取最近 `Location`（區）的 `WeatherElement`。
+3. **欄位正規化**：依 §4.1.3 從 `WeatherElement[].Time[].ElementValue[0]` 取 `Temperature` / `ProbabilityOfPrecipitation` / `WindSpeed` / `WindDirection` / `Weather`。
+4. **快取**：`089` 與各縣市鄉鎮檔分別以單一 key 快取（一次呼叫服務多查詢）；解析後天氣結果再依 §6.3 座標 key 快取，TTL 套用 §6.2（20 分鐘）。
+
+**靜態縣市→ID 對照表（`cwa-county-codes.ts`，✅ 實打 API 驗證 2026-06-19，未來3天逐3小時版）**：
+
+| ID | 縣市 | ID | 縣市 | ID | 縣市 | ID | 縣市 |
+|----|------|----|------|----|------|----|------|
+| `F-D0047-001` | 宜蘭縣 | `F-D0047-025` | 雲林縣 | `F-D0047-049` | 基隆市 | `F-D0047-073` | 臺中市 |
+| `F-D0047-005` | 桃園市 | `F-D0047-029` | 嘉義縣 | `F-D0047-053` | 新竹市 | `F-D0047-077` | 臺南市 |
+| `F-D0047-009` | 新竹縣 | `F-D0047-033` | 屏東縣 | `F-D0047-057` | 嘉義市 | `F-D0047-081` | 連江縣 |
+| `F-D0047-013` | 苗栗縣 | `F-D0047-037` | 臺東縣 | `F-D0047-061` | 臺北市 | `F-D0047-085` | 金門縣 |
+| `F-D0047-017` | 彰化縣 | `F-D0047-041` | 花蓮縣 | `F-D0047-065` | 高雄市 | | |
+| `F-D0047-021` | 南投縣 | `F-D0047-045` | 澎湖縣 | `F-D0047-069` | 新北市 | | |
+
+> 規律：未來3天逐3小時版每 4 號遞增（`001`→`085`）；全台聚合 = `089`。1 週逐12小時版為中間號（`003`、`007`…）+ 聚合 `091`。
 
 **驗收條件**：
-- 天氣區塊回傳 `temperature`、`condition`、`precipitationProbability`
+- 天氣區塊回傳 `temperature`、`condition`、`precipitationProbability`，且選用的「縣市 + 區」均為距查詢座標最近者
 - 第一次查詢命中 CWA API；第二次相同座標命中 Redis（`forecastTime` 相同）
 
 ---
@@ -567,12 +632,12 @@ src/modules/environment/
 
 **關鍵實作事項**：
 
-1. 呼叫 twipcam API 取得附近攝影機列表。
-2. 以 Haversine 計算各攝影機與查詢座標的距離（公尺），依距離升冪排序。
-3. 僅回傳 `snapshotUrl` / `streamUrl`，不代理影像內容。
-4. 若 twipcam 需授權，以 `TWIPCAM_API_KEY` 環境變數注入。
+1. 呼叫 `GET https://www.twipcam.com/api/v1/cam-list.json` 取得全台攝影機清單（無參數、無認證，§4.3.1）。
+2. 以 Haversine 計算各攝影機與查詢座標的距離（公尺），依 `radius` 過濾、距離升冪排序，取前 N 筆。
+3. 僅回傳影像 URL（`streamUrl` = `cam_url`、`snapshotUrl` = 由 `id` 推導），不代理影像內容。
+4. twipcam 為公開端點，**不需授權金鑰**。
 
-**⚠️ 待確認**：twipcam 實際端點格式與授權方式須對照官方文件後方可實作。
+> twipcam 端點與欄位已於 §4.3 對照實際回應確認；`snapshotUrl` 推導模式（`c01.twipcam.com/cam/snapshot/{id}.jpg`）仍待全站驗證。
 
 **驗收條件**：
 - `nearbyCctv.cameras` 回傳至少一筆，含 `snapshotUrl`
@@ -660,9 +725,10 @@ case "getEnvironmentInfo":
 | 變數 | 用途 | 必要性 | 使用位置 |
 |------|------|--------|---------|
 | `CWA_API_KEY` | 中央氣象署開放資料 API 授權金鑰 | **必要**（Phase E-2） | `weather.service.ts` |
-| `TWIPCAM_API_KEY` | twipcam 監視器 API 授權金鑰 | ⚠️ 待確認（twipcam 文件未明確說明） | `cctv.service.ts` |
 
-> **說明**：空品資料使用現有 STA API（`sta.ci.taiwan.gov.tw`），為公開端點，不需新增金鑰。
+> **說明**：
+> - 空品資料使用現有 STA API（`sta.ci.taiwan.gov.tw`），為公開端點，不需新增金鑰。
+> - twipcam（CCTV）端點亦為公開存取（✅ 已確認），**不需** `TWIPCAM_API_KEY`，故不新增此變數。
 
 ---
 
@@ -696,8 +762,11 @@ case "getEnvironmentInfo":
 
 | 風險 | 影響 | 緩解策略 |
 |------|------|---------|
-| **twipcam API 格式未確認** | Phase E-3 可能需大幅調整介面設計 | Phase E-3 實作前先以獨立腳本驗證 twipcam 回應格式；本 spec §4.3 標記「⚠️ 待確認」 |
-| **CWA 縣市代碼靜態對應維護成本** | 行政區劃調整時需手動更新 | 對應表集中於單一常數檔（`cwa-location-codes.ts`）；長期可改用 GeoJSON polygon 查詢 |
+| **twipcam 僅有全台清單端點、無座標查詢 JSON** | 每次未命中快取需處理 ~800 筆全台資料 | 全台清單長時間快取（§6）；後端 Haversine 過濾半徑後僅回傳鄰近數筆（§4.3.2 已確認） |
+| **`snapshotUrl` 推導模式未全站驗證** | 部分攝影機（如國道）快照 URL 可能 404 | 僅於 widget 觀察到市區攝影機適用；前端圖片載入失敗時顯示 placeholder；Phase E-3 實作前抽樣驗證各類 `id` |
+| **天氣需兩段呼叫（縣市→區）** | 未命中快取時 stage ①②各一次 CWA 呼叫，延遲較高 | `089` 與各縣市鄉鎮檔分別快取（§6.2 20 分鐘）；多數查詢命中快取後 0 次外呼 |
+| **縣市→ID 靜態表偏移風險** | CWA 若調整 resource ID 編號，對照表失準 | 表已實打 API 驗證（22 筆，每 4 號遞增）；以 `LocationsName` 驗證對應、加單元測試比對；CWA 改版時重跑掃描腳本 |
+| **CWA 新版 API 參數為 PascalCase** | 用小寫 `locationName`/`elementName` 會被靜默忽略、payload 暴增 | 一律用 `ElementName`/`LocationName`（大寫）；stage ② 以 `ElementName` 限縮元素 |
 | **外部 API 速率上限** | CWA 免費方案 10 萬次/日，twipcam 不明 | Redis 快取攔截重複查詢（§6）；監控每日 API 呼叫量 |
 | **STA 感測器離查詢點遠（>5km）** | 空品資料代表性不足 | 現有 `getAirData()` 依縣市查詢（非最近點），若誤差過大可改用 `$near` 查最近測站座標（⚠️ 待確認 STA 是否提供全台測站座標清單） |
 | **Redis 無快取時三個外部 API 並行** | 首次查詢回應時間可能 > 3 秒 | `Promise.allSettled` 並行執行（非串行）；各 API 設 5 秒 timeout；前端顯示 loading 狀態 |
@@ -705,4 +774,4 @@ case "getEnvironmentInfo":
 
 ---
 
-*文件版本 v1.0.0 — 初版規劃（2026-06-17）。本規格為 Proposed 狀態，實作前須確認 twipcam API 文件（§4.3）與 CWA 縣市代碼對應策略（§8 Phase E-2）。*
+*文件版本 v1.0.3 — 天氣資料**實打 CWA API 驗證後**改採**方案 E′（兩段式）**：`F-D0047-089`（22 縣市點）Haversine 定縣市 → 靜態 22 筆「縣市→ID」表抓該縣市鄉鎮檔 → Haversine 定區，免 Google 反查（§4.1、§8 Phase E-2、§12）。原方案 E 的單一全台鄉鎮檔 `F-D0047-093` 經實測為 404、且全台檔僅 22 縣市點，已否決。同時校正：座標欄位 `Latitude`/`Longitude`、元素為中文 `ElementName`（值在 `Time[].ElementValue[0]`）、過濾參數為 PascalCase。twipcam API（§4.3）採全台清單 + 本地 Haversine、不需金鑰、欄位 `lon`/`cam_url`（已對照 `cam-list.json`）。本規格仍為 Proposed；待抽樣驗證 `snapshotUrl` 推導模式（§4.3.3）。*

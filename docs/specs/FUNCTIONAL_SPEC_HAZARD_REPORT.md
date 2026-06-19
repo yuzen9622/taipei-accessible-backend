@@ -1,10 +1,13 @@
 # 使用者路況回報系統
 ## Functional Specification — Hazard Report
 
-**版本**：v1.0.0  
+**版本**：v1.2.0  
 **狀態**：Proposed — 未實作  
-**日期**：2026-06-17  
+**日期**：2026-06-19  
 **作者**：yuzen9622
+
+> v1.1.0 修訂：①回報強制登入、`reporterId` 必填；②到期不物理刪除，保留歷史；③新增「查看我的回報」端點；④移除街景／衛星參考影像比對（圖資老舊無法比對即時障礙），AI 改為 Cloud Vision 預篩 + Gemini 單圖語意判斷。  
+> v1.2.0 修訂：⑤架構對齊現有 clean-backend-architecture——feature 收斂為 `src/modules/hazard-report/`（router/controller/service/ai-verify/parse/schema/type/index），外部 I/O 進 `src/adapters/*.adapter.ts`，移除規格中不存在的 `src/service/`、`src/routes/` 路徑；錯誤以 `ResponseCode` enum 標 HTTP 狀態、領域 reason 放 `data.reason`；auth middleware 改注入 `req.auth`。
 
 ---
 
@@ -29,7 +32,7 @@
 
 ## 1. 系統概述
 
-使用者路況回報系統讓使用者以即時相機拍照，向系統回報在無障礙移動途中所遭遇的實際障礙——包含障礙物、施工圍籬、資料錯誤等類型。後端接收回報後依序執行：地理柵欄驗證、影像 EXIF 時間與 GPS 真實性驗證、Gemini Vision 影像比對，並將通過驗證的回報持久化至 MongoDB，同時開放附近查詢端點供前端地圖疊加顯示。
+使用者路況回報系統讓**已登入**使用者以即時相機拍照，向系統回報在無障礙移動途中所遭遇的實際障礙——包含障礙物、施工圍籬、資料錯誤等類型。後端接收回報後依序執行：登入驗證、地理柵欄驗證、影像 EXIF 時間與 GPS 真實性驗證、AI 影像辨識（Google Cloud Vision 物件／SafeSearch 預篩 + Gemini 單圖語意判斷），並將回報持久化至 MongoDB，同時開放附近查詢與「我的回報」端點供前端地圖疊加顯示。回報到期後不物理刪除，僅標記為 `expired` 以保留歷史紀錄。
 
 系統架構沿用專案既有的 Express + TypeScript + MongoDB(Mongoose) + Redis 技術棧，所有端點統一以 `sendResponse()`（`src/config/lib.ts`）包裝回應，Zod 負責請求驗證。
 
@@ -39,22 +42,23 @@
 
 ### 2.1 核心能力
 
-- 接受含照片的即時路況回報，並在後端驗證回報可信度
+- 限**已登入**使用者提交含照片的即時路況回報，並在後端驗證回報可信度（回報綁定 `reporterId`）
 - 20 公尺地理柵欄：拒絕距回報地點超過 20m 的請求
 - 影像真實性驗證：EXIF 時間新鮮度、EXIF GPS 與宣稱座標一致性
-- AI 影像比對：以 Gemini Vision 比對現場照片與 Google Street View 參考影像
+- AI 影像辨識（兩階段）：Google Cloud Vision 物件偵測／SafeSearch 預篩擋掉不雅或無關圖，再以 Gemini 單圖語意判斷照片是否合理呈現所宣稱的障礙
 - 附近回報查詢：以 MongoDB `$near` 提供地理範圍查詢
+- 我的回報查詢：登入使用者可依 `reporterId` 檢視自己的回報紀錄（含已過期）
 - 社群二次確認：其他使用者可確認或否認既有回報以提升可信度
-- 自動過期：回報具備 TTL，時效過後自動從查詢結果中排除
+- 過期保留歷史：回報到期後標記為 `expired` 而非刪除，從預設查詢結果排除但保留供統計與人工複核
 
 ### 2.2 非功能目標
 
 | 目標 | 說明 |
 |------|------|
-| 後端統一驗證 | 地理柵欄與 EXIF 驗證皆在後端執行，前端無法繞過 |
-| AI 僅作第一道過濾 | Gemini Vision 比對為輔助篩選，verdict 記錄但不強制擋，`rejected` 狀態需人工複核流程（本期未納入） |
-| Fail-soft AI | Gemini Vision 呼叫失敗時回報降級為 `pending`，不阻擋回報提交 |
-| 資料時效性 | 路況回報具時效，TTL 到期自動設 `expired`，不影響歷史查詢 |
+| 後端統一驗證 | 登入、地理柵欄與 EXIF 驗證皆在後端執行，前端無法繞過 |
+| AI 僅作第一道過濾 | Cloud Vision 預篩 + Gemini 語意判斷為輔助篩選，verdict 記錄但不強制擋，`rejected` 狀態需人工複核流程（本期未納入） |
+| Fail-soft AI | Cloud Vision 或 Gemini 呼叫失敗時回報降級為 `pending`，不阻擋回報提交 |
+| 資料時效性 | 路況回報具時效，到期由定時任務設為 `expired`，文件保留供歷史查詢，不物理刪除 |
 | 路徑規劃暫不整合 | 本期回報僅供前端顯示，與路徑評分的整合列為未來選項（見 §9）|
 
 ---
@@ -63,58 +67,92 @@
 
 ### 3.1 請求流程
 
+單一方向流經各層，依賴只往內/往前指；router 不直接呼叫 service，service 不碰 `req`/`res`。
+
 ```
 Client Request
       ↓
-Express (src/app.ts)
+Express 入口 (src/app.ts) — 單一前綴 /api/v1；app.use("/api/v1/a11y", createHazardReportRouter())
       ↓
-Multer Middleware（multipart/form-data 照片解析）
+[僅 POST /reports、GET /reports/mine]
+Auth Middleware (src/middleware/middleware.ts) — 驗 JWT、注入 req.auth = { userId, user }；失敗 401/403
       ↓
-Zod Validation Middleware (src/middleware/validate-request.middleware.ts)
+[僅 POST /reports] Multer — multipart/form-data → req.file（照片 buffer）
       ↓
-HazardReport Controller (src/modules/hazard-report/hazard-report.controller.ts)
+validateRequest(schema) (src/middleware/validate-request.middleware.ts) — Zod 驗 body/query/params → req.validated
       ↓
-┌────────────────────────────────────────────────────────┐
-│                HazardReport Service                    │
-│  src/modules/hazard-report/hazard-report.service.ts    │
-│                                                        │
-│  ┌─────────────────┐  ┌─────────────────────────────┐  │
-│  │ Geo Fence Check │  │ EXIF Validation             │  │
-│  │ Haversine 20m   │  │ timestamp freshness         │  │
-│  └─────────────────┘  │ GPS ↔ claimed coords        │  │
-│                       └─────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │ Photo Upload                                     │  │
-│  │ GCS Bucket (src/service/storage.service.ts)      │  │
-│  └──────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │ AI Vision Verification                           │  │
-│  │ Google Street View Static → Gemini Vision        │  │
-│  │ src/service/hazard-ai-verify.service.ts          │  │
-│  └──────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────┘
+Controller (modules/hazard-report/hazard-report.controller.ts)  ← 薄層
+  讀 req.auth / req.validated / req.file → 呼叫「單一」service 方法 → sendResponse() 包成 envelope
       ↓
-HazardReport Model (src/model/hazard-report.model.ts)
+Service (hazard-report.service.ts)  ← 純業務，無 req/res
+  ├─ Geo fence（Haversine 20m）              → utils/geo
+  ├─ EXIF 驗證（timestamp / GPS）            → hazard-report.parse.ts（exifr 原始值 → domain）
+  ├─ 去重合併查詢 / 持久化                    → model
+  ├─ 上傳照片                                → adapters/gcs.adapter.ts
+  └─ 非同步觸發 AI 辨識（hazard-report.ai-verify.ts）
+        ├─ 階段一 Cloud Vision 預篩          → adapters/vision.adapter.ts
+        └─ 階段二 Gemini 單圖判斷            → adapters/ai-vision.adapter.ts（沿用既有 AI client）
       ↓
-sendResponse() → ApiResponse<HazardReportData>
+Model (src/model/hazard-report.model.ts) — Mongoose
+      ↓
+sendResponse(res, ok, status, ResponseCode.*, message, data?) → ApiResponse<T>
 ```
 
 ### 3.2 模組目錄結構
 
+> 對齊本專案現有 clean-backend-architecture（`src/modules/<feature>/` + `src/adapters/` + `src/constants/` + `src/openapi/`）。本專案**已無** `src/routes/`、`src/controller/`、`src/service/` 目錄——外部 I/O 一律放 `src/adapters/*.adapter.ts`，feature 全收斂在模組內。
+
 ```
 src/
+├── app.ts                              # 單一掛載點：app.use("/api/v1/a11y", createHazardReportRouter())
 ├── modules/
 │   └── hazard-report/
-│       ├── hazard-report.controller.ts   # 端點邏輯
-│       ├── hazard-report.service.ts      # 業務流程協調
-│       ├── hazard-report.router.ts       # 路由定義（掛載至 a11y.route.ts）
-│       └── hazard-report.schema.ts       # Zod schema
+│       ├── index.ts                    # 唯一註冊點：export { createHazardReportRouter }
+│       ├── hazard-report.router.ts     # transport：path+method、串 auth/multer/validate、委派 controller
+│       ├── hazard-report.schema.ts     # validation：Zod body/query/params（邊界驗證，註冊到 openapi）
+│       ├── hazard-report.controller.ts # handler：讀 req.auth/validated/file → 呼叫單一 service → sendResponse
+│       ├── hazard-report.service.ts    # domain：業務協調（geo fence / 去重 / 持久化 / 觸發 AI），無 req/res
+│       ├── hazard-report.ai-verify.ts  # domain：非同步 AI 辨識協調（呼叫 vision/ai-vision adapter）
+│       ├── hazard-report.parse.ts      # I/O mapping：exifr 原始值→exifValidation；Gemini text→AiVerifyResult
+│       └── hazard-report.type.ts       # types：跨層 domain 型別（HazardType / AiVerdict / 結果 DTO）
+├── adapters/                           # I/O（每檔一個外部來源；沿用 google.adapter.ts / tdx.adapter.ts 慣例）
+│   ├── gcs.adapter.ts                  # 新增：GCS 上傳/刪除
+│   ├── vision.adapter.ts              # 新增：Cloud Vision label/object/SafeSearch
+│   └── ai-vision.adapter.ts          # 新增（或併入既有 ai 模組 client）：Gemini 多模態單圖判斷
 ├── model/
-│   └── hazard-report.model.ts            # Mongoose model
-└── service/
-    ├── storage.service.ts                # 照片上傳（GCS）
-    └── hazard-ai-verify.service.ts       # Gemini Vision 比對
+│   └── hazard-report.model.ts          # Mongoose model（沿用 src/model 扁平慣例）
+├── constants/messages.ts               # 擴充：HAZARD_REASON 等重複字串（reason 常數，去除魔術字串）
+├── middleware/middleware.ts            # 擴充：注入 req.auth = { userId, user }（共用 spine）
+├── types/
+│   ├── code.ts                         # 擴充 ResponseCode：GONE=410、TOO_MANY_REQUESTS=429
+│   └── express.d.ts                    # 擴充 req.auth 型別（userId / user）
+└── openapi/registry.ts                 # 註冊 hazard-report schema（docs 由 schema 單一來源生成）
 ```
+
+### 3.3 各層職責（clean-architecture 契約）
+
+| 層 | 檔案 | 唯一職責 | 不可以做 |
+|----|------|----------|----------|
+| transport | `hazard-report.router.ts` | 宣告 path/method、串 middleware（auth→multer→validate）、委派**單一** controller | 業務邏輯、直接呼叫 service |
+| validation | `hazard-report.schema.ts` | 以 Zod 宣告 body/query/params 形狀並拒絕未知欄位 | I/O、業務規則、塑形回應 |
+| handler | `hazard-report.controller.ts` | 讀 `req.auth`/`req.validated`/`req.file`，呼叫**一個** service 方法，用 `sendResponse` 包裝 | 業務 if/else、外部/DB 呼叫、解析原始上游資料 |
+| domain | `hazard-report.service.ts`、`hazard-report.ai-verify.ts` | 業務邏輯與協調，呼叫 adapter / model，落實領域規則 | import `req`/`res`、驗證請求形狀 |
+| I/O mapping | `hazard-report.parse.ts` | exifr 原始值 ↔ `exifValidation`、Gemini 文字 → `AiVerifyResult` | 請求驗證、業務決策、HTTP 細節 |
+| I/O client | `adapters/*.adapter.ts` | 封裝單一外部來源（GCS / Cloud Vision / Gemini） | 業務決策、HTTP envelope |
+| types | `hazard-report.type.ts` | 跨層 domain 型別來源 | 邏輯、執行期值 |
+
+### 3.4 需動到的共用 spine（一次定義、處處沿用）
+
+這些是 feature 之外、所有受保護端點共用的橫切基礎，本期需小幅擴充（皆為**加法、向後相容**）：
+
+| 變更 | 檔案 | 原因 |
+|------|------|------|
+| Auth 注入身分 | `src/middleware/middleware.ts` + `src/types/express.d.ts` | 現有 auth middleware 只「擋」不「注入」（controller 目前各自 re-decode token）；改為 `req.auth = { userId, user }`，controller 統一從 `req.auth` 讀身分（取代手動解 token） |
+| 補狀態碼 | `src/types/code.ts`（`ResponseCode`） | 目前缺 `410`（過期投票）與 `429`（rate limit）；補 `GONE=410`、`TOO_MANY_REQUESTS=429` 才能讓這兩種錯誤也走同一 `sendResponse` envelope |
+| reason 常數 | `src/constants/messages.ts` | `GEOFENCE_VIOLATION` 等 `data.reason` 字串集中成 `HAZARD_REASON` 常數，避免魔術字串散落 |
+| docs 來源 | `src/openapi/registry.ts` | 將 hazard-report 的 Zod schema 註冊進去，`/docs` 與 `/api/v1/openapi.json` 自動同步 |
+
+> 單一方向依賴、邊界驗證、單一 envelope（`sendResponse`）、無魔術字串（`ResponseCode` + `HAZARD_REASON`）、單一註冊點（`index.ts` + `app.ts` 一行）——六項不變量逐項對齊。
 
 ---
 
@@ -128,12 +166,12 @@ import { Schema, model, Document } from 'mongoose'
 // 回報類型
 export type HazardType = 'obstacle' | 'construction' | 'data_error'
 
-// AI 比對結果
+// AI 辨識結果
 export type AiVerdict = 'verified' | 'suspicious' | 'rejected' | 'skipped'
 
 export interface IHazardReport extends Document {
   // 回報識別
-  reporterId?: string          // 選用，使用者 ID（未登入可匿名）
+  reporterId: string           // 必填，回報者使用者 ID（須登入）
 
   // 地點資訊
   reportedLocation: {          // 使用者宣稱的回報地點
@@ -162,12 +200,16 @@ export interface IHazardReport extends Document {
     rawExifLng?: number
   }
 
-  // AI 影像比對結果
+  // AI 影像辨識結果（兩階段）
   aiVerification: {
     verdict: AiVerdict
     confidence: number              // 0.0 – 1.0
     reason: string                  // Gemini 回傳的判斷說明（繁中）
-    referenceImageUrl?: string      // 使用的 Street View 參考影像 URL
+    prefilter?: {                   // 第一階段：Cloud Vision 預篩結果
+      passed: boolean               // 是否通過預篩（未被 SafeSearch 擋下）
+      detectedLabels?: string[]     // 偵測到的物件／標籤（傳給 Gemini 作提示）
+      safeSearchBlocked?: boolean   // SafeSearch 判定不雅／暴力／spoof 而擋下
+    }
     attemptedAt?: Date
   }
 
@@ -188,7 +230,7 @@ export interface IHazardReport extends Document {
 
 const HazardReportSchema = new Schema<IHazardReport>(
   {
-    reporterId: { type: String, default: null },
+    reporterId: { type: String, required: true, index: true },
 
     reportedLocation: {
       type: { type: String, enum: ['Point'], required: true },
@@ -226,7 +268,11 @@ const HazardReportSchema = new Schema<IHazardReport>(
       },
       confidence: { type: Number, min: 0, max: 1, required: true },
       reason: { type: String, required: true },
-      referenceImageUrl: String,
+      prefilter: {
+        passed: Boolean,
+        detectedLabels: { type: [String], default: undefined },
+        safeSearchBlocked: Boolean,
+      },
       attemptedAt: Date,
     },
 
@@ -249,22 +295,39 @@ const HazardReportSchema = new Schema<IHazardReport>(
 // Index 定義
 HazardReportSchema.index({ reportedLocation: '2dsphere' })
 HazardReportSchema.index({ status: 1, createdAt: -1 })
-HazardReportSchema.index({ expiredAt: 1 }, { expireAfterSeconds: 0 }) // MongoDB TTL index
 HazardReportSchema.index({ hazardType: 1, status: 1 })
+HazardReportSchema.index({ reporterId: 1, createdAt: -1 }) // GET /reports/mine
+HazardReportSchema.index({ expiredAt: 1, status: 1 })      // 過期掃描定時任務查詢
+// 注意：不使用 MongoDB TTL index（expireAfterSeconds）——回報到期僅標記為 expired，保留歷史不物理刪除
 
 export const HazardReport = model<IHazardReport>('HazardReport', HazardReportSchema)
 ```
 
-### 4.2 TTL 策略
+### 4.2 過期策略（保留歷史）
+
+`expiredAt` 於建立時依 `hazardType` 計算，僅決定回報何時從「附近查詢」的預設結果中淡出，**不觸發刪除**：
 
 | hazardType | expiredAt 計算 | 說明 |
 |------------|---------------|------|
-| `obstacle` | `createdAt + 6 小時` | 障礙物通常短暫，若無確認自動過期 |
+| `obstacle` | `createdAt + 6 小時` | 障礙物通常短暫，若無確認即視為過期 |
 | `construction` | `createdAt + 7 天` | 施工工期較長 |
 | `data_error` | `createdAt + 30 天` | 資料問題需較長觀察期 |
 
-> MongoDB TTL index（`expireAfterSeconds: 0`）在 `expiredAt` 到期後**自動刪除**文件。  
-> ⚠️ **待確認**：若需保留歷史紀錄（如統計或人工複核），建議改為定時任務將 `status` 更新為 `expired` 而非物理刪除，TTL index 則僅作為最終清理機制。
+**保留歷史的做法（取代 MongoDB TTL index）**：
+
+- **不使用** `expireAfterSeconds: 0` 的 TTL index——它會物理刪除文件，無法保留歷史。
+- 改以**定時任務**（Cloud Scheduler 或 Node.js cron，每 N 分鐘）執行：
+
+  ```typescript
+  // 將到期但尚未標記的回報設為 expired，文件保留
+  await HazardReport.updateMany(
+    { expiredAt: { $lte: new Date() }, status: { $in: ['pending', 'verified'] } },
+    { $set: { status: 'expired' } }
+  )
+  ```
+
+- `expired` 文件：從 `GET /reports`（附近查詢，預設 `status=pending,verified`）排除，但仍可經 `GET /reports/:id`、`GET /reports/mine` 查得，並保留供統計與人工複核。
+- 照片同步保留（見 §7.3）；若日後需控管儲存量，可另立**更長週期**的封存／清理機制，與「過期」解耦。
 
 ### 4.3 狀態機
 
@@ -296,13 +359,15 @@ export const HazardReport = model<IHazardReport>('HazardReport', HazardReportSch
 
 | Method | Path | 功能 | 認證 |
 |--------|------|------|------|
-| `POST` | `/api/v1/a11y/reports` | 提交路況回報 | 公開（選用 JWT） |
+| `POST` | `/api/v1/a11y/reports` | 提交路況回報 | **JWT 必要** |
+| `GET` | `/api/v1/a11y/reports/mine` | 查詢自己的回報紀錄 | **JWT 必要** |
 | `GET` | `/api/v1/a11y/reports` | 查詢附近回報 | 公開 |
 | `GET` | `/api/v1/a11y/reports/:id` | 取得單一回報 | 公開 |
 | `POST` | `/api/v1/a11y/reports/:id/confirm` | 社群二次確認／否認 | 公開（選用 JWT） |
 
-> 所有端點為公開路由（非 `/api/user/*`），不強制 JWT。若請求帶有有效 JWT，`reporterId`  
-> 與 `confirmedBy` / `deniedBy` 會記錄使用者 ID。
+> **回報（`POST /reports`）與「我的回報」（`GET /reports/mine`）強制 JWT**，`reporterId` 取自 `req.auth.userId`（由共用 auth middleware 注入，見 §3.4）。token 過期→401、缺少/無效→403，皆由 middleware 直接回應（不進 controller）。  
+> 附近查詢與單筆查詢為公開路由。社群確認（`/confirm`）維持公開：帶 JWT 以 `req.auth.userId` 記入 `confirmedBy` / `deniedBy`，未帶則以 IP hash 作匿名識別（避免重複投票）。  
+> ⚠️ **掛載方式**：本專案的 auth middleware（`src/middleware/middleware.ts`）目前只整段掛在 `/api/v1/user`。回報端點掛在 `/api/v1/a11y`（與 `createA11yRouter` 等並列），故**不能**整段套 auth——須在 `hazard-report.router.ts` 內**逐路由**對 `POST /reports` 與 `GET /reports/mine` 串上 auth middleware，其餘公開。
 
 ---
 
@@ -327,39 +392,48 @@ export const HazardReport = model<IHazardReport>('HazardReport', HazardReportSch
 ```typescript
 import { z } from 'zod'
 
-export const CreateHazardReportSchema = z.object({
-  // photo 欄位由 Multer 處理，不在 Zod body schema 內
-  hazardType: z.enum(['obstacle', 'construction', 'data_error']),
-  reportedLat: z.coerce.number().min(-90).max(90),
-  reportedLng: z.coerce.number().min(-180).max(180),
-  reporterLat: z.coerce.number().min(-90).max(90),
-  reporterLng: z.coerce.number().min(-180).max(180),
-  description: z.string().max(500).optional(),
-})
+// photo 欄位由 Multer 處理（→ req.file），不在 body schema 內
+// 多 part 欄位皆為字串，故以 z.coerce 轉數值；.strict() 拒絕未知欄位（邊界驗證不變量）
+export const CreateHazardReportSchema = z
+  .object({
+    hazardType: z.enum(['obstacle', 'construction', 'data_error']),
+    reportedLat: z.coerce.number().min(-90).max(90),
+    reportedLng: z.coerce.number().min(-180).max(180),
+    reporterLat: z.coerce.number().min(-90).max(90),
+    reporterLng: z.coerce.number().min(-180).max(180),
+    description: z.string().max(500).optional(),
+  })
+  .strict()
 ```
+
+> 其餘 schema（`NearbyReportsQuerySchema`、`MyReportsQuerySchema`、`ReportIdParamSchema`、`ConfirmSchema`）同樣 `.strict()`，並於 `src/openapi/registry.ts` 註冊，使 `/docs` 與 schema 單一同步。
 
 **後端驗證流程**
 
 ```
-1. Multer 解析 multipart，取得 photo buffer
-2. Zod 驗證其餘欄位
-3. Haversine 計算 reportedLocation ↔ reporterLocation 距離
-   → 距離 > 20m → 400 GEOFENCE_VIOLATION
-4. EXIF 解析（exifr 套件）
+[auth middleware] 驗 JWT、注入 req.auth；token 過期→401、缺少/無效→403（不進 controller）
+[multer]          multipart → req.file（photo buffer）
+[validateRequest] Zod 驗 body → req.validated.body
+─────────── 以下在 controller → service 內（controller 只讀 req.auth/validated/file 並呼叫 service）───────────
+1. service 取 reporterId = req.auth.userId（由 controller 傳入）
+2. Haversine 計算 reportedLocation ↔ reporterLocation 距離
+   → 距離 > 20m → 400 INVALID_INPUT，data.reason = GEOFENCE_VIOLATION
+3. EXIF 解析（hazard-report.parse.ts，內部用 exifr）
    a. 拍攝時間 vs 請求時間 > 10 分鐘 → exifValidation.timestampFresh = false
-      → 整體 EXIF 驗證失敗 → 400 EXIF_TOO_OLD
+      → 整體 EXIF 驗證失敗 → 400 INVALID_INPUT，data.reason = EXIF_TOO_OLD
    b. 有 GPS EXIF → 比對 EXIF GPS ↔ reporterLocation
-      → 距離 > 50m → 400 EXIF_GPS_MISMATCH
-5. 上傳照片至 GCS（storage.service.ts）
-6. 觸發 AI 影像比對（非同步，不阻擋回應）
-   a. 取得 Street View Static 參考影像（reportedLocation）
-   b. Gemini Vision 比對，取得 verdict + confidence + reason
-   c. 更新 aiVerification + 依 verdict 更新 status
-7. 建立並儲存 HazardReport document
-8. 回傳 201 + 回報資料
+      → 距離 > 50m → 400 INVALID_INPUT，data.reason = EXIF_GPS_MISMATCH
+4. 上傳照片至 GCS（adapters/gcs.adapter.ts）
+5. 建立並儲存 HazardReport document（aiVerification.verdict 先以 'skipped' 佔位）
+6. 回傳 201 + 回報資料（含 _id 供前端輪詢）
+7. 非同步觸發 AI 影像辨識（hazard-report.ai-verify.ts，不阻擋回應）
+   a. 階段一：Cloud Vision 物件偵測 + SafeSearch（reportedLocation 不參與）
+      → SafeSearch 判定不雅／暴力／spoof → prefilter.passed=false，verdict='rejected'，跳過 Gemini
+   b. 階段二：Gemini 單圖語意判斷（帶入偵測標籤作提示）→ verdict + confidence + reason
+   c. updateOne：更新 aiVerification + 依 verdict 更新 status
 ```
 
-> ⚠️ **設計說明**：步驟 6 AI 比對採**非同步觸發**——照片上傳後，後端先回傳 `201 pending`，再以非同步方式執行 Gemini Vision 比對並更新 `aiVerification` 與 `status`。前端可透過 `GET /reports/:id` 輪詢或接受推播（本期未納入）。
+> ⚠️ **設計說明（非同步 + 輪詢）**：步驟 5 先建立文件並於步驟 6 回傳 `201`，**回應務必包含 `_id`**——前端據此向 `GET /reports/:id` 輪詢，待步驟 7 的 AI 辨識完成後即可讀到更新後的 `aiVerification` 與 `status`（推播本期未納入）。AI 辨識為兩階段（Cloud Vision 預篩 → Gemini），任一階段失敗皆 fail-soft（見 §6），不影響此 201 回應。
 
 **成功回應（201）**
 
@@ -372,6 +446,7 @@ export const CreateHazardReportSchema = z.object({
   "data": {
     "report": {
       "_id": "6670abc123def456",
+      "reporterId": "665f0011aa22bb33cc44dd55",
       "hazardType": "obstacle",
       "reportedLocation": {
         "type": "Point",
@@ -388,7 +463,7 @@ export const CreateHazardReportSchema = z.object({
       "aiVerification": {
         "verdict": "skipped",
         "confidence": 0,
-        "reason": "影像比對進行中"
+        "reason": "影像辨識進行中"
       },
       "confirmCount": 0,
       "denyCount": 0,
@@ -401,16 +476,19 @@ export const CreateHazardReportSchema = z.object({
 
 **錯誤回應**
 
-| HTTP | code | message | 說明 |
+> envelope 的 `code` 欄位 = HTTP 狀態（`ResponseCode` enum）；領域錯誤類別放 `data.reason`（建議集中為 `HAZARD_REASON` 常數）。下表 reason 即 `data.reason`。
+
+| HTTP（ResponseCode） | data.reason | message | 說明 |
 |------|------|---------|------|
-| 400 | `GEOFENCE_VIOLATION` | 使用者位置距回報地點超過 20 公尺 | Haversine 距離 > 20m |
-| 400 | `EXIF_TOO_OLD` | 照片拍攝時間距回報時間超過 10 分鐘 | 疑似從相簿選取 |
-| 400 | `EXIF_GPS_MISMATCH` | 照片 GPS 位置與宣稱位置不符 | EXIF GPS ↔ reporterLocation > 50m |
-| 400 | `PHOTO_REQUIRED` | 未上傳照片 | Multer 未收到 photo 欄位 |
-| 400 | `PHOTO_TOO_LARGE` | 照片超過 10MB | Multer 檔案大小限制 |
-| 400 | `INVALID_PHOTO_TYPE` | 僅接受 JPEG 或 PNG | MIME type 不符 |
-| 429 | `RATE_LIMITED` | 回報提交過於頻繁，請稍後再試 | Rate limit 觸發 |
-| 500 | `UPLOAD_FAILED` | 照片上傳失敗，請重試 | GCS 上傳錯誤 |
+| 401 / 403（auth middleware） | —（由 middleware 回應） | Unauthorized / Forbidden | token 過期→401、缺少/無效→403；在 controller 之前攔截 |
+| 400 `INVALID_INPUT` | `GEOFENCE_VIOLATION` | 使用者位置距回報地點超過 20 公尺 | Haversine 距離 > 20m |
+| 400 `INVALID_INPUT` | `EXIF_TOO_OLD` | 照片拍攝時間距回報時間超過 10 分鐘 | 疑似從相簿選取 |
+| 400 `INVALID_INPUT` | `EXIF_GPS_MISMATCH` | 照片 GPS 位置與宣稱位置不符 | EXIF GPS ↔ reporterLocation > 50m |
+| 400 `INVALID_INPUT` | `PHOTO_REQUIRED` | 未上傳照片 | Multer 未收到 photo 欄位 |
+| 400 `INVALID_INPUT` | `PHOTO_TOO_LARGE` | 照片超過 10MB | Multer 檔案大小限制 |
+| 400 `INVALID_INPUT` | `INVALID_PHOTO_TYPE` | 僅接受 JPEG 或 PNG | MIME type 不符 |
+| 429 `TOO_MANY_REQUESTS` | `RATE_LIMITED` | 回報提交過於頻繁，請稍後再試 | Rate limit 觸發（需擴充 enum；見 §3.4） |
+| 500 `INTERNAL_ERROR` | `UPLOAD_FAILED` | 照片上傳失敗，請重試 | GCS 上傳錯誤 |
 
 ```json
 {
@@ -454,7 +532,7 @@ HazardReport.find({
   status: { $in: statusFilter },
   ...(hazardType ? { hazardType } : {}),
 })
-  .select('-photoStoragePath -confirmedBy -deniedBy')
+  .select('-reporterId -photoStoragePath -confirmedBy -deniedBy') // 公開查詢不洩漏回報者 ID
   .limit(limit)
 ```
 
@@ -481,7 +559,7 @@ HazardReport.find({
         "aiVerification": {
           "verdict": "verified",
           "confidence": 0.87,
-          "reason": "照片顯示與街景相符之施工現場，可見鐵板障礙"
+          "reason": "照片為人行道實景，可見未固定施工鐵板，與宣稱障礙相符"
         },
         "confirmCount": 3,
         "denyCount": 0,
@@ -506,14 +584,14 @@ HazardReport.find({
 |------|------|
 | `id` | MongoDB ObjectId 字串 |
 
-**成功回應（200）**：回傳完整 `HazardReport` document（同 §5.3 格式）。
+**成功回應（200）**：回傳 `HazardReport` document（同 §5.3 格式，公開端點同樣以 `.select('-reporterId -photoStoragePath -confirmedBy -deniedBy')` 隱藏回報者 ID 與內部欄位）。前端輪詢即打此端點讀取最新 `status` / `aiVerification`。
 
 **錯誤回應**
 
-| HTTP | code | message |
+| HTTP（ResponseCode） | data.reason | message |
 |------|------|---------|
-| 400 | `INVALID_ID` | 無效的回報 ID 格式 |
-| 404 | `REPORT_NOT_FOUND` | 找不到對應的回報 |
+| 400 `INVALID_INPUT` | `INVALID_ID` | 無效的回報 ID 格式 |
+| 404 `NOT_FOUND` | `REPORT_NOT_FOUND` | 找不到對應的回報 |
 
 ---
 
@@ -563,58 +641,128 @@ HazardReport.find({
 
 **錯誤回應**
 
-| HTTP | code | message |
+| HTTP（ResponseCode） | data.reason | message |
 |------|------|---------|
-| 400 | `INVALID_ID` | 無效的回報 ID 格式 |
-| 400 | `ALREADY_VOTED` | 您已對此回報投過票 |
-| 404 | `REPORT_NOT_FOUND` | 找不到對應的回報 |
-| 410 | `REPORT_EXPIRED` | 此回報已過期，無法投票 |
+| 400 `INVALID_INPUT` | `INVALID_ID` | 無效的回報 ID 格式 |
+| 400 `INVALID_INPUT` | `ALREADY_VOTED` | 您已對此回報投過票 |
+| 404 `NOT_FOUND` | `REPORT_NOT_FOUND` | 找不到對應的回報 |
+| 410 `GONE` | `REPORT_EXPIRED` | 此回報已過期，無法投票（需擴充 enum；見 §3.4） |
+
+---
+
+### 5.6 GET /api/v1/a11y/reports/mine — 查詢我的回報紀錄
+
+**認證**：**JWT 必要**（未登入由共用 auth middleware 回 401/403）。`reporterId` 取自 `req.auth.userId`，使用者僅能查得自己的回報。
+
+**Query Parameters**
+
+| 參數 | 型別 | 必要 | 說明 |
+|------|------|------|------|
+| `status` | string | 選用 | 過濾狀態（`pending` \| `verified` \| `rejected` \| `expired`，逗號分隔）；預設**全部**（含 `expired`，供使用者檢視歷史） |
+| `hazardType` | string | 選用 | 過濾回報類型 |
+| `limit` | number | 選用 | 回傳筆數上限，預設 20，最大 50 |
+| `cursor` | string | 選用 | 分頁游標（前一頁最後一筆的 `_id`），依 `createdAt` 由新到舊 |
+
+**查詢邏輯**
+
+```typescript
+// 依 reporterId 過濾，最新在前；不做地理排序
+HazardReport.find({
+  reporterId,                              // 來自 JWT，非 query 參數
+  ...(statusFilter ? { status: { $in: statusFilter } } : {}),
+  ...(hazardType ? { hazardType } : {}),
+  ...(cursor ? { _id: { $lt: cursor } } : {}),
+})
+  .select('-photoStoragePath -confirmedBy -deniedBy')
+  .sort({ createdAt: -1 })
+  .limit(limit)
+```
+
+**成功回應（200）**
+
+```json
+{
+  "ok": true,
+  "status": "success",
+  "code": 200,
+  "message": "找到 3 筆您的回報",
+  "data": {
+    "reports": [
+      {
+        "_id": "6670abc123def456",
+        "reporterId": "665f0011aa22bb33cc44dd55",
+        "hazardType": "obstacle",
+        "status": "expired",
+        "description": "人行道上有施工鐵板未固定",
+        "photoUrl": "https://storage.googleapis.com/bucket/reports/6670abc123def456.jpg",
+        "aiVerification": { "verdict": "verified", "confidence": 0.87, "reason": "..." },
+        "confirmCount": 3,
+        "denyCount": 0,
+        "createdAt": "2026-06-17T08:30:00.000Z",
+        "expiredAt": "2026-06-17T14:30:00.000Z"
+      }
+    ],
+    "total": 3,
+    "nextCursor": "6670abc123def456"
+  }
+}
+```
+
+**錯誤回應**
+
+| HTTP（ResponseCode） | data.reason | message |
+|------|------|---------|
+| 401 / 403（auth middleware） | —（由 middleware 回應） | Unauthorized / Forbidden |
 
 ---
 
 ## 6. 外部服務整合
 
-### 6.1 Google Street View Static API（參考影像來源）
+> **為何不採用街景／衛星參考影像比對？** 早期設計曾以 Google Street View Static / Static Maps 衛星圖作為比對基準，但**街景與衛星圖在台灣常為 1～5 年前的舊圖**，而路況回報的本質是「**新出現**的暫時障礙（施工、占道、破損）」——拿即時照片去比對舊參考圖，對「現在是否有障礙」沒有判斷力；而「是否在宣稱地點拍攝」已由 EXIF GPS（§6.3）把關。因此移除參考影像比對，AI 改為**對單張使用者照片做辨識**，分兩階段如下。
 
-**用途**：取得回報地點的街景或衛星影像，作為 AI 影像比對的基準。
+### 6.1 Google Cloud Vision API（第一階段：影像預篩，`adapters/vision.adapter.ts`）
 
-**請求格式**
+**用途**：在呼叫 LLM 前，先以低成本、確定性的傳統 CV 過濾明顯不合格的圖（不雅、無關、純色／截圖），並擷取物件標籤作為第二階段的提示。
+
+**呼叫**：`@google-cloud/vision` SDK，對使用者照片 buffer 同時做兩種偵測：
+
+| 偵測 | 用途 |
+|------|------|
+| `labelDetection` / `objectLocalization` | 取得物件標籤（如 `Construction`、`Traffic cone`、`Fence`、`Sidewalk`、`Road`），作為 Gemini 判斷的提示，並判別是否為戶外街景 |
+| `safeSearchDetection` | 偵測 `adult` / `violence` / `racy` / `spoof`，擋下濫用或惡意圖 |
+
+**預篩判定**
 
 ```
-GET https://maps.googleapis.com/maps/api/streetview
-  ?size=640x640
-  &location={lat},{lng}
-  &fov=80
-  &heading=0
-  &key={GOOGLE_MAPS_API_KEY}
+1. SafeSearch：adult / violence / racy 任一為 LIKELY 或 VERY_LIKELY，或 spoof 為 VERY_LIKELY
+   → prefilter.passed = false，prefilter.safeSearchBlocked = true
+   → verdict = 'rejected'，confidence = 1，reason = '影像未通過安全檢測'
+   → 直接結束，不呼叫 Gemini（省成本）
+2. 其餘情形：prefilter.passed = true，detectedLabels = 取信心度前幾名標籤
+   → 進入第二階段（Gemini）
 ```
 
-**策略**：
-
-1. 以回報地點座標查詢 Street View Static，取 640×640 JPEG。
-2. 若 Street View 回傳 ZERO_RESULTS（無街景覆蓋），改以 **Static Maps API** 取衛星影像（`maptype=satellite`）。
-3. 參考影像 URL 記錄於 `aiVerification.referenceImageUrl`，供後續稽核。
-
-> ⚠️ **待確認**：Street View Static 每次呼叫計費，建議評估是否以 URL hash 快取（Redis，TTL 7 天）減少重複查詢。使用的 API Key 為現有的 `GOOGLE_MAPS_API_KEY`（`src/config/map.ts`）。
+> 設計取捨：預篩**只在 SafeSearch 命中時硬擋**；「是否拍到障礙、地點是否合理」這類語意判斷交給 Gemini，避免 Cloud Vision 標籤集涵蓋不足而誤殺真實回報。偵測標籤僅作為 Gemini 的 context hint，不單獨決定 verdict。
+>
+> **認證**：Cloud Vision 與 GCS 同屬一個 GCP 專案，沿用 `GCS_KEY_FILE`（service account）或 Workload Identity，無需額外金鑰。需在 GCP 啟用 Cloud Vision API。可由 `USE_VISION_PREFILTER=false` 關閉預篩（直接進 Gemini）。
 
 ---
 
-### 6.2 Gemini Vision 影像比對（`src/service/hazard-ai-verify.service.ts`）
+### 6.2 Gemini 單圖語意判斷（第二階段，`adapters/ai-vision.adapter.ts`，由 `hazard-report.ai-verify.ts` 協調）
 
 **模型**：`gemini-2.5-flash`（`GEMINI_MODEL` 環境變數，與現有 AI 功能共用設定）
 
-**呼叫方式**：使用現有的 OpenAI 相容端點（`GEMINI_API_URL`），以 multimodal message 傳入兩張圖（Street View 參考 + 使用者上傳）。
+**呼叫方式**：使用現有的 OpenAI 相容端點（`GEMINI_API_URL`），以 multimodal message 傳入**單張使用者照片**，並在文字部分附上 `hazardType`、`description` 與第一階段的 `detectedLabels` 作為提示。**不再傳入街景／衛星參考圖**。
 
 **Prompt 設計（系統指令）**
 
 ```
-你是一個路況回報真實性驗證助手。你會收到兩張圖片：
-第一張是 Google Street View 或衛星圖（參考影像），
-第二張是使用者在現場即時拍攝的照片。
+你是一個路況回報真實性驗證助手。你會收到一張使用者在現場即時拍攝的照片，
+以及該回報所宣稱的障礙類型與（可能的）物件標籤提示。
 
-請判斷：
-1. 兩張照片是否拍攝自相同或鄰近的實際地點？
-2. 照片中是否有可見的路況障礙（障礙物、施工、破損等）？
+請僅根據這張照片判斷：
+1. 這是否為真實的戶外街道／人行道場景（而非截圖、室內自拍、純色圖或與路況無關的圖）？
+2. 照片中是否可見與宣稱類型相符的路況障礙（obstacle 障礙物 / construction 施工 / data_error 標示或設施錯誤）？
 
 請以 JSON 格式回傳以下欄位：
 {
@@ -624,9 +772,9 @@ GET https://maps.googleapis.com/maps/api/streetview
 }
 
 判斷標準：
-- verified：場景地點相符，且照片中可見合理障礙
-- suspicious：場景疑似相符但障礙不明確，或地點稍有偏差
-- rejected：照片與參考場景明顯不符，或無任何障礙可見
+- verified：確為戶外路況場景，且可見與宣稱類型相符的合理障礙
+- suspicious：像戶外場景但障礙不明確，或與宣稱類型不完全相符
+- rejected：明顯非戶外路況場景（截圖／室內／無關），或完全看不到任何障礙
 ```
 
 **回傳解析**
@@ -643,10 +791,11 @@ interface AiVerifyResult {
 
 | 情境 | 處理 |
 |------|------|
+| Cloud Vision 預篩呼叫失敗 | 略過預篩、直接進 Gemini（`prefilter.passed` 留空）；不阻擋流程 |
 | Gemini API 呼叫失敗 | `verdict: 'skipped'`，`confidence: 0`，`reason: 'AI 服務暫時不可用'`，`status` 維持 `pending` |
-| Street View ZERO_RESULTS | 改用 Static Maps 衛星圖；若仍失敗則 `verdict: 'skipped'` |
 | JSON 解析失敗 | `verdict: 'skipped'` |
 | 超時（10 秒） | `verdict: 'skipped'` |
+| `USE_HAZARD_AI_VERIFY=false` | 兩階段皆跳過，`verdict: 'skipped'`，`status` 維持 `pending` |
 
 ---
 
@@ -690,7 +839,7 @@ interface AiVerifyResult {
 ### 7.2 上傳流程
 
 ```typescript
-// src/service/storage.service.ts
+// src/adapters/gcs.adapter.ts
 async function uploadHazardPhoto(
   buffer: Buffer,
   reportId: string,
@@ -700,8 +849,8 @@ async function uploadHazardPhoto(
 
 ### 7.3 生命週期
 
-- 照片與 `HazardReport` document 同步存活；
-- `expiredAt` TTL 到期後，建議由定時任務（Cloud Scheduler 或 Node.js cron）刪除對應 GCS 物件，避免無效存儲累積。
+- 照片與 `HazardReport` document 同步**長期保留**——回報到期僅標記 `status='expired'`（§4.2），不刪除文件，照片亦保留供歷史查詢與人工複核。
+- 由於要保留歷史，**不**在 `expiredAt` 到期時刪照片。若日後儲存量需控管，再另立**獨立的長週期封存／清理**機制（例如保留 1 年後轉冷儲存或刪除），與「過期」狀態解耦，並同步刪 GCS 物件與標記文件。
 
 ---
 
@@ -747,13 +896,14 @@ const existing = await HazardReport.findOne({
 
 | Phase | 功能 | 優先度 | 依賴 |
 |-------|------|--------|------|
-| **S1** | 基礎架構：`HazardReport` model、Multer 中介層、Zod schema、路由掛載 | Critical | — |
-| **S2** | `POST /reports`：地理柵欄 + EXIF 驗證 + GCS 上傳 + document 建立（AI 比對先以 `skipped` 佔位） | Critical | S1 |
-| **S3** | `GET /reports`、`GET /reports/:id`：地理查詢端點 | High | S1 |
+| **S1** | 基礎架構：`HazardReport` model、Multer 中介層、Zod schema、路由掛載（`POST /` 與 `GET /mine` 掛 JWT auth） | Critical | — |
+| **S2** | `POST /reports`：JWT 驗證 + 地理柵欄 + EXIF 驗證 + GCS 上傳 + document 建立（AI 辨識先以 `skipped` 佔位） | Critical | S1 |
+| **S3** | `GET /reports`、`GET /reports/:id`、`GET /reports/mine`：查詢端點 | High | S1 |
 | **S3** | `POST /reports/:id/confirm`：社群確認端點 | High | S1 |
-| **S4** | `hazard-ai-verify.service.ts`：Street View 取圖 + Gemini Vision 比對 + 非同步 status 更新 | High | S2 |
+| **S4** | `hazard-report.ai-verify.ts` + `adapters/vision.adapter.ts` + `adapters/ai-vision.adapter.ts`：Cloud Vision 預篩 + Gemini 單圖判斷 + 非同步 status 更新 | High | S2 |
 | **S5** | Rate limit（`express-rate-limit` + Redis）+ 同地點重複回報合併 | Medium | S1 |
-| **S6** | GCS 照片生命週期清理任務（TTL 到期後刪除 bucket 物件） | Low | S2 |
+| **S6** | 過期標記定時任務（cron 將到期回報 `status` 設為 `expired`，文件與照片保留） | Medium | S2 |
+| **Future** | 長週期封存／清理：保留期滿後刪 GCS 物件並標記文件（與「過期」解耦） | Low | S6 |
 | **Future** | 環境感知路徑規劃：將 `verified` 回報餵入路徑評分以動態避開障礙（本期不納入，路徑規劃端另立規格） | — | 路徑規劃重構 |
 
 ---
@@ -768,35 +918,55 @@ src/
 │   └── hazard-report.model.ts
 ├── modules/
 │   └── hazard-report/
+│       ├── index.ts                    # export { createHazardReportRouter }
+│       ├── hazard-report.router.ts
+│       ├── hazard-report.schema.ts
 │       ├── hazard-report.controller.ts
 │       ├── hazard-report.service.ts
-│       ├── hazard-report.router.ts
-│       └── hazard-report.schema.ts
-└── service/
-    └── storage.service.ts
+│       └── hazard-report.type.ts
+└── adapters/
+    └── gcs.adapter.ts                  # 照片上傳/刪除（I/O 層）
 ```
 
-**掛載路由**：在現有 `src/routes/a11y.route.ts` 引入 `hazard-report.router.ts`：
+**修改既有檔案（共用 spine，見 §3.4）**：`src/app.ts`（掛載一行）、`src/middleware/middleware.ts` + `src/types/express.d.ts`（注入 `req.auth`）、`src/types/code.ts`（`GONE`/`TOO_MANY_REQUESTS`）、`src/constants/messages.ts`（`HAZARD_REASON`）、`src/openapi/registry.ts`（註冊 schema）。
+
+**掛載方式**：沿用現有 `createXRouter()` 慣例——`index.ts` 匯出 `createHazardReportRouter()`，在 `src/app.ts` 加**一行**（與 `createA11yRouter` 等並列同前綴）：
 
 ```typescript
-import hazardReportRouter from '../modules/hazard-report/hazard-report.router'
-router.use('/reports', hazardReportRouter)
+// src/app.ts
+import { createHazardReportRouter } from "./modules/hazard-report";
+app.use("/api/v1/a11y", createHazardReportRouter());
+```
+
+```typescript
+// src/modules/hazard-report/hazard-report.router.ts — 逐路由掛 auth（僅 POST / 與 GET /mine）
+export function createHazardReportRouter(): Router {
+  const router = Router();
+  router.post("/reports", middleware, uploadPhoto, validateRequest({ body: CreateHazardReportSchema }), createReport);
+  router.get("/reports/mine", middleware, validateRequest({ query: MyReportsQuerySchema }), getMyReports);
+  router.get("/reports", validateRequest({ query: NearbyReportsQuerySchema }), getNearbyReports);
+  router.get("/reports/:id", validateRequest({ params: ReportIdParamSchema }), getReport);
+  router.post("/reports/:id/confirm", validateRequest({ params: ReportIdParamSchema, body: ConfirmSchema }), confirmReport);
+  return router;
+}
 ```
 
 ---
 
-### S4 詳細：AI 影像比對服務
+### S4 詳細：AI 影像辨識服務
 
-**新增檔案**：`src/service/hazard-ai-verify.service.ts`
+**新增檔案**：`src/modules/hazard-report/hazard-report.ai-verify.ts`（domain 協調）、`src/adapters/vision.adapter.ts`、`src/adapters/ai-vision.adapter.ts`（I/O）；JSON/EXIF 解析放 `hazard-report.parse.ts`。
 
 **流程**
 
 ```
-1. 以 reportedLocation 呼叫 Street View Static API → 取得參考影像 buffer
-2. 讀取 GCS 已上傳的使用者照片（或從 buffer 直接傳入，避免二次下載）
-3. 以 Gemini Vision（@google/genai SDK）multimodal 呼叫
-4. 解析 JSON verdict
-5. updateOne HazardReport：aiVerification + status
+1. 取得使用者照片 buffer（從 POST 流程直接傳入，避免從 GCS 二次下載）
+2. 階段一 Cloud Vision（@google-cloud/vision）：labelDetection + objectLocalization + safeSearchDetection
+   → SafeSearch 命中 → verdict='rejected'，prefilter.safeSearchBlocked=true，結束
+   → 否則 prefilter.passed=true，detectedLabels=前幾名標籤
+3. 階段二 Gemini（OpenAI 相容端點）：單圖 + hazardType/description/detectedLabels 提示 → JSON verdict
+4. 解析 JSON verdict（解析失敗 → 'skipped'）
+5. updateOne HazardReport：aiVerification（含 prefilter）+ 依 verdict 更新 status
 ```
 
 ---
@@ -809,26 +979,32 @@ router.use('/reports', hazardReportRouter)
 
 | 測試案例 | 輸入條件 | 預期結果 |
 |---------|---------|---------|
-| 正常提交 | 距離 < 20m、EXIF 時間新鮮、GPS 吻合 | 201 pending，文件建立 |
+| 未登入提交 | 無 JWT 或 token 無效 | 401/403（auth middleware 攔截） |
+| 正常提交 | 已登入、距離 < 20m、EXIF 時間新鮮、GPS 吻合 | 201 pending，文件建立且帶 reporterId 與 _id |
 | 地理柵欄拒絕 | reporterLocation 距 reportedLocation 25m | 400 GEOFENCE_VIOLATION |
 | EXIF 過舊 | 照片拍攝於 15 分鐘前 | 400 EXIF_TOO_OLD |
 | EXIF GPS 不符 | EXIF GPS 距 reporterLocation 100m | 400 EXIF_GPS_MISMATCH |
 | 無 EXIF 照片 | 截圖或純白圖 | 400 EXIF_TOO_OLD |
-| AI skipped 情境 | Gemini API Key 無效 | 201 pending，verdict: skipped |
-| 附近查詢 | lat/lng/radius 正常值 | 200，回傳距離排序清單 |
+| SafeSearch 擋下 | 上傳不雅／無關圖（通過 EXIF） | 非同步後 verdict: rejected，prefilter.safeSearchBlocked: true |
+| AI skipped 情境 | Gemini API Key 無效 | 201 pending，非同步後 verdict: skipped |
+| 我的回報 | 已登入查 /mine | 200，僅回傳該 reporterId 的回報（含 expired） |
+| 我的回報未登入 | 無 JWT 查 /mine | 401/403（auth middleware 攔截） |
+| 附近查詢 | lat/lng/radius 正常值 | 200，回傳距離排序清單（排除 expired） |
 | 超出範圍查詢 | radius=10000（超過 5000m 上限） | 400 驗證錯誤 |
 | 重複同地點回報 | 50m 內已有相同 hazardType pending 回報 | 200 merged:true，confirmCount+1 |
 | Rate limit | 同 IP 1 分鐘內送 4 次 POST | 第 4 次 429 RATE_LIMITED |
 | 社群確認重複 | 同使用者對同回報 confirm 兩次 | 400 ALREADY_VOTED |
+| 過期標記 | 文件 expiredAt 已過、cron 執行後 | status 變 expired，文件仍存在、可由 /mine 查得 |
 
 ### 10.2 驗證重點
 
 - Haversine 計算正確性（20m 邊界值：19.9m 允許，20.1m 拒絕）
 - EXIF 時間解析：UTC 與本地時間差異處理
 - GCS 上傳後 `photoUrl` 可公開存取
-- MongoDB TTL index 在 `expiredAt` 後確實觸發刪除
+- 過期標記 cron 將到期文件設為 `expired` 且**不刪除**（保留歷史），`GET /reports` 不再回傳、`GET /reports/mine` 仍可查得
 - 2dsphere index 的 `$near` 查詢以距離正確排序
-- AI 比對非同步更新後，`GET /reports/:id` 反映最新 verdict
+- `reporterId` index 支援 `/mine` 查詢效能
+- AI 辨識非同步更新後，`GET /reports/:id` 反映最新 verdict 與 prefilter 結果
 
 ---
 
@@ -840,10 +1016,10 @@ router.use('/reports', hazardReportRouter)
 | `GCS_KEY_FILE` | GCS Service Account JSON 金鑰路徑（或使用 Workload Identity） | **必要**（GCS 認證） | — |
 | `HAZARD_REPORT_MAX_DISTANCE_M` | 地理柵欄最大允許距離（公尺） | 選配 | `20` |
 | `HAZARD_PHOTO_MAX_SIZE_MB` | 照片檔案大小上限（MB） | 選配 | `10` |
-| `STREET_VIEW_CACHE_TTL_SEC` | Street View 參考影像的 Redis 快取 TTL（秒） | 選配 | `604800`（7 天） |
-| `USE_HAZARD_AI_VERIFY` | `false` 時跳過 Gemini Vision 比對（省 API 費用 / 開發環境） | 選配 | `true` |
+| `USE_HAZARD_AI_VERIFY` | `false` 時跳過整個 AI 辨識（兩階段皆略過，省 API 費用 / 開發環境） | 選配 | `true` |
+| `USE_VISION_PREFILTER` | `false` 時跳過 Cloud Vision 預篩，直接進 Gemini | 選配 | `true` |
 
-> `GOOGLE_MAPS_API_KEY` 及 `GEMINI_API_KEY` / `GEMINI_API_URL` / `GEMINI_MODEL` 已存在於現有環境，無需重複新增。
+> `GEMINI_API_KEY` / `GEMINI_API_URL` / `GEMINI_MODEL` 已存在於現有環境，無需重複新增。Cloud Vision 沿用 `GCS_KEY_FILE`（同一 GCP 專案的 service account）認證，需在 GCP 啟用 Cloud Vision API。`GOOGLE_MAPS_API_KEY` 本系統已不再需要（移除街景後）。
 
 ---
 
@@ -852,6 +1028,7 @@ router.use('/reports', hazardReportRouter)
 | 套件 | 用途 | 版本建議 |
 |------|------|---------|
 | `@google-cloud/storage` | GCS Bucket 操作（上傳、刪除、取得 URL） | `^7.x` |
+| `@google-cloud/vision` | Cloud Vision 影像預篩（物件偵測、SafeSearch） | `^4.x` |
 | `exifr` | EXIF 解析（時間戳、GPS），支援 JPEG/HEIC | `^7.x` |
 | `multer` | multipart/form-data 照片解析 | `^1.x` |
 | `express-rate-limit` | IP-based rate limiting | `^7.x` |
@@ -867,6 +1044,7 @@ router.use('/reports', hazardReportRouter)
 
 | 職責 | 說明 |
 |------|------|
+| 登入把關 | 回報與「我的回報」前確認使用者已登入並附上 JWT；未登入引導登入（後端仍會以 401 把關） |
 | 即時相機啟動 | 強制開啟裝置相機 API，**禁止從相簿選取**，由前端 UI 層面限制 |
 | GPS 擷取 | 以 Geolocation API 取得使用者當前座標，傳入 `reporterLat/Lng` |
 | 回報表單 UI | 選擇 hazardType、輸入 description、拍照並預覽 |
@@ -880,9 +1058,9 @@ router.use('/reports', hazardReportRouter)
 |---------|------|
 | 地理柵欄計算 | 後端以 Haversine 重新計算，前端傳入座標僅作顯示用 |
 | EXIF 驗證 | 後端解析 EXIF，前端無法可靠讀取所有 MIME 類型的 EXIF |
-| AI 影像比對 | Gemini Vision 呼叫在後端執行，API Key 不外露 |
+| AI 影像辨識 | Cloud Vision 預篩與 Gemini 判斷皆在後端執行，金鑰不外露 |
 | 相簿選取限制邏輯 | **後端補強**：EXIF 時間戳與 GPS 驗證是防相簿選取的後端把關機制；前端相機限制屬 UX 層，後端驗證才是實質關卡 |
-| 照片上傳至 GCS | storage.service.ts 在後端處理，GCS 憑證不外露 |
+| 照片上傳至 GCS | adapters/gcs.adapter.ts 在後端處理，GCS 憑證不外露 |
 
 ---
 
@@ -891,9 +1069,9 @@ router.use('/reports', hazardReportRouter)
 | 風險 | 影響 | 緩解策略 |
 |------|------|---------|
 | **EXIF 剝除**：部分裝置或社群媒體 App 自動剝除 EXIF | EXIF 驗證失效，回報被擋 | 無 EXIF GPS 時允許僅以時間戳驗證（降級允許），但記錄 `gpsPresent: false` 作為信心度參考 |
-| **EXIF 偽造**：進階使用者手動修改 EXIF 後再拍照 | 繞過時間戳與 GPS 驗證 | Gemini Vision 比對為獨立第二道過濾；可評估加入 perceptual hash 比對（未來選項） |
-| **Gemini Vision 誤判**：場景外觀相似但地點不同 | `suspicious/rejected` 誤殺真實回報 | AI verdict 不直接刪除回報，`rejected` 需社群否認達門檻或人工複核才真正排除 |
-| **GCS 費用失控**：大量照片上傳 | 雲端費用超出預期 | Multer 檔案大小 10MB 上限 + rate limit 3 次/10 分鐘；TTL 到期後清理過期照片 |
-| **Street View API 費用**：每次回報觸發一次 Street View 呼叫 | Maps API 費用 | Redis 快取相同座標的 Street View URL（TTL 7 天）；`USE_HAZARD_AI_VERIFY=false` 可關閉 |
+| **EXIF 偽造**：進階使用者手動修改 EXIF 後再拍照 | 繞過時間戳與 GPS 驗證 | AI 辨識（Cloud Vision + Gemini）為獨立第二道過濾；可評估加入 perceptual hash 比對（未來選項） |
+| **AI 誤判**：照片語意判斷錯誤、或非戶外場景被誤放行 | `suspicious/rejected` 誤殺真實回報，或濫用圖漏接 | AI verdict 不直接刪除回報，`rejected` 需社群否認達門檻或人工複核才真正排除；SafeSearch 硬擋僅限明確不雅／暴力 |
+| **GCS 費用 / 儲存累積**：保留歷史使照片不隨過期刪除 | 長期儲存成本上升 | Multer 檔案大小 10MB 上限 + rate limit 3 次/10 分鐘；長週期封存／清理列入 Roadmap Future（§9）與「過期」解耦 |
+| **Cloud Vision 費用**：每則回報觸發一次預篩 | Vision API 費用 | 費用低於 LLM；可由 `USE_VISION_PREFILTER=false` 或 `USE_HAZARD_AI_VERIFY=false` 關閉 |
 | **環境感知路徑規劃整合**：本期回報未餵入路徑評分，使用者期待路線自動避障 | 功能落差 | Roadmap Future 列入；本期文件及前端應明確說明「回報供顯示，路線規劃不受影響」 |
 | **TDX 額度**：Hazard Report 系統本身不呼叫 TDX，但若未來整合路徑規劃，附近回報查詢可能觸發更多 TDX 路線查詢 | 429 rate limit | 整合時參照 [[tdx-quota-and-data-drift]] 的緩解策略 |
