@@ -5,13 +5,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev       # Start dev server with hot reload (ts-node via nodemon + dotenvx)
-npm run build     # Compile TypeScript → dist/
-npm start         # Run compiled dist/server.js
-npm run clean     # Delete dist/
+npm run dev        # Dev server with hot reload (nodemon + ts-node via dotenvx)
+npm run build      # Compile TypeScript → dist/ (prebuild runs clean first)
+npm start          # Run compiled dist/server.js
+npm run clean      # Delete dist/
+npm test           # Run tests once (vitest)
+npm run test:watch # Vitest in watch mode
 ```
 
-There is no test framework configured.
+Tests use **vitest**; specs live next to the code as `*.test.ts` (e.g. `src/modules/accessible-route/scoring.test.ts`, `ranking.test.ts`, `nav-instructions.service.test.ts`).
+
+Data-import scripts run via dotenvx + ts-node and populate MongoDB from TDX / GTFS / OSM sources — e.g. `npm run import:gtfs-all`, `npm run import:tdx-tra`, `npm run import:osm`. See `package.json` for the full list (`src/scripts/*`).
 
 ## Environment Variables
 
@@ -26,67 +30,95 @@ Copy `.env.example` to `.env`. Required variables:
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | JWT signing |
 | `DATABASE_URL` | MongoDB connection URI |
 | `TDX_CLIENT_ID` / `TDX_CLIENT_SECRET` | Taiwan transport data API credentials |
-| `USE_OTP_ROUTER` | Phase 16 OTP2 planner rollout: `false` \| `shadow` (log diff only) \| `true` (merge) |
+| `USE_OTP_ROUTER` | OTP2 planner rollout: `false` \| `shadow` (log diff only) \| `true` (merge) |
 | `OTP_BASE_URL` | OTP2 sidecar GraphQL server (default `http://localhost:8080`, internal only) |
 | `GEMINI_API_URL` | OpenAI-compatible base URL for the AI API (default: Gemini's `/v1beta/openai` endpoint) |
 | `GEMINI_MODEL` | Model name used by all AI features (default: `gemini-2.5-flash`) |
 
 ## Architecture
 
+This is a **layered, single-direction** backend (clean-architecture). A request flows one way and each file's suffix declares its job. Dependencies only point inward/forward — a router never calls a service directly, and a service never touches `req`/`res`.
+
 ### Request flow
 
 ```
-client → app.ts (Express) → routes/ → controller/ → (model/ | config/ | service/)
+client → src/app.ts (Express, single /api/v1 prefix)
+       → modules/<feature>/<feature>.router.ts   transport: path + middleware chain, delegate to one controller
+       → [middleware] auth (protected routes) → validateRequest(schema)
+       → <feature>.controller.ts                 handler: read req.validated / identity, call ONE service method
+       → <feature>.service.ts                    domain: business logic + orchestration, no req/res
+       → adapters/*.adapter.ts | model/*.model.ts | config/*
+       → sendResponse() → envelope
 ```
 
-`/api/user/*` routes pass through `middleware/middleware.ts` (JWT auth). All other routes are public. The auth middleware bypasses validation for `/login`, `/token`, `/refresh`, `/logout`.
+Each module exposes a `createXRouter()` factory via its `index.ts` (the single registration point) and is mounted with one line in `src/app.ts`.
 
-### Route groups
+### Layer conventions (where code goes)
 
-| Prefix | Route file | Domain |
+| Path | Role |
+|---|---|
+| `src/modules/<feature>/*.router.ts` | Route + middleware chain; delegates to one controller method |
+| `src/modules/<feature>/*.schema.ts` | Zod request schemas (edge validation); registered to OpenAPI |
+| `src/modules/<feature>/*.controller.ts` | Thin handler: read `req.validated` / identity, call one service, `sendResponse` |
+| `src/modules/<feature>/*.service.ts` | Business logic + orchestration; no framework objects |
+| `src/adapters/*.adapter.ts` | External I/O clients (`google.adapter.ts`, `tdx.adapter.ts`) — one source per file |
+| `src/model/*.model.ts` | Mongoose models |
+| `src/constants/messages.ts` | Shared message strings (no magic literals) |
+| `src/config/*` | Shared infra: `lib.ts` (envelope), `jwt.ts`, `redis.ts`, `fetch.ts`, `taipei-time.ts`, `transit.ts`, `ai.ts`, `ai/` |
+| `src/middleware/` | `middleware.ts` (JWT auth gate), `validate-request.middleware.ts` |
+| `src/openapi/` | Schema-driven docs — served at `/docs`, spec at `/api/v1/openapi.json` |
+| `src/utils/` | Pure helpers (e.g. `transit-text.ts`) |
+| `src/types/` | Shared types — `code.ts` = `ResponseCode` enum, `express.d.ts` augments `req.validated` / `req.auth` |
+
+> The legacy flat `routes/` / `controller/` / `service/` directories **no longer exist** — everything is under `modules/` + `adapters/`. Place new external I/O in `adapters/`, not a `service/` dir.
+
+### Route groups (all under `/api/v1`)
+
+| Prefix | Router factory | Domain |
 |---|---|---|
-| `/api/user` | `user.route.ts` | Auth (JWT-protected) |
-| `/api/transit` | `transit.route.ts` | Bus/train real-time data |
-| `/api/a11y` | `a11y.route.ts` | Accessibility places + AI chatbot |
+| `/api/v1/user` | `createUserRouter` | Auth — **mounted behind `middleware` (JWT)** in `app.ts` |
+| `/api/v1/transit` | `createTransitRouter` | Bus/train real-time data |
+| `/api/v1/a11y` | `createA11yRouter` | Accessibility places + bathrooms |
+| `/api/v1/a11y` | `createAccessibleRouteRouter` | `POST /accessible-route` planner |
+| `/api/v1/a11y` | `createNavInstructionsRouter` | Turn-by-turn navigation instructions |
+| `/api/v1/air` | `createAirRouter` | Air quality |
+| `/api/v1/ai` | `createAiRouter` | `/intent`, `/explain`, `/chat` |
+
+Three routers share the `/api/v1/a11y` prefix. Only `/api/v1/user` is wrapped in the auth middleware; all other routes are public.
+
+The auth middleware (`src/middleware/middleware.ts`) **gates** (token expired → 401, missing/invalid → 403) and bypasses `/login`, `/token`, `/refresh`, `/logout`. On success it now **injects** `req.auth = { userId, user }` (typed in `express.d.ts`), so controllers behind it (e.g. hazard-report's `POST /reports`, `GET /reports/mine`) read identity from `req.auth.userId` instead of re-decoding. Public routes that optionally use a token (e.g. hazard-report's `/confirm`) still call `verifyAccessToken` themselves since the middleware never ran. The JWT payload is `{ user }`. It is mounted whole on `/api/v1/user`, and applied **per-route** elsewhere (the hazard-report router chains it onto just its protected routes).
+
+### Validation
+
+`validateRequest({ body?, query?, params? })` (`src/middleware/validate-request.middleware.ts`) runs Zod schemas at the edge, writes the parsed values to `req.validated` (and overwrites `req.body` / `req.query` / `req.params`). On failure it returns `ResponseCode.INVALID_INPUT` (400) with `{ errors }`.
 
 ### Response shape
 
-All controllers use `sendResponse()` from `src/config/lib.ts`. The shape is:
+All controllers use `sendResponse()` from `src/config/lib.ts`:
 
 ```ts
 { ok, status, code, message, data?, accessToken? }
 ```
 
-The refresh token is set as an `httpOnly` cookie (not in the JSON body).
+`code` is the HTTP status from the `ResponseCode` enum (`src/types/code.ts` — currently 200/201/204/205/400/401/403/404/500; no 410/429). Domain-specific error categories go in `data` (e.g. `data.reason`), not in `code`. The refresh token is set as an `httpOnly` cookie, not in the JSON body.
 
 ### Agent Chat flow (`POST /api/v1/ai/chat`)
 
-The `aiChat` controller in `ai.chat.controller.ts` implements an **OpenAI-compatible streaming Agent**:
+`aiChat` in `src/modules/ai/ai.chat.controller.ts` implements an **OpenAI-compatible streaming agent**:
 
 1. **Request** — `{ model?, messages, stream?, temperature?, userLocation? }` (OpenAI Chat Completions format).
-2. **Tool loop (non-streaming)** — backend calls LLM with 7 local tools defined in `src/config/ai/tool.ts`. If the model returns `finish_reason: "tool_calls"`, the backend executes the matching function in `agent-tools.ts` and feeds results back. Loop repeats up to 5 times.
-3. **Streaming response** — after all tools are resolved, the final answer is streamed as SSE (`event: tool_call`, `event: tool_result`, then OpenAI delta chunks, ending with `data: [DONE]`).
+2. **Tool loop (non-streaming)** — the backend calls the LLM with the local tools declared in `src/config/ai/tool.ts`. If the model returns `finish_reason: "tool_calls"`, the matching function in `src/modules/ai/agent-tools.ts` runs and the result feeds back. Repeats up to 5 times.
+3. **Streaming response** — the final answer streams as SSE (`event: tool_call`, `event: tool_result`, then OpenAI delta chunks, ending with `data: [DONE]`).
 
-The 7 tools: `findGooglePlaces`, `findA11yPlaces` (upgraded with OsmA11y), `planAccessibleRoute` (calls `findAccessibleRoutes`), `getBusArrivalEstimate`, `getBusPosition`, `getAirQuality`, `getA11yFacilityDetails`.
-
-### AI chatbot flow (`POST /api/a11y/chatbot`)
-
-The `a11yAISuggestion` controller in `a11y.controller.ts` implements a two-step Gemini tool-calling loop:
-
-1. **First call** — Gemini may return a function call (`findGooglePlaces`, `findA11yPlaces`, or `planRoute`) instead of text.
-2. **Tool execution** — the matching function in `ai.controller.ts` runs (queries Google Places or MongoDB).
-3. **Second call** — the tool result is fed back to Gemini (`role: "tool"`) and a final text response is produced.
-
-AI configs (temperature, response schema, tool declarations) live in `src/config/ai/`. The model is `gemini-2.5-flash` (`src/config/ai.ts`).
+Agent tools include `findGooglePlaces`, `findA11yPlaces`, `planAccessibleRoute`, `getBusArrivalEstimate`, `getBusPosition`, `getAirQuality`, `getA11yFacilityDetails`. The `ai` module also exposes `POST /api/v1/ai/intent` (`aiIntent`) and `POST /api/v1/ai/explain` (`aiExplain`). AI configs (temperature, response schema, tool declarations) live in `src/config/ai/` (`config.ts`, `contents.ts`, `tool.ts`) and `src/config/ai.ts`; default model `gemini-2.5-flash`.
 
 ### TDX transit API
 
-`src/service/TdxTokenManger.ts` is a singleton that handles OAuth2 `client_credentials` token acquisition and caching for the Taiwan transport data platform. All TDX HTTP calls go through `tdxFetch()` in `src/config/fetch.ts`, which auto-attaches the Bearer token and retries once on 401.
+`TdxTokenManager` (exported as the `tdxTokenManager` singleton) in `src/adapters/tdx.adapter.ts` handles OAuth2 `client_credentials` token acquisition + caching for the Taiwan transport data platform. All TDX HTTP calls go through `tdxFetch()` in `src/config/fetch.ts`, which attaches the Bearer token and retries once on 401. Bus route type (city vs. inter-city) is auto-detected from the route name by `detectBusApiType()` in `src/utils/transit-text.ts`.
 
-Bus route type (city vs. inter-city) is auto-detected from the route name by `detectBusApiType()` in `src/config/lib.ts`.
+### MongoDB models (`src/model/*.model.ts`)
 
-### MongoDB models
-
-- `A11y` — MRT elevator/ramp accessibility exits with a `2dsphere` index for geospatial `$near` queries.
-- `BathroomModel` — accessible bathrooms, also with geospatial queries.
-- `UserModel` — user accounts with bcrypt passwords.
+- `a11y.model.ts` — MRT elevator/ramp accessibility exits, `2dsphere` index for `$near` geospatial queries.
+- `bathroom.model.ts` — accessible bathrooms, also geospatial.
+- `user.model.ts` — user accounts.
+- Transit/routing data consumed by the accessible-route planner: `bus-stop`, `metro-station`, `train-station`, `osm-a11y`, and the GTFS models (`gtfs-stop`, `gtfs-trip`, `gtfs-pathway`, `gtfs-level`).
