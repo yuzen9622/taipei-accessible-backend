@@ -66,6 +66,42 @@ export interface ITdxBusStop {
   importedAt: Date;
 }
 
+export interface ITdxBusRouteStop {
+  stopUID: string;
+  stopId?: string;
+  stopName: { Zh_tw: string; En?: string };
+  seq: number;
+  lat?: number;
+  lng?: number;
+}
+
+export interface ITdxBusRoute {
+  subRouteUid: string;
+  routeUid: string;
+  routeId?: string;
+  city: string;
+  routeName: { Zh_tw: string; En?: string };
+  subRouteName?: { Zh_tw: string; En?: string };
+  direction: number;
+  operators: { id?: string; name?: string }[];
+  stops: ITdxBusRouteStop[];
+  importedAt: Date;
+}
+
+export interface ITdxBusVehicle {
+  plateNumb: string;
+  city: string;
+  operatorId?: string;
+  vehicleClass?: number;
+  vehicleType?: number;
+  isLowFloor?: number;
+  hasLiftOrRamp?: number;
+  isElectric?: number;
+  isHybrid?: number;
+  hasWifi?: number;
+  importedAt: Date;
+}
+
 export interface IOsmA11y {
   osmId: string;
   name?: string;

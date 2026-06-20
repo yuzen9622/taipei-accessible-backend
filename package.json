@@ -14,6 +14,8 @@
         "postinstall": "npm run build",
         "import:osm": "npx dotenvx run -- ts-node src/scripts/import-osm-a11y.ts",
         "import:tdx-stops": "npx dotenvx run -- ts-node src/scripts/import-tdx-stops.ts",
+        "import:tdx-bus-routes": "npx dotenvx run -- ts-node src/scripts/import-tdx-bus-routes.ts",
+        "import:tdx-bus-vehicles": "npx dotenvx run -- ts-node src/scripts/import-tdx-bus-vehicles.ts",
         "import:tdx-metro": "npx dotenvx run -- ts-node src/scripts/import-tdx-metro.ts",
         "import:tdx-thsr": "npx dotenvx run -- ts-node src/scripts/import-tdx-thsr.ts",
         "import:tdx-tra": "npx dotenvx run -- ts-node src/scripts/import-tdx-tra.ts",
