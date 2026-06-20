@@ -1,10 +1,17 @@
 import * as a11yService from "../a11y/a11y.service";
-import * as transitService from "../transit/transit.service";
+import * as busService from "../transit/bus.service";
 import * as airService from "../air/air.service";
-import { getCity, getCoordinates, searchPlaces } from "../../adapters/google.adapter";
-import { findAccessibleRoutes } from "../accessible-route/accessible-route.service";
-import type { AccessibleRoute, WalkLeg, BusLeg, MetroLeg, ThsrLeg, TraLeg } from "../accessible-route/accessible-route.service";
-import { TaiwanCityEn } from "../../types/transit";
+import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
+import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
+import type {
+  AccessibleRoute,
+  WalkLeg,
+  BusLeg,
+  MetroLeg,
+  ThsrLeg,
+  TraLeg,
+} from "../accessible-route/accessible-route.service";
+import type { TaiwanCityEn } from "../../types/transit";
 
 export async function findGooglePlaces(args: {
   query: string;
@@ -12,8 +19,12 @@ export async function findGooglePlaces(args: {
   longitude?: number;
 }): Promise<string> {
   try {
-    const places = await searchPlaces(args.query, { latitude: args.latitude, longitude: args.longitude });
-    if (!places.length) return JSON.stringify({ status: "ZERO_RESULTS", places: [] });
+    const places = await searchPlaces(args.query, {
+      latitude: args.latitude,
+      longitude: args.longitude,
+    });
+    if (!places.length)
+      return JSON.stringify({ status: "ZERO_RESULTS", places: [] });
     return JSON.stringify({ status: "OK", places });
   } catch (error: any) {
     console.error("[agent-tool:findGooglePlaces]", error.message);
@@ -35,21 +46,31 @@ export async function findA11yPlaces(args: {
     const coords = await getCoordinates(
       args.query,
       args.userLocation?.latitude,
-      args.userLocation?.longitude
+      args.userLocation?.longitude,
     );
     if (!coords) {
-      return JSON.stringify({ ok: false, message: `找不到地點「${args.query}」的座標` });
+      return JSON.stringify({
+        ok: false,
+        message: `找不到地點「${args.query}」的座標`,
+      });
     }
     searchLat = coords.latitude;
     searchLng = coords.longitude;
   }
 
   if (!searchLat || !searchLng) {
-    return JSON.stringify({ ok: false, error: "缺少位置資訊（query 或 lat/lng 必填）" });
+    return JSON.stringify({
+      ok: false,
+      error: "缺少位置資訊（query 或 lat/lng 必填）",
+    });
   }
 
   try {
-    const places = await a11yService.findNearbyLimited(searchLat, searchLng, searchRange);
+    const places = await a11yService.findNearbyLimited(
+      searchLat,
+      searchLng,
+      searchRange,
+    );
     return JSON.stringify({
       ok: true,
       searchLocation: { lat: searchLat, lng: searchLng, query: args.query },
@@ -62,10 +83,16 @@ export async function findA11yPlaces(args: {
 }
 
 function summarizeLeg(
-  leg: WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg
+  leg: WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg,
 ): Record<string, unknown> {
   if (leg.type === "WALK") {
-    return { type: "WALK", from: leg.from, to: leg.to, distanceM: leg.distanceM, minutesEst: leg.minutesEst };
+    return {
+      type: "WALK",
+      from: leg.from,
+      to: leg.to,
+      distanceM: leg.distanceM,
+      minutesEst: leg.minutesEst,
+    };
   }
   if (leg.type === "BUS") {
     return {
@@ -142,111 +169,159 @@ export async function planAccessibleRoute(args: {
   const { origin, destination, mode, departureTime } = args;
 
   try {
-    let originCoords: { latitude: number; longitude: number } | null;
-    if (origin === "current_location" && args.userLocation) {
-      originCoords = args.userLocation;
-    } else if (origin === "current_location") {
-      return JSON.stringify({ ok: false, error: "需要使用者位置以使用「目前位置」作為起點" });
-    } else {
-      originCoords = await getCoordinates(origin);
-    }
-
-    const destCoords = await getCoordinates(destination);
-
-    if (!originCoords) return JSON.stringify({ ok: false, error: `無法解析起點「${origin}」的座標` });
-    if (!destCoords) return JSON.stringify({ ok: false, error: `無法解析終點「${destination}」的座標` });
-
-    const city = (await getCity(originCoords.latitude, originCoords.longitude)) as TaiwanCityEn;
-
-    const parsedDeparture = departureTime ? new Date(departureTime) : undefined;
-    const futureDeparture =
-      parsedDeparture && !isNaN(parsedDeparture.getTime()) && parsedDeparture.getTime() > Date.now()
-        ? parsedDeparture
-        : undefined;
-
-    const validMode = ["wheelchair", "elderly", "visual_impaired", "normal"].includes(mode ?? "")
+    const validMode = [
+      "wheelchair",
+      "elderly",
+      "visual_impaired",
+      "normal",
+    ].includes(mode ?? "")
       ? (mode as "wheelchair" | "elderly" | "visual_impaired" | "normal")
       : "normal";
 
-    const routes = await findAccessibleRoutes(
-      { lat: originCoords.latitude, lng: originCoords.longitude },
-      { lat: destCoords.latitude, lng: destCoords.longitude },
-      city,
-      { mode: validMode, maxTransfers: 1, departureTime: futureDeparture, format: "standard" }
-    );
+    // "current_location" only resolves via the caller-injected GPS fix; every
+    // other origin and the destination are passed through verbatim so the SHARED
+    // planner geocodes them — identical to POST /a11y/accessible-route. This keeps
+    // the agent and the HTTP endpoint from ever drifting on geocoding, city
+    // resolution or the transfer limit again. maxTransfers is 2 because realistic
+    // cross-city trips (e.g. 雙鐵/高鐵接駁) routinely need two transfers.
+    if (origin === "current_location" && !args.userLocation) {
+      return JSON.stringify({
+        ok: false,
+        error: "需要使用者位置以使用「目前位置」作為起點",
+      });
+    }
+    const originInput =
+      origin === "current_location" ? args.userLocation : origin;
 
-    if (!routes.length) {
-      return JSON.stringify({ ok: false, error: "找不到可用的無障礙路線，請嘗試其他起終點" });
+    const result = await planAccessibleRouteFromRequest({
+      origin: originInput,
+      destination,
+      userLocation: args.userLocation,
+      mode: validMode,
+      maxTransfers: 2,
+      departureTime,
+    });
+
+    if (!result.ok) {
+      return JSON.stringify({ ok: false, error: result.error });
     }
 
     return JSON.stringify({
       ok: true,
-      origin: { name: origin, lat: originCoords.latitude, lng: originCoords.longitude },
-      destination: { name: destination, lat: destCoords.latitude, lng: destCoords.longitude },
-      city,
+      origin: {
+        name: origin === "current_location" ? "目前位置" : origin,
+        lat: result.data.origin.lat,
+        lng: result.data.origin.lng,
+      },
+      destination: {
+        name: destination,
+        lat: result.data.destination.lat,
+        lng: result.data.destination.lng,
+      },
+      city: result.data.city,
       mode: validMode,
-      routes: routes.slice(0, 3).map(summarizeRoute),
+      routes: result.data.routes.slice(0, 3).map(summarizeRoute),
     });
   } catch (error: any) {
     console.error("[agent-tool:planAccessibleRoute]", error);
-    return JSON.stringify({ ok: false, error: error?.message ?? "路線規劃失敗" });
+    return JSON.stringify({
+      ok: false,
+      error: error?.message ?? "路線規劃失敗",
+    });
   }
 }
 
-export async function getBusArrivalEstimate(args: {
+/**
+ * Resolve the city for a bus tool from an explicit `city` arg, falling back to
+ * the user's GPS fix. Returns the resolved code or a ready-to-return error
+ * string when neither is usable.
+ */
+async function resolveBusCityOrError(
+  city: string | undefined,
+  userLocation?: { latitude: number; longitude: number },
+): Promise<TaiwanCityEn | { error: string }> {
+  const resolved = await busService.resolveBusCity(city, userLocation);
+  if (!resolved) {
+    return {
+      error: "無法判斷縣市，請告訴我公車所在的縣市（例如「台北」「台中」）",
+    };
+  }
+  return resolved;
+}
+
+export async function getBusRoute(args: {
   routeName: string;
-  departureStop: string;
-  arrivalStop: string;
-  latitude?: number;
-  longitude?: number;
+  city?: string;
+  userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
-  const { routeName, departureStop, arrivalStop } = args;
-  const lat = args.latitude ?? 25.0478;
-  const lng = args.longitude ?? 121.517;
-
   try {
-    const city = (await getCity(lat, lng)) as TaiwanCityEn;
-    const result = await transitService.getBusEta({ routeName, departureStop, arrivalStop, city });
-    if (!result.ok) return JSON.stringify({ ok: false, error: result.error });
-
-    return JSON.stringify({
-      ok: true,
-      routeName: result.routeId,
-      departureStop,
-      arrivalStop,
-      direction: result.direction,
-      city: result.city,
-      etaData: Array.isArray(result.etaData) ? result.etaData.slice(0, 5) : result.etaData,
-    });
+    const city = await resolveBusCityOrError(args.city, args.userLocation);
+    if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
+    const result = await busService.getBusRouteInfo({ routeName: args.routeName, city });
+    return JSON.stringify(result);
   } catch (error: any) {
-    console.error("[agent-tool:getBusArrivalEstimate]", error);
+    console.error("[agent-tool:getBusRoute]", error);
+    return JSON.stringify({ ok: false, error: "公車路線查詢失敗" });
+  }
+}
+
+export async function getBusArrival(args: {
+  routeName: string;
+  stopName: string;
+  city?: string;
+  direction?: number;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    const city = await resolveBusCityOrError(args.city, args.userLocation);
+    if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
+    const result = await busService.getBusArrivalAtStop({
+      routeName: args.routeName,
+      stopName: args.stopName,
+      city,
+      direction: args.direction,
+    });
+    return JSON.stringify(result);
+  } catch (error: any) {
+    console.error("[agent-tool:getBusArrival]", error);
     return JSON.stringify({ ok: false, error: "公車到站查詢失敗" });
   }
 }
 
-export async function getBusPosition(args: {
-  plateNumber: string;
+export async function getBusTimetable(args: {
   routeName: string;
-  latitude?: number;
-  longitude?: number;
+  city?: string;
+  userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
-  const { plateNumber, routeName } = args;
-  const lat = args.latitude ?? 25.0478;
-  const lng = args.longitude ?? 121.517;
-
-  if (!/^[\w-]{1,15}$/.test(plateNumber)) {
-    return JSON.stringify({ ok: false, error: "無效的車牌號碼格式" });
-  }
-
   try {
-    const city = (await getCity(lat, lng)) as TaiwanCityEn;
-    const result = await transitService.getBusRealtimePosition({ plateNumber, routeName, city });
-    if (!result.ok) return JSON.stringify({ ok: false, error: result.error });
-
-    return JSON.stringify({ ok: true, plateNumber, routeName, city, positionData: result.positionData });
+    const city = await resolveBusCityOrError(args.city, args.userLocation);
+    if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
+    const result = await busService.getBusTimetable({ routeName: args.routeName, city });
+    return JSON.stringify(result);
   } catch (error: any) {
-    console.error("[agent-tool:getBusPosition]", error);
-    return JSON.stringify({ ok: false, error: "公車位置查詢失敗" });
+    console.error("[agent-tool:getBusTimetable]", error);
+    return JSON.stringify({ ok: false, error: "公車時刻表查詢失敗" });
+  }
+}
+
+export async function trackBuses(args: {
+  routeName: string;
+  city?: string;
+  direction?: number;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    const city = await resolveBusCityOrError(args.city, args.userLocation);
+    if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
+    const result = await busService.getBusRealtimeOnRoute({
+      routeName: args.routeName,
+      city,
+      direction: args.direction,
+    });
+    return JSON.stringify(result);
+  } catch (error: any) {
+    console.error("[agent-tool:trackBuses]", error);
+    return JSON.stringify({ ok: false, error: "公車即時位置查詢失敗" });
   }
 }
 
@@ -256,7 +331,8 @@ export async function getAirQuality(args: {
 }): Promise<string> {
   try {
     const data = await airService.getAirData(args.latitude, args.longitude);
-    if (!data) return JSON.stringify({ ok: false, message: "此區域無空氣品質監測數據" });
+    if (!data)
+      return JSON.stringify({ ok: false, message: "此區域無空氣品質監測數據" });
 
     const pm25 = data.readings[0].pm25;
     const { quality, advice } = airService.classifyPm25(pm25);
@@ -276,17 +352,29 @@ export async function getAirQuality(args: {
   }
 }
 
-export async function getA11yFacilityDetails(args: { osmId: string }): Promise<string> {
+export async function getA11yFacilityDetails(args: {
+  osmId: string;
+}): Promise<string> {
   try {
-    const ids = args.osmId.split(",").map((s) => s.trim()).filter(Boolean);
+    const ids = args.osmId
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     if (!ids.length) {
       return JSON.stringify({ ok: false, error: "缺少 osmId 參數" });
     }
     const places = await a11yService.findByOsmIds(ids);
     if (!places.length) {
-      return JSON.stringify({ ok: false, error: `找不到 osmId: ${ids.join(", ")} 的設施` });
+      return JSON.stringify({
+        ok: false,
+        error: `找不到 osmId: ${ids.join(", ")} 的設施`,
+      });
     }
-    return JSON.stringify({ ok: true, count: places.length, facilities: places });
+    return JSON.stringify({
+      ok: true,
+      count: places.length,
+      facilities: places,
+    });
   } catch (error: any) {
     console.error("[agent-tool:getA11yFacilityDetails]", error);
     return JSON.stringify({ ok: false, error: "設施詳情查詢失敗" });
@@ -296,7 +384,7 @@ export async function getA11yFacilityDetails(args: { osmId: string }): Promise<s
 export async function executeLocalTool(
   name: string,
   args: Record<string, any>,
-  userLocation?: { latitude: number; longitude: number }
+  userLocation?: { latitude: number; longitude: number },
 ): Promise<string> {
   switch (name) {
     case "findGooglePlaces":
@@ -320,25 +408,42 @@ export async function executeLocalTool(
         userLocation,
       });
 
-    case "getBusArrivalEstimate":
-      return getBusArrivalEstimate({
+    case "getBusRoute":
+      return getBusRoute({
         routeName: args.routeName,
-        departureStop: args.departureStop,
-        arrivalStop: args.arrivalStop,
-        latitude: args.latitude ?? userLocation?.latitude,
-        longitude: args.longitude ?? userLocation?.longitude,
+        city: args.city,
+        userLocation,
       });
 
-    case "getBusPosition":
-      return getBusPosition({
-        plateNumber: args.plateNumber,
+    case "getBusArrival":
+      return getBusArrival({
         routeName: args.routeName,
-        latitude: args.latitude ?? userLocation?.latitude,
-        longitude: args.longitude ?? userLocation?.longitude,
+        stopName: args.stopName,
+        city: args.city,
+        direction: args.direction,
+        userLocation,
+      });
+
+    case "getBusTimetable":
+      return getBusTimetable({
+        routeName: args.routeName,
+        city: args.city,
+        userLocation,
+      });
+
+    case "trackBuses":
+      return trackBuses({
+        routeName: args.routeName,
+        city: args.city,
+        direction: args.direction,
+        userLocation,
       });
 
     case "getAirQuality":
-      return getAirQuality({ latitude: args.latitude, longitude: args.longitude });
+      return getAirQuality({
+        latitude: args.latitude,
+        longitude: args.longitude,
+      });
 
     case "getA11yFacilityDetails":
       return getA11yFacilityDetails({ osmId: args.osmId });

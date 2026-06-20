@@ -121,8 +121,8 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
-          origin: { type: "string", description: "起點名稱，例如：'台北車站'；若說「這裡/目前位置」請填 'current_location'" },
-          destination: { type: "string", description: "終點名稱，例如：'台北101'" },
+          origin: { type: "string", description: "起點名稱，請『完整照抄』使用者說的地名（含校區/分館/分店/路段等後綴，例如『台中科大三民校區』不可簡化成『台中科大』）；若說「這裡/目前位置」請填 'current_location'" },
+          destination: { type: "string", description: "終點名稱，請『完整照抄』使用者說的地名（含校區/分館/分店/路段等後綴，例如『台中科大三民校區』不可簡化成『台中科大』）" },
           mode: {
             type: "string",
             enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
@@ -140,35 +140,85 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "getBusArrivalEstimate",
-      description: "查詢特定公車路線在指定站點的即時預估到站時間 (ETA)。",
+      name: "getBusRoute",
+      description:
+        "查詢公車路線的行駛方向與完整站序（去程/返程的起訖站與停靠站列表）。當使用者問「X 路經過哪些站」、「X 路怎麼走」、「X 路的路線」時使用。",
       parameters: {
         type: "object",
         properties: {
-          routeName: { type: "string", description: "公車路線名稱，例如：'307'、'紅2'" },
-          departureStop: { type: "string", description: "起點/出發站牌名稱" },
-          arrivalStop: { type: "string", description: "終點/抵達站牌名稱" },
-          latitude: { type: "number", description: "使用者當前緯度（選填）" },
-          longitude: { type: "number", description: "使用者當前經度（選填）" },
+          routeName: { type: "string", description: "公車路線名稱，例如：'307'、'紅2'、'672'" },
+          city: {
+            type: "string",
+            description: "公車所在縣市，例如：'台北'、'新北'、'台中'、'高雄'。未提供時會用使用者位置推斷。",
+          },
         },
-        required: ["routeName", "departureStop", "arrivalStop"],
+        required: ["routeName"],
       },
     },
   },
   {
     type: "function",
     function: {
-      name: "getBusPosition",
-      description: "根據公車車牌號碼與路線名稱，查詢該公車目前的即時 GPS 位置與行駛狀態。",
+      name: "getBusArrival",
+      description:
+        "查詢某條公車路線在某個站牌的即時預估到站時間（還有幾分鐘到）。當使用者問「X 路在 Y 站還有多久」、「X 路到 Y 站的時間」時使用。若已知該班車車牌，會一併回報是否為低底盤車。",
       parameters: {
         type: "object",
         properties: {
-          plateNumber: { type: "string", description: "車牌號碼，例如：'EAL-1234'" },
-          routeName: { type: "string", description: "公車路線名稱，例如：'307'" },
-          latitude: { type: "number", description: "使用者當前緯度（選填）" },
-          longitude: { type: "number", description: "使用者當前經度（選填）" },
+          routeName: { type: "string", description: "公車路線名稱，例如：'307'、'紅2'" },
+          stopName: { type: "string", description: "要查詢到站時間的站牌名稱，例如：'台北車站'" },
+          city: {
+            type: "string",
+            description: "公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
+          },
+          direction: {
+            type: "number",
+            description: "行駛方向（0=去程，1=返程）。不確定可省略。",
+          },
         },
-        required: ["plateNumber", "routeName"],
+        required: ["routeName", "stopName"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getBusTimetable",
+      description:
+        "查詢公車路線的時刻表：首班車/末班車時間與今日各班次發車時刻。當使用者問「X 路的時刻表」、「X 路首末班車幾點」時使用。",
+      parameters: {
+        type: "object",
+        properties: {
+          routeName: { type: "string", description: "公車路線名稱，例如：'307'" },
+          city: {
+            type: "string",
+            description: "公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
+          },
+        },
+        required: ["routeName"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "trackBuses",
+      description:
+        "查詢某條公車路線目前所有在線車輛的即時 GPS 位置、行駛狀態，以及『每台車是否為低底盤/有無升降斜坡板』。當使用者問「X 路現在在哪」、「X 路來的這班是低底盤嗎」、「下一班 X 路是無障礙車嗎」時使用。**不需要、也不要向使用者索取車牌號碼**，本工具會自動取得在線車輛。",
+      parameters: {
+        type: "object",
+        properties: {
+          routeName: { type: "string", description: "公車路線名稱，例如：'307'、'紅2'" },
+          city: {
+            type: "string",
+            description: "公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
+          },
+          direction: {
+            type: "number",
+            description: "行駛方向（0=去程，1=返程）。不確定可省略。",
+          },
+        },
+        required: ["routeName"],
       },
     },
   },

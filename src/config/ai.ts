@@ -13,6 +13,6 @@ const openai = new OpenAI({
   baseURL: process.env.GEMINI_API_URL || "https://generativelanguage.googleapis.com/v1beta/openai",
 });
 
-const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const model = process.env.GEMINI_MODEL || "gemini-3-flash-preview";
 
 export { googleGenAi, openai, model };
