@@ -8,19 +8,17 @@ import {
 } from "../../config/transit";
 import { CITY_METRO_SYSTEMS } from "../../constants/transit";
 import { FACILITY_LABELS } from "../../constants/accessibility";
-import { getRouteDirectionImproved, equalStopName } from "../../utils/transit-text";
+import {
+  getRouteDirectionImproved,
+  equalStopName,
+} from "../../utils/transit-text";
 import { orsWalkingRoute } from "./planners/ors";
 import {
   taipeiMinutesOfDay,
   taipeiWeekday,
   taipeiHHmm,
 } from "../../config/taipei-time";
-import {
-  scoreRoute,
-  routeCost,
-  prerankCost,
-  MODE_PROFILES,
-} from "./scoring";
+import { scoreRoute, routeCost, prerankCost, MODE_PROFILES } from "./scoring";
 import BusStopModel from "../../model/bus-stop.model";
 import MetroStationModel from "../../model/metro-station.model";
 import TrainStationModel from "../../model/train-station.model";
@@ -52,11 +50,7 @@ import type {
   PlanRouteRequest,
   PlanRouteResult,
 } from "./accessible-route.types";
-export type {
-  FindAccessibleRoutesOptions,
-  PlanRouteRequest,
-  PlanRouteResult,
-};
+export type { FindAccessibleRoutesOptions, PlanRouteRequest, PlanRouteResult };
 
 import type {
   AccessibilityMode,
@@ -257,14 +251,13 @@ export async function buildCandidate(
   ];
   const destStopCoords = destStopDoc.location.coordinates as [number, number];
 
-  const [walkTo, walkFrom, waitInfo, originA11y, destA11y] =
-    await Promise.all([
-      orsWalkingRoute(originCoords, originStopCoords, mode),
-      orsWalkingRoute(destStopCoords, destCoords, mode),
-      fetchWaitInfo(subRouteId, city, direction, originStopDoc.stopName.Zh_tw),
-      OsmA11y.find(nearQuery(originStopCoords, 150)).limit(5).lean(),
-      OsmA11y.find(nearQuery(destStopCoords, 150)).limit(5).lean(),
-    ]);
+  const [walkTo, walkFrom, waitInfo, originA11y, destA11y] = await Promise.all([
+    orsWalkingRoute(originCoords, originStopCoords, mode),
+    orsWalkingRoute(destStopCoords, destCoords, mode),
+    fetchWaitInfo(subRouteId, city, direction, originStopDoc.stopName.Zh_tw),
+    OsmA11y.find(nearQuery(originStopCoords, 150)).limit(5).lean(),
+    OsmA11y.find(nearQuery(destStopCoords, 150)).limit(5).lean(),
+  ]);
 
   const waitMinutes = waitInfoMinutes(waitInfo);
   const transitMinutes = (destIdx - originIdx) * 2;
@@ -1199,7 +1192,8 @@ function legDataCoverageRatio(r: AccessibleRoute): number {
     if (leg.type === "WALK") {
       if (leg.a11yFacilities.length) withData++;
     } else if (leg.type === "BUS") {
-      if (leg.departureStopA11y.length || leg.arrivalStopA11y.length) withData++;
+      if (leg.departureStopA11y.length || leg.arrivalStopA11y.length)
+        withData++;
     } else if (
       leg.departureStationA11y.length ||
       leg.arrivalStationA11y.length ||
@@ -1662,7 +1656,7 @@ export async function planAccessibleRouteFromRequest(
     }
     origin =
       intent.from === "current_location"
-        ? userLocation ?? undefined
+        ? (userLocation ?? undefined)
         : intent.from;
     destination = intent.to;
     mode = mode ?? intent.mode;
@@ -1691,7 +1685,6 @@ export async function planAccessibleRouteFromRequest(
       ? getCoordinates(destination)
       : Promise.resolve(destination as { latitude: number; longitude: number }),
   ]);
-
   if (!originCoords || !destCoords) {
     return {
       ok: false,
@@ -1720,7 +1713,7 @@ export async function planAccessibleRouteFromRequest(
     city,
     {
       mode: mode ?? "normal",
-      maxTransfers: (maxTransfers ?? 1) as 0 | 1 | 2,
+      maxTransfers: (maxTransfers ?? 2) as 0 | 1 | 2,
       departureTime: futureDeparture,
       format: format === "compact" ? "compact" : "standard",
     },
