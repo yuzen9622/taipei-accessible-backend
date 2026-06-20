@@ -1,10 +1,18 @@
 # 逐步導航指引資料（語音播報後端支援）
 ## Functional Specification — Nav Instructions Backend Support
 
-**版本**：v1.0.0  
-**狀態**：Proposed — 未實作  
-**日期**：2026-06-17  
+**版本**：v1.1.0  
+**狀態**：Implemented — 已實作（2026-06-20，策略 A）  
+**日期**：2026-06-20  
 **作者**：yuzen9622
+
+> v1.1.0 修訂（as-built，已實作）：端點 `POST /api/v1/a11y/route/instructions` 已上線（`src/modules/nav-instructions/`，獨立 `createNavInstructionsRouter()` 直接掛在 `app.ts` 的 `/api/v1/a11y`）。`tsc --noEmit` 乾淨、`nav-instructions.service.test.ts` vitest 23 passed。實作相對本文初稿的調整：
+> ① **service 為純函數而非 class**——`generateNavInstructions(route, userHeading?)` 加上 `calcBearing` / `calcRelativeDirection` / `degToCompassWord` 直接 export（無 `NavInstructionsService` 物件）；常數 `WARN_STEPS_UNAVAILABLE = "ORS_STEPS_UNAVAILABLE"`。
+> ② **步驟來源只走策略 A（OTP `WalkLeg.steps`）**；ORS 策略 B（接駁步行 `instructions: true` / `orsWalkingRouteWithSteps()`）**尚未實作**，§4.3 整段為未來工作。無 steps 的步行段降級為「以 polyline 前兩點算 bearing 的單句 depart/turn」並推入 `WARN_STEPS_UNAVAILABLE`（即策略 C 的輕量版，講不出街名）。
+> ③ **bearing 取點改採 OTP 語意**：先用 `step.absoluteDirection` 羅盤詞（NORTH…→度），否則用相鄰 `step.location` 兩點，最後退回 polyline 前兩點；**ORS `maneuver.bearing_after` 未使用**（因 ORS steps 未取）。§5.1 的 ORS `type` 整數對照表因此**非實際落地路徑**，實際模板鍵為 OTP `relativeDirection` 列舉（另含 `CIRCLE_CLOCKWISE` / `CIRCLE_COUNTERCLOCKWISE`）。
+> ④ **大眾運輸模板 as-built**：BusLeg 用 `estimatedWaitMinutes`、**未含 stopCount／headsign**（站數說明省略，呼應 §11 風險緩解）；MetroLeg 以「往『{arrivalStation}』方向」表示（無獨立 `direction` 欄位），依 `facilityHighlights` 是否含「電梯」切換結尾句；THSR／TRA 以 `displayTime()` 正規化發到時間。每段 transit 產 `transit_board` + `transit_alight` 兩步；`arrive` 一律於結尾追加，`legType` = 最後一段實際型別。
+> ⑤ **型別位置**：`WalkStep` 與各 Leg 型別位於 `src/types/route.ts`（非模組內），`WalkStep.streetName` 為 `string`（非 nullable，空字串或 `bogusName` 時視為無街名）；模組 DTO（`NavInstruction` / `NavInstructionsResult` / `NavRouteInput`）放 `nav-instructions.types.ts`。
+> ⑥ §9.1 範例修正：`heading=130, bearing=215` → diff=85，落在 67.5–112.5 區間 → **「右側」**（初稿誤標「右前方／右後方」，以 §5.3 門檻為準，測試已對齊）。
 
 ---
 
@@ -89,8 +97,8 @@
 ```
 後端回傳：initialBearing = 215（西南方）
 前端讀取：deviceHeading = 130（目前面向東南）
-前端計算：relative = (215 - 130 + 360) % 360 = 85 → "右前方"
-前端播報：「請往右前方出發」
+前端計算：relative = (215 - 130 + 360) % 360 = 85 → "右側"（§5.3 門檻 67.5–112.5）
+前端播報：「請往右側出發」
 ```
 
 優點：後端純函數、無狀態、不依賴前端感測器即時性；前端可在 GPS 定位穩定後的任意時刻換算。
@@ -120,20 +128,20 @@ Express (src/app.ts)
   ↓
 Zod Validation Middleware
   ↓
-NavInstructionsController
+navInstructions controller
   ↓
-NavInstructionsService
-  ├── （若 input 為 legs）直接處理
-  └── （若 input 為 routeId）⚠️ 待確認：路線快取機制
+generateNavInstructions(route, userHeading?)   ← as-built：純函數，無 class、無路線快取（route.legs 全程 passthrough）
         ↓
   ┌─────────────────────────────────────────────────┐
-  │ NavInstructionsService                          │
+  │ nav-instructions.service.ts（純函數集合）        │
   │                                                 │
   │  walkLegToInstructions()                        │
-  │    └── ORS segments[].steps → NavInstruction[]  │
-  │        └── calcBearing() + maneuverToText()     │
+  │    └── OTP WalkLeg.steps → NavInstruction[]     │
+  │        └── stepBearing() + walkStepText()       │
+  │        └── 無 steps → 降級 + WARN_STEPS_UNAVAILABLE │
   │                                                 │
-  │  transitLegToInstruction()                      │
+  │  busInstructions / metroInstructions /          │
+  │  thsrInstructions / traInstructions             │
   │    └── BusLeg / MetroLeg / ... → NavInstruction │
   │                                                 │
   │  calcRelativeDirection()（若有 userHeading）    │
@@ -226,13 +234,13 @@ steps {
 
 **三種落地策略（擇一或混用）**：
 
-| 策略 | 作法 | 取得街名？ | 改動範圍 |
+| 策略 | 作法 | 取得街名？ | 狀態（v1.1.0） |
 |------|------|-----------|---------|
-| **A**（建議，行程內步行）| 擴充 `PLAN_QUERY` 加 `steps { … }` | ✅ OTP `streetName` | ✅ 已實作（query + `WalkStep` 型別 + `walkLegFrom` 映射）；剩餘為 §5 指令模板層 |
-| **B**（接駁步行）| `orsWalkingRoute` 加 `instructions: true`，新增 `orsWalkingRouteWithSteps()` | ✅ ORS `name` | 改 ORS 請求 + 型別 |
-| **C**（不改引擎）| 純由 `WalkLeg.polyline` 連續點算 bearing 變化合成轉向 | ❌ 無街名 | 只加純函數 |
+| **A**（建議，行程內步行）| 擴充 `PLAN_QUERY` 加 `steps { … }` | ✅ OTP `streetName` | ✅ **已實作**：query + `WalkStep` 型別 + `walkLegFrom` 映射 + §5 繁中模板層（`walkLegToInstructions`）全數完成 |
+| **B**（接駁步行）| `orsWalkingRoute` 加 `instructions: true`，新增 `orsWalkingRouteWithSteps()` | ✅ ORS `name` | ⛔ **尚未實作**：ORS 接駁步行仍只取 polyline，無 steps（§4.3 為此項的工作說明）|
+| **C**（不改引擎）| 純由 `WalkLeg.polyline` 連續點算 bearing 變化合成轉向 | ❌ 無街名 | ◐ **輕量版已落地為降級路徑**：無 steps 時以 polyline 前兩點算單一 bearing 產 depart/turn，並回 `WARN_STEPS_UNAVAILABLE`（尚未做「逐點偵測轉向」的完整 C） |
 
-> 策略 C 因 `polyline` 已存在，可在**不動任何引擎查詢**下立即提供「左轉／右轉／直行 + 距離 + 方位角」，但**講不出街道名稱**。要講街名必須走 A／B。建議：行程內步行用 A、接駁步行用 B，C 作為兩者皆無步驟時的降級（呼應 §7.4 `ORS_STEPS_UNAVAILABLE`）。
+> 策略 C 因 `polyline` 已存在，可在**不動任何引擎查詢**下立即提供「方位角 + 距離」，但**講不出街道名稱**。要講街名必須走 A／B。現況：行程內步行走 A（已上線）；接駁步行的 B 待做，兩者皆無步驟時落入 C 的降級（呼應 §7.4 `ORS_STEPS_UNAVAILABLE`）。
 
 ### 4.5 呼叫時序與播報時機（後端何時被呼叫）
 
@@ -298,6 +306,8 @@ steps {
 
 ### 5.1 ORS Maneuver Type 對應
 
+> ⚠️ **as-built（v1.1.0）**：因步驟只走策略 A（OTP），本表的 ORS `type` 整數映射**未落地**。實際 `walkStepText()` 以 OTP `relativeDirection` 字串列舉為鍵（見 §5.0 對照表，另含 `CIRCLE_CLOCKWISE` / `CIRCLE_COUNTERCLOCKWISE` → 「請進入圓環，依指示繞行」）。本表保留作 ORS 策略 B 落地時的對照參考。
+
 ORS `step.type` 為整數，對應如下轉向動作。後端依此產生繁中指引句：
 
 | type | ORS 含義 | 繁中指引句範例（無障礙友善） |
@@ -349,11 +359,14 @@ function calcBearing(
 }
 ```
 
-**各步驟 bearing 的取點邏輯**：
+**各步驟 bearing 的取點邏輯（as-built `stepBearing()`，策略 A）**：
 
-若 ORS step 含有 `maneuver.bearing_after`，直接使用（ORS 已計算）。  
-若無，以 `way_points[0]` 與 `way_points[1]` 對應的 geometry coordinate 計算。  
-起始步驟（type = 11）使用 WalkLeg polyline 的前兩個點計算，確保與真實路徑吻合。
+1. 若 OTP `step.absoluteDirection` 有值（`NORTH` / `NORTHEAST` / …），直接映射為度數（免自算）。
+2. 否則以「本步驟 `location`」與「下一步驟 `location`」兩點 `calcBearing()` 計算。
+3. 皆不可得時，退回 WalkLeg `polyline` 前兩點計算，確保與真實路徑吻合。
+
+> `facility` 類型步驟（`ELEVATOR` / `ENTER_STATION` / `EXIT_STATION`）的 `bearing` 一律填 `null`。
+> 註：初稿假設的 ORS `maneuver.bearing_after` / `way_points` 取點在策略 A 不適用（OTP step 無此欄位）；待策略 B 落地時再依 ORS 結構補上。
 
 ### 5.3 相對方向換算（八方位）
 
@@ -392,28 +405,27 @@ function calcRelativeDirection(
 
 ### 5.4 大眾運輸段指引生成
 
-大眾運輸段不使用 ORS steps，而是依 leg 型別直接組裝指引句。
+大眾運輸段不使用步行 steps，而是依 leg 型別直接組裝指引句。每段 transit 產出兩步：`transit_board`（上車）與 `transit_alight`（下車）。
 
-**BusLeg**
-
-```
-「請在【{departureStop}】站牌等候，搭乘路線【{routeName}】方向【{headsign}】，
-  共【{stopCount}】站，在【{arrivalStop}】站下車。
-  預估等候時間約【{waitInfo.minutes}】分鐘。」
-```
-
-> ⚠️ 待確認：`BusLeg` 目前未儲存 `stopCount`（中間站數），需從 GTFS `stop_times` 的 sequence 差值計算，或標注為「⚠️ 待補充」。
-
-**MetroLeg**
+**BusLeg**（as-built）
 
 ```
-「請搭乘【{railSystem}】【{lineName}】，
-  在【{departureStation}】站上車，往【{direction}】方向，
-  行駛約【{rideMinutes}】分鐘，在【{arrivalStation}】站下車。
-  請優先使用電梯進站。」
+transit_board：「請在「{departureStop}」站牌等候，搭乘公車「{routeName}」
+                〔，預估等候約 {estimatedWaitMinutes} 分鐘〕。」
+transit_alight：「抵達「{arrivalStop}」站後請下車。」
 ```
 
-> 若 `facilityHighlights` 不含「電梯」，則最後一句改為：「請留意進站無障礙設施狀況。」
+> as-built：等候時間取 `estimatedWaitMinutes`（>0 才附加）。**未含 `stopCount`（中間站數）與 `headsign`（方向）**——`BusLeg` 無此欄位，依 §11 風險緩解直接省略站數說明，未來如需可由 GTFS `stop_times` sequence 差值補。
+
+**MetroLeg**（as-built）
+
+```
+transit_board：「請搭乘{railSystem 中文名}「{lineName}」，在「{departureStation}」站上車，
+                往「{arrivalStation}」方向〔，行駛約 {rideMinutes} 分鐘〕。{facility 句}」
+transit_alight：「請在「{arrivalStation}」站下車。」
+```
+
+> as-built：以「往『{arrivalStation}』方向」表示行向（無獨立 `direction` 欄位）。`railSystem` 代碼經 `RAIL_SYSTEM_NAMES` 轉中文（`TRTC`→台北捷運、`KRTC`→高雄捷運、`TMRT`→台中捷運、`NTMC`→新北捷運、`KLRT`→高雄輕軌、`TYMC`→桃園捷運）。`facility 句`：`facilityHighlights` 含「電梯」→「請優先使用電梯進站。」，否則→「請留意進站無障礙設施狀況。」
 
 **ThsrLeg**
 
@@ -549,7 +561,7 @@ interface NavInstructionsResponse {
 
 | Method | Path | 功能 | 狀態 |
 |--------|------|------|------|
-| `POST` | `/api/v1/a11y/route/instructions` | 路線逐步指引產生 | 📋 Proposed |
+| `POST` | `/api/v1/a11y/route/instructions` | 路線逐步指引產生 | ✅ Implemented（v1.1.0）|
 
 > **替代方案說明**：另一選項是直接在 `POST /api/v1/a11y/accessible-route` 的每個 `WalkLeg` 內嵌 `instructions[]`。  
 > **不採用的原因**：① 指引資料體積大，不所有前端場景都需要（地圖顯示不需要）；② 內嵌會增大現有端點回應，影響 Phase 14 的瘦身成果；③ 獨立端點可在使用者確認路線後再按需請求，符合「懶載入」原則。  
@@ -570,8 +582,8 @@ const NavInstructionsRequest = z.object({
    * 前端收到路線後直接 passthrough。
    */
   route: z.object({
-    routeId: z.string(),
-    legs: z.array(z.any()),   // 詳細型別由 AccessibleRoute 定義
+    routeId: z.string().optional(),  // as-built：選用；服務只讀 legs
+    legs: z.array(z.any()),          // 詳細型別由 AccessibleRoute 定義
   }),
 
   /**
@@ -729,16 +741,18 @@ const NavInstructionsRequest = z.object({
 
 ## 8. 實作 Roadmap
 
-| 步驟 | 工作內容 | 依賴 | 預估工作量 |
+| 步驟 | 工作內容 | 依賴 | 狀態（v1.1.0） |
 |------|---------|------|-----------|
-| **Step 1** | 新增 `nav-instructions` module（目錄、schema、controller、router） | 無 | 小 |
-| **Step 2** | 實作 `calcBearing()` 純函數 + 單元測試 | 無 | 小 |
-| **Step 3** | 實作 `calcRelativeDirection()` 純函數 + 單元測試 | Step 2 | 小 |
-| **Step 4** | 修改 `orsWalkingRoute()` 或新增 `orsWalkingRouteWithSteps()`，啟用 `instructions: true` | ⚠️ 確認不破壞現有快取邏輯 | 中 |
-| **Step 5** | 實作 `walkLegToInstructions()`（ORS steps → `NavInstruction[]`） | Step 2、Step 4 | 中 |
-| **Step 6** | 實作 `transitLegToInstruction()`（BusLeg / MetroLeg / ThsrLeg / TraLeg） | 無 | 中 |
-| **Step 7** | 組裝 `NavInstructionsService.generate(route, userHeading?)`，整合 Step 5 與 Step 6 | Step 5、Step 6 | 中 |
-| **Step 8** | 掛載路由、整合測試 | Step 7 | 小 |
+| **Step 1** | 新增 `nav-instructions` module（目錄、schema、controller、router） | 無 | ✅ 完成 |
+| **Step 2** | 實作 `calcBearing()` 純函數 + 單元測試 | 無 | ✅ 完成 |
+| **Step 3** | 實作 `calcRelativeDirection()` 純函數 + 單元測試 | Step 2 | ✅ 完成（另加 `degToCompassWord()`）|
+| **Step 4** | 修改 `orsWalkingRoute()` 或新增 `orsWalkingRouteWithSteps()`，啟用 `instructions: true` | ⚠️ 確認不破壞現有快取邏輯 | ⛔ **未做**（策略 B；步驟來源改走 OTP 策略 A，ORS 接駁步行 steps 留待後續）|
+| **Step 5** | 實作 `walkLegToInstructions()`（步行 steps → `NavInstruction[]`） | Step 2 | ✅ 完成（吃 OTP `WalkLeg.steps`；無 steps 降級 + `WARN_STEPS_UNAVAILABLE`）|
+| **Step 6** | 實作各 transit leg 指引（BusLeg / MetroLeg / ThsrLeg / TraLeg） | 無 | ✅ 完成（`busInstructions` / `metroInstructions` / `thsrInstructions` / `traInstructions`）|
+| **Step 7** | 組裝 `generateNavInstructions(route, userHeading?)`，整合 Step 5 與 Step 6 | Step 5、Step 6 | ✅ 完成（純函數，非 class）|
+| **Step 8** | 掛載路由、整合測試 | Step 7 | ✅ 完成（`app.ts` 掛 `/api/v1/a11y`；`nav-instructions.service.test.ts` vitest 23 passed）|
+
+> **剩餘工作（v1.2 候選）**：Step 4（ORS 策略 B，接駁步行 steps 取街名）；完整策略 C（逐點偵測轉向）；BusLeg `stopCount` 補站數。
 
 **ORS 請求修改注意事項**：
 
@@ -803,9 +817,9 @@ describe("calcRelativeDirection", () => {
     expect(calcRelativeDirection(0, 270)).toBe("左側");
   });
 
-  it("heading=130, bearing=215 → 右後方", () => {
-    // diff = (215 - 130 + 360) % 360 = 85 → 右前方
-    expect(calcRelativeDirection(130, 215)).toBe("右前方");
+  it("heading=130, bearing=215 → 右側", () => {
+    // diff = (215 - 130 + 360) % 360 = 85，落在 67.5–112.5 → 右側
+    expect(calcRelativeDirection(130, 215)).toBe("右側");
   });
 
   it("邊界：diff=337.5 應屬正前方", () => {
@@ -866,4 +880,4 @@ describe("calcRelativeDirection", () => {
 
 ---
 
-*文件版本 v1.0.0 — 初稿（2026-06-17），Proposed 狀態，尚未進入實作。*
+*文件版本 v1.1.0 — as-built（2026-06-20）：端點已實作並掛載（策略 A，OTP steps）；ORS 策略 B 接駁步行 steps 留待後續。初稿 v1.0.0（2026-06-17）。*
