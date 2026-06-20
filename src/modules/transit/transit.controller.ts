@@ -7,6 +7,7 @@ import { ApiResponse } from "../../types/response";
 import type { Response, Request } from "express";
 import { TaiwanCityEn } from "../../types/transit";
 import * as transitService from "./transit.service";
+import * as busService from "./bus.service";
 
 async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
   try {
@@ -66,6 +67,98 @@ async function getRealtimeBusPosition(req: Request, res: Response<ApiResponse<an
   }
 }
 
+async function resolveCityOr400(
+  city: string | undefined,
+  res: Response<ApiResponse<any>>,
+): Promise<TaiwanCityEn | null> {
+  const resolved = await busService.resolveBusCity(city);
+  if (!resolved) {
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INVALID_INPUT,
+      "請提供有效的縣市 (city)，例如 台北、台中",
+    );
+    return null;
+  }
+  return resolved;
+}
+
+async function getBusRouteHandler(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { routeName, city } = req.validated?.query as { routeName: string; city?: string };
+    const resolved = await resolveCityOr400(city, res);
+    if (!resolved) return;
+    const result = await busService.getBusRouteInfo({ routeName, city: resolved });
+    if (!result.ok) return sendResponse(res, false, "error", result.status, result.error);
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error: any) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error.message);
+  }
+}
+
+async function getBusArrivalHandler(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { routeName, stopName, city, direction } = req.validated?.query as {
+      routeName: string;
+      stopName: string;
+      city?: string;
+      direction?: number;
+    };
+    const resolved = await resolveCityOr400(city, res);
+    if (!resolved) return;
+    const result = await busService.getBusArrivalAtStop({
+      routeName,
+      stopName,
+      city: resolved,
+      direction,
+    });
+    if (!result.ok) return sendResponse(res, false, "error", result.status, result.error);
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error: any) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error.message);
+  }
+}
+
+async function getBusTimetableHandler(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { routeName, city } = req.validated?.query as { routeName: string; city?: string };
+    const resolved = await resolveCityOr400(city, res);
+    if (!resolved) return;
+    const result = await busService.getBusTimetable({ routeName, city: resolved });
+    if (!result.ok) return sendResponse(res, false, "error", result.status, result.error);
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error: any) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error.message);
+  }
+}
+
+async function getBusPositionsHandler(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { routeName, city, direction } = req.validated?.query as {
+      routeName: string;
+      city?: string;
+      direction?: number;
+    };
+    const resolved = await resolveCityOr400(city, res);
+    if (!resolved) return;
+    const result = await busService.getBusRealtimeOnRoute({
+      routeName,
+      city: resolved,
+      direction,
+    });
+    if (!result.ok) return sendResponse(res, false, "error", result.status, result.error);
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error: any) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error.message);
+  }
+}
+
 async function getTrainData(req: Request, res: Response<ApiResponse<null>>) {
   const { arrival_stop, departure_stop, train_no } = req.query;
 }
@@ -73,4 +166,13 @@ async function getHighSpeedTrainData(req: Request, res: Response<ApiResponse<nul
   const { type, detail } = req.query;
 }
 
-export { getBusData, getTrainData, getHighSpeedTrainData, getRealtimeBusPosition };
+export {
+  getBusData,
+  getTrainData,
+  getHighSpeedTrainData,
+  getRealtimeBusPosition,
+  getBusRouteHandler,
+  getBusArrivalHandler,
+  getBusTimetableHandler,
+  getBusPositionsHandler,
+};

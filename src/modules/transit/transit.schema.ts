@@ -36,6 +36,45 @@ export const BusRealtimeQuerySchema = z
   })
   .strict();
 
+const CityQuery = z
+  .string()
+  .min(1)
+  .optional()
+  .openapi({ example: "台北", description: "公車所在縣市（中文或英文），未提供則無法定位" });
+
+const DirectionQuery = z.coerce
+  .number()
+  .int()
+  .min(0)
+  .max(1)
+  .optional()
+  .openapi({ example: 0, description: "行駛方向（0=去程，1=返程），可省略" });
+
+export const BusRouteQuerySchema = z
+  .object({ routeName: z.string().min(1).openapi({ example: "307" }), city: CityQuery })
+  .strict();
+
+export const BusArrivalQuerySchema = z
+  .object({
+    routeName: z.string().min(1).openapi({ example: "307" }),
+    stopName: z.string().min(1).openapi({ example: "台北車站" }),
+    city: CityQuery,
+    direction: DirectionQuery,
+  })
+  .strict();
+
+export const BusTimetableQuerySchema = z
+  .object({ routeName: z.string().min(1).openapi({ example: "307" }), city: CityQuery })
+  .strict();
+
+export const BusPositionsQuerySchema = z
+  .object({
+    routeName: z.string().min(1).openapi({ example: "307" }),
+    city: CityQuery,
+    direction: DirectionQuery,
+  })
+  .strict();
+
 const BilingualNameSchema = z
   .object({
     Zh_tw: z.string().openapi({ example: "台北車站" }),
@@ -140,5 +179,69 @@ registry.registerPath({
     },
     400: { description: "缺少或無效的參數" },
     500: { description: "TDX API 錯誤" },
+  },
+});
+
+const BusServiceResponseSchema = ApiResponseSchema(
+  z.object({ ok: z.boolean() }).passthrough(),
+).openapi("BusServiceResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/route",
+  tags: ["Transit"],
+  summary: "公車路線站序",
+  description: "回傳指定路線去/返程的起訖站與完整停靠站列表（優先讀已匯入資料，未匯入則即時查 TDX）。",
+  request: { query: BusRouteQuerySchema },
+  responses: {
+    200: { description: "路線站序", content: { "application/json": { schema: BusServiceResponseSchema } } },
+    400: { description: "缺少縣市或參數" },
+    404: { description: "找不到路線" },
+    500: { description: "TDX/DB 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/arrival",
+  tags: ["Transit"],
+  summary: "公車到站時間",
+  description: "回傳指定路線在某站牌的即時預估到站分鐘數；若該班車車牌已知，附帶是否低底盤。",
+  request: { query: BusArrivalQuerySchema },
+  responses: {
+    200: { description: "到站預估", content: { "application/json": { schema: BusServiceResponseSchema } } },
+    400: { description: "缺少縣市或參數" },
+    404: { description: "找不到到站資料" },
+    500: { description: "TDX 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/timetable",
+  tags: ["Transit"],
+  summary: "公車時刻表",
+  description: "回傳指定路線的首末班車時間與今日班次發車時刻。",
+  request: { query: BusTimetableQuerySchema },
+  responses: {
+    200: { description: "時刻表", content: { "application/json": { schema: BusServiceResponseSchema } } },
+    400: { description: "缺少縣市或參數" },
+    404: { description: "找不到時刻表" },
+    500: { description: "TDX 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/positions",
+  tags: ["Transit"],
+  summary: "公車即時位置（含低底盤）",
+  description: "回傳指定路線目前所有在線車輛的即時位置與行駛狀態，並標註每台車是否為低底盤／有無升降斜坡板。無需提供車牌。",
+  request: { query: BusPositionsQuerySchema },
+  responses: {
+    200: { description: "在線車輛清單", content: { "application/json": { schema: BusServiceResponseSchema } } },
+    400: { description: "缺少縣市或參數" },
+    404: { description: "目前無營運車輛" },
+    500: { description: "TDX 錯誤" },
   },
 });

@@ -14,3 +14,88 @@ export type BusEtaResult =
 export type BusPositionResult =
   | { ok: true; positionData: any }
   | { ok: false; error: string; status: 400 | 500 };
+
+/** Failure envelope shared by the V3 bus query service (bus.service.ts). */
+export type BusServiceError = { ok: false; error: string; status: 400 | 404 | 500 };
+
+export type BusRouteDirection = {
+  direction: number;
+  directionLabel: string;
+  from: string;
+  to: string;
+  stopCount: number;
+  stops: { seq: number; name: string; lat?: number; lng?: number }[];
+};
+
+export type BusRouteInfoResult =
+  | {
+      ok: true;
+      routeName: string;
+      city: TaiwanCityEn;
+      source: "db" | "tdx";
+      operators: string[];
+      directions: BusRouteDirection[];
+    }
+  | BusServiceError;
+
+export type BusArrival = {
+  stopName: string;
+  direction: number;
+  directionLabel: string;
+  estimateMinutes: number | null;
+  statusLabel: string;
+};
+
+export type BusArrivalResult =
+  | { ok: true; routeName: string; city: TaiwanCityEn; stopName: string; arrivals: BusArrival[] }
+  | BusServiceError;
+
+export type BusFrequency = {
+  start?: string;
+  end?: string;
+  minHeadwayMins?: number;
+  maxHeadwayMins?: number;
+  serviceDays: string;
+};
+
+export type BusScheduleByDirection = {
+  direction: number;
+  directionLabel: string;
+  first?: string;
+  last?: string;
+  frequencies: BusFrequency[];
+};
+
+export type BusTimetableResult =
+  | {
+      ok: true;
+      routeName: string;
+      city: TaiwanCityEn;
+      schedules: BusScheduleByDirection[];
+    }
+  | BusServiceError;
+
+export type BusOnRoad = {
+  plateNumb: string;
+  direction: number;
+  directionLabel: string;
+  lat?: number;
+  lng?: number;
+  speed?: number;
+  statusLabel: string;
+  gpsTime?: string;
+  isLowFloor: "是" | "否" | "未知";
+  hasLiftOrRamp: "是" | "否" | "未知";
+  vehicleClass?: string;
+};
+
+export type BusRealtimeOnRouteResult =
+  | {
+      ok: true;
+      routeName: string;
+      city: TaiwanCityEn;
+      count: number;
+      lowFloorCount: number;
+      buses: BusOnRoad[];
+    }
+  | BusServiceError;
