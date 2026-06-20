@@ -16,6 +16,7 @@ import { createUserRouter } from "./modules/user";
 import { createAirRouter } from "./modules/air";
 import { createAiRouter } from "./modules/ai";
 import { createHazardReportRouter } from "./modules/hazard-report";
+import { createEnvironmentRouter } from "./modules/environment";
 import { generateOpenAPIDocument } from "./openapi/document";
 
 const app: Express = express();
@@ -29,7 +30,7 @@ app.use(
 const corsOrigins = process.env.CORS_ORIGINS?.split(",")
   .map((o) => o.trim())
   .filter(Boolean) ?? ["http://localhost:3000"];
-app.use(cors({ origin: corsOrigins, credentials: true }));
+app.use(cors());
 
 app.use(morgan("common"));
 app.use(cookieParser());
@@ -63,6 +64,7 @@ app.use("/api/v1/a11y", createA11yRouter());
 app.use("/api/v1/a11y", createAccessibleRouteRouter());
 app.use("/api/v1/a11y", createNavInstructionsRouter());
 app.use("/api/v1/a11y", createHazardReportRouter());
+app.use("/api/v1/a11y", createEnvironmentRouter());
 app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/ai", createAiRouter());
 
@@ -72,7 +74,7 @@ app.use("*", (req: Request, res: Response<ApiResponse<null>>) => {
     false,
     "error",
     ResponseCode.NOT_FOUND,
-    `Method ${req.method} ${req.originalUrl} not found`
+    `Method ${req.method} ${req.originalUrl} not found`,
   );
 });
 

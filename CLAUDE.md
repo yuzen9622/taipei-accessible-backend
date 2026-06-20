@@ -33,7 +33,8 @@ Copy `.env.example` to `.env`. Required variables:
 | `USE_OTP_ROUTER` | OTP2 planner rollout: `false` \| `shadow` (log diff only) \| `true` (merge) |
 | `OTP_BASE_URL` | OTP2 sidecar GraphQL server (default `http://localhost:8080`, internal only) |
 | `GEMINI_API_URL` | OpenAI-compatible base URL for the AI API (default: Gemini's `/v1beta/openai` endpoint) |
-| `GEMINI_MODEL` | Model name used by all AI features (default: `gemini-2.5-flash`) |
+| `GEMINI_MODEL` | Model name used by all AI features (default: `gemini-3-flash-preview`) |
+| `CWA_API_KEY` | 中央氣象署 CWA open-data key — weather block of `/a11y/environment` |
 
 ## Architecture
 
@@ -81,10 +82,11 @@ Each module exposes a `createXRouter()` factory via its `index.ts` (the single r
 | `/api/v1/a11y` | `createA11yRouter` | Accessibility places + bathrooms |
 | `/api/v1/a11y` | `createAccessibleRouteRouter` | `POST /accessible-route` planner |
 | `/api/v1/a11y` | `createNavInstructionsRouter` | Turn-by-turn navigation instructions |
+| `/api/v1/a11y` | `createEnvironmentRouter` | `GET /environment` pre-trip weather/air/CCTV aggregation |
 | `/api/v1/air` | `createAirRouter` | Air quality |
 | `/api/v1/ai` | `createAiRouter` | `/intent`, `/explain`, `/chat` |
 
-Three routers share the `/api/v1/a11y` prefix. Only `/api/v1/user` is wrapped in the auth middleware; all other routes are public.
+Several routers share the `/api/v1/a11y` prefix. Only `/api/v1/user` is wrapped in the auth middleware; all other routes are public.
 
 The auth middleware (`src/middleware/middleware.ts`) **gates** (token expired → 401, missing/invalid → 403) and bypasses `/login`, `/token`, `/refresh`, `/logout`. On success it now **injects** `req.auth = { userId, user }` (typed in `express.d.ts`), so controllers behind it (e.g. hazard-report's `POST /reports`, `GET /reports/mine`) read identity from `req.auth.userId` instead of re-decoding. Public routes that optionally use a token (e.g. hazard-report's `/confirm`) still call `verifyAccessToken` themselves since the middleware never ran. The JWT payload is `{ user }`. It is mounted whole on `/api/v1/user`, and applied **per-route** elsewhere (the hazard-report router chains it onto just its protected routes).
 
@@ -110,7 +112,7 @@ All controllers use `sendResponse()` from `src/config/lib.ts`:
 2. **Tool loop (non-streaming)** — the backend calls the LLM with the local tools declared in `src/config/ai/tool.ts`. If the model returns `finish_reason: "tool_calls"`, the matching function in `src/modules/ai/agent-tools.ts` runs and the result feeds back. Repeats up to 5 times.
 3. **Streaming response** — the final answer streams as SSE (`event: tool_call`, `event: tool_result`, then OpenAI delta chunks, ending with `data: [DONE]`).
 
-Agent tools include `findGooglePlaces`, `findA11yPlaces`, `planAccessibleRoute`, `getBusArrivalEstimate`, `getBusPosition`, `getAirQuality`, `getA11yFacilityDetails`. The `ai` module also exposes `POST /api/v1/ai/intent` (`aiIntent`) and `POST /api/v1/ai/explain` (`aiExplain`). AI configs (temperature, response schema, tool declarations) live in `src/config/ai/` (`config.ts`, `contents.ts`, `tool.ts`) and `src/config/ai.ts`; default model `gemini-2.5-flash`.
+Agent tools include `findGooglePlaces`, `findA11yPlaces`, `planAccessibleRoute`, `getBusArrivalEstimate`, `getBusPosition`, `getAirQuality`, `getA11yFacilityDetails`. The `ai` module also exposes `POST /api/v1/ai/intent` (`aiIntent`) and `POST /api/v1/ai/explain` (`aiExplain`). AI configs (temperature, response schema, tool declarations) live in `src/config/ai/` (`config.ts`, `contents.ts`, `tool.ts`) and `src/config/ai.ts`; default model `gemini-3-flash-preview`.
 
 ### TDX transit API
 

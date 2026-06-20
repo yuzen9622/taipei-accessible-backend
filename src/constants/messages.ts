@@ -21,6 +21,16 @@ export const ERROR_MESSAGE = {
 } as const;
 
 /**
+ * User-facing messages for the pre-trip environment aggregation endpoint. The
+ * partial message is built from the number of sources that came back unavailable.
+ */
+export const ENV_MSG = {
+  OK: "環境資訊查詢成功",
+  partial: (unavailableCount: number): string =>
+    `環境資訊部分查詢成功（${unavailableCount} 項來源不可用）`,
+} as const;
+
+/**
  * Domain reason codes for the hazard-report feature. These ride in
  * `data.reason` of the response envelope (the envelope `code` stays the HTTP
  * status from `ResponseCode`). Referenced by both the service and the OpenAPI
