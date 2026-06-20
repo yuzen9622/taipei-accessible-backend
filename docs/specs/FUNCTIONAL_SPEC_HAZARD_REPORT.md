@@ -1,13 +1,14 @@
 # 使用者路況回報系統
 ## Functional Specification — Hazard Report
 
-**版本**：v1.2.0  
-**狀態**：Proposed — 未實作  
+**版本**：v1.2.1  
+**狀態**：Implemented — 已實作（2026-06-19）  
 **日期**：2026-06-19  
 **作者**：yuzen9622
 
 > v1.1.0 修訂：①回報強制登入、`reporterId` 必填；②到期不物理刪除，保留歷史；③新增「查看我的回報」端點；④移除街景／衛星參考影像比對（圖資老舊無法比對即時障礙），AI 改為 Cloud Vision 預篩 + Gemini 單圖語意判斷。  
-> v1.2.0 修訂：⑤架構對齊現有 clean-backend-architecture——feature 收斂為 `src/modules/hazard-report/`（router/controller/service/ai-verify/parse/schema/type/index），外部 I/O 進 `src/adapters/*.adapter.ts`，移除規格中不存在的 `src/service/`、`src/routes/` 路徑；錯誤以 `ResponseCode` enum 標 HTTP 狀態、領域 reason 放 `data.reason`；auth middleware 改注入 `req.auth`。
+> v1.2.0 修訂：⑤架構對齊現有 clean-backend-architecture——feature 收斂為 `src/modules/hazard-report/`（router/controller/service/ai-verify/parse/schema/type/index），外部 I/O 進 `src/adapters/*.adapter.ts`，移除規格中不存在的 `src/service/`、`src/routes/` 路徑；錯誤以 `ResponseCode` enum 標 HTTP 狀態、領域 reason 放 `data.reason`；auth middleware 改注入 `req.auth`。  
+> v1.2.1 修訂（as-built，已實作）：S1–S6 全數完成，`tsc --noEmit` 乾淨、vitest 63 passed、`npm run build` 綠燈、app 可掛載 5 條路由。實作相對本文的調整：① 型別檔採 `.types.ts`（對齊 repo 2026-06-19 reorg 慣例），`IHazardReport`/`HazardType`/`AiVerdict`/`HazardStatus` 放 `src/types/index.d.ts`，模組內 DTO 放 `hazard-report.types.ts`；② 新增 `hazard-report.middleware.ts`（multer 記憶體上傳 + express-rate-limit）與 `hazard-report.expire.ts`（過期掃描），Haversine 放 `src/utils/geo.ts`；③ 過期以 in-process `setInterval`（`server.ts`，unref）+ `npm run hazard:expire` 腳本實作；④ `constants/messages.ts` 同時提供 `HAZARD_REASON` 與 `HAZARD_MSG`；⑤ GCS `photoUrl` 採 `storage.googleapis.com/<bucket>/<path>` public-read（bucket 需開放公開讀取，否則改 signed URL）；⑥ EXIF UTC 時區問題（§6.3 待確認）尚未解，目前以 ±10 分鐘 clock skew 容忍。未 commit。
 
 ---
 
@@ -114,7 +115,9 @@ src/
 │       ├── hazard-report.service.ts    # domain：業務協調（geo fence / 去重 / 持久化 / 觸發 AI），無 req/res
 │       ├── hazard-report.ai-verify.ts  # domain：非同步 AI 辨識協調（呼叫 vision/ai-vision adapter）
 │       ├── hazard-report.parse.ts      # I/O mapping：exifr 原始值→exifValidation；Gemini text→AiVerifyResult
-│       └── hazard-report.type.ts       # types：跨層 domain 型別（HazardType / AiVerdict / 結果 DTO）
+│       ├── hazard-report.middleware.ts # transport：multer 記憶體上傳 + express-rate-limit 限流器
+│       ├── hazard-report.expire.ts     # domain：過期掃描（updateMany 標記 expired，不刪除）
+│       └── hazard-report.types.ts      # types：模組內 DTO（CreateReportInput / ServiceResult / AiVerifyResult 等）
 ├── adapters/                           # I/O（每檔一個外部來源；沿用 google.adapter.ts / tdx.adapter.ts 慣例）
 │   ├── gcs.adapter.ts                  # 新增：GCS 上傳/刪除
 │   ├── vision.adapter.ts              # 新增：Cloud Vision label/object/SafeSearch
@@ -125,21 +128,25 @@ src/
 ├── middleware/middleware.ts            # 擴充：注入 req.auth = { userId, user }（共用 spine）
 ├── types/
 │   ├── code.ts                         # 擴充 ResponseCode：GONE=410、TOO_MANY_REQUESTS=429
-│   └── express.d.ts                    # 擴充 req.auth 型別（userId / user）
-└── openapi/registry.ts                 # 註冊 hazard-report schema（docs 由 schema 單一來源生成）
+│   ├── express.d.ts                    # 擴充 req.auth 型別（userId / user）
+│   └── index.d.ts                      # 新增：IHazardReport / HazardType / AiVerdict / HazardStatus（model 介面）
+├── utils/geo.ts                        # 新增：Haversine 距離（地理柵欄 / EXIF GPS 比對共用）
+├── scripts/expire-hazard-reports.ts    # 新增：過期掃描 CLI（npm run hazard:expire；供 Cloud Scheduler/cron）
+├── server.ts                           # 擴充：mongoose 連線後 startHazardExpiryJob()（in-process 過期掃描）
+└── openapi/document.ts                 # 擴充：import hazard-report.schema（schema 自身呼叫 registry.registerPath）
 ```
 
 ### 3.3 各層職責（clean-architecture 契約）
 
-| 層 | 檔案 | 唯一職責 | 不可以做 |
-|----|------|----------|----------|
-| transport | `hazard-report.router.ts` | 宣告 path/method、串 middleware（auth→multer→validate）、委派**單一** controller | 業務邏輯、直接呼叫 service |
-| validation | `hazard-report.schema.ts` | 以 Zod 宣告 body/query/params 形狀並拒絕未知欄位 | I/O、業務規則、塑形回應 |
-| handler | `hazard-report.controller.ts` | 讀 `req.auth`/`req.validated`/`req.file`，呼叫**一個** service 方法，用 `sendResponse` 包裝 | 業務 if/else、外部/DB 呼叫、解析原始上游資料 |
-| domain | `hazard-report.service.ts`、`hazard-report.ai-verify.ts` | 業務邏輯與協調，呼叫 adapter / model，落實領域規則 | import `req`/`res`、驗證請求形狀 |
-| I/O mapping | `hazard-report.parse.ts` | exifr 原始值 ↔ `exifValidation`、Gemini 文字 → `AiVerifyResult` | 請求驗證、業務決策、HTTP 細節 |
-| I/O client | `adapters/*.adapter.ts` | 封裝單一外部來源（GCS / Cloud Vision / Gemini） | 業務決策、HTTP envelope |
-| types | `hazard-report.type.ts` | 跨層 domain 型別來源 | 邏輯、執行期值 |
+| 層           | 檔案                                                      | 唯一職責                                                                            | 不可以做                         |
+| ----------- | ------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------- |
+| transport   | `hazard-report.router.ts`                               | 宣告 path/method、串 middleware（auth→multer→validate）、委派**單一** controller           | 業務邏輯、直接呼叫 service            |
+| validation  | `hazard-report.schema.ts`                               | 以 Zod 宣告 body/query/params 形狀並拒絕未知欄位                                            | I/O、業務規則、塑形回應                |
+| handler     | `hazard-report.controller.ts`                           | 讀 `req.auth`/`req.validated`/`req.file`，呼叫**一個** service 方法，用 `sendResponse` 包裝 | 業務 if/else、外部/DB 呼叫、解析原始上游資料 |
+| domain      | `hazard-report.service.ts`、`hazard-report.ai-verify.ts` | 業務邏輯與協調，呼叫 adapter / model，落實領域規則                                               | import `req`/`res`、驗證請求形狀    |
+| I/O mapping | `hazard-report.parse.ts`                                | exifr 原始值 ↔ `exifValidation`、Gemini 文字 → `AiVerifyResult`                       | 請求驗證、業務決策、HTTP 細節            |
+| I/O client  | `adapters/*.adapter.ts`                                 | 封裝單一外部來源（GCS / Cloud Vision / Gemini）                                           | 業務決策、HTTP envelope           |
+| types       | `hazard-report.types.ts`                                | 模組內 domain 型別來源（DTO / ServiceResult / 結果型別）；model 介面在 `types/index.d.ts`        | 邏輯、執行期值                      |
 
 ### 3.4 需動到的共用 spine（一次定義、處處沿用）
 
@@ -923,7 +930,7 @@ src/
 │       ├── hazard-report.schema.ts
 │       ├── hazard-report.controller.ts
 │       ├── hazard-report.service.ts
-│       └── hazard-report.type.ts
+│       └── hazard-report.types.ts
 └── adapters/
     └── gcs.adapter.ts                  # 照片上傳/刪除（I/O 層）
 ```
