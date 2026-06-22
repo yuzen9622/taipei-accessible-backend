@@ -14,6 +14,9 @@ export default defineConfig({
     env: {
       GEMINI_API_KEY: "test-dummy",
       OPENAI_API_KEY: "test-dummy",
+      // Lets buildAuthorizationHeader() sign tokens the auth middleware can
+      // verify (test/test-helpers.ts) for route-level integration tests.
+      JWT_ACCESS_SECRET: "test-access-secret",
     },
   },
 });
