@@ -1,8 +1,7 @@
 import { sendResponse } from "../../config/lib";
 import { detectBusApiType } from "../../utils/transit-text";
-import { getCity } from "../../adapters/google.adapter";
 import { ResponseCode } from "../../types/code";
-import { MSG, ERROR_MESSAGE } from "../../constants/messages";
+import { MSG, ERROR_MESSAGE, TRANSIT_MSG } from "../../constants/messages";
 import { ApiResponse } from "../../types/response";
 import type { Response, Request } from "express";
 import { TaiwanCityEn } from "../../types/transit";
@@ -18,12 +17,12 @@ async function getBusData(req: Request, res: Response<ApiResponse<any>>) {
       return sendResponse(res, false, "error", ResponseCode.INVALID_INPUT, ERROR_MESSAGE.MISSING_PARAMS);
     }
 
-    const city = (await getCity(Number(arrival_lat), Number(arrival_lng))) as TaiwanCityEn;
     const result = await transitService.getBusEta({
       routeName: route_name as string,
       departureStop: departure_stop as string,
       arrivalStop: arrival_stop as string,
-      city,
+      arrivalLat: Number(arrival_lat),
+      arrivalLng: Number(arrival_lng),
       language: language as "Zh_tw" | "En" | undefined,
     });
 
@@ -46,14 +45,14 @@ async function getRealtimeBusPosition(req: Request, res: Response<ApiResponse<an
     }
 
     if (typeof plate_number !== "string" || !/^[\w-]{1,15}$/.test(plate_number)) {
-      return sendResponse(res, false, "error", ResponseCode.INVALID_INPUT, "無效的車牌號碼");
+      return sendResponse(res, false, "error", ResponseCode.INVALID_INPUT, TRANSIT_MSG.INVALID_PLATE);
     }
 
-    const city = (await getCity(Number(arrival_lat), Number(arrival_lng))) as TaiwanCityEn;
     const result = await transitService.getBusRealtimePosition({
       plateNumber: plate_number,
       routeName: route_name as string,
-      city,
+      arrivalLat: Number(arrival_lat),
+      arrivalLng: Number(arrival_lng),
     });
 
     if (!result.ok) {
@@ -78,7 +77,7 @@ async function resolveCityOr400(
       false,
       "error",
       ResponseCode.INVALID_INPUT,
-      "請提供有效的縣市 (city)，例如 台北、台中",
+      TRANSIT_MSG.INVALID_CITY,
     );
     return null;
   }

@@ -13,6 +13,16 @@ export const MSG = {
   OK: "OK",
 } as const;
 
+/**
+ * Shared user-facing strings for the transit (bus) endpoints. `INVALID_CITY` is
+ * emitted from `resolveCityOr400`, which backs four handlers, so it is
+ * centralized rather than inlined.
+ */
+export const TRANSIT_MSG = {
+  INVALID_PLATE: "無效的車牌號碼",
+  INVALID_CITY: "請提供有效的縣市 (city)，例如 台北、台中",
+} as const;
+
 export const ERROR_MESSAGE = {
   INTERNAL: "Internal Server Error",
   MISSING_PARAMS: "缺少必要參數",

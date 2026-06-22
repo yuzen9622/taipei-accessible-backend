@@ -1,6 +1,7 @@
 import { detectBusApiType, getRouteDirectionImproved } from "../../utils/transit-text";
 import { busUrl } from "../../config/transit";
 import { tdxFetch } from "../../config/fetch";
+import { getCity } from "../../adapters/google.adapter";
 import type { BusRoute } from "../../types/transit";
 import type { TaiwanCityEn } from "../../types/transit";
 import type { Lang, BusEtaResult, BusPositionResult } from "./transit.types";
@@ -11,11 +12,13 @@ export async function getBusEta(params: {
   routeName: string;
   departureStop: string;
   arrivalStop: string;
-  city: TaiwanCityEn;
+  arrivalLat: number;
+  arrivalLng: number;
   language?: Lang;
 }): Promise<BusEtaResult> {
-  const { routeName, departureStop, arrivalStop, city } = params;
+  const { routeName, departureStop, arrivalStop, arrivalLat, arrivalLng } = params;
   const lang: Lang = params.language ?? "Zh_tw";
+  const city = (await getCity(arrivalLat, arrivalLng)) as TaiwanCityEn;
   const fmt = detectBusApiType(routeName);
 
   const stopUrl =
@@ -58,10 +61,12 @@ export async function getBusEta(params: {
 export async function getBusRealtimePosition(params: {
   plateNumber: string;
   routeName: string;
-  city: TaiwanCityEn;
+  arrivalLat: number;
+  arrivalLng: number;
 }): Promise<BusPositionResult> {
-  const { plateNumber, routeName, city } = params;
+  const { plateNumber, routeName, arrivalLat, arrivalLng } = params;
   const fmt = detectBusApiType(routeName);
+  const city = (await getCity(arrivalLat, arrivalLng)) as TaiwanCityEn;
 
   const url =
     fmt.type === "City"
