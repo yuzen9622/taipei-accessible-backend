@@ -1720,6 +1720,14 @@ export async function planAccessibleRouteFromRequest(
   );
 
   if (!routes.length) {
+    const { isOtpCircuitOpen } = await import("./planners/otp-routing");
+    if (isOtpCircuitOpen()) {
+      return {
+        ok: false,
+        status: ResponseCode.SERVICE_UNAVAILABLE,
+        error: "路線規劃服務暫時忙線，請稍後再試",
+      };
+    }
     return {
       ok: false,
       status: ResponseCode.NOT_FOUND,

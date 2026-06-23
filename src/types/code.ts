@@ -10,6 +10,7 @@ export enum ResponseCode {
   GONE = 410,
   TOO_MANY_REQUESTS = 429,
   INTERNAL_ERROR = 500,
+  SERVICE_UNAVAILABLE = 503,
 }
 
 export const ResponseMessage: Record<keyof typeof ResponseCode, string> = {
@@ -24,4 +25,5 @@ export const ResponseMessage: Record<keyof typeof ResponseCode, string> = {
   GONE: "Gone",
   TOO_MANY_REQUESTS: "Too many requests",
   INTERNAL_ERROR: "Internal server error",
+  SERVICE_UNAVAILABLE: "Service unavailable",
 };

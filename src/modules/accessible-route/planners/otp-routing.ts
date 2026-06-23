@@ -66,18 +66,58 @@ const SUPPORTED_TRANSIT_MODES = new Set([
 
 const BREAKER_THRESHOLD = 3;
 const BREAKER_COOLDOWN_MS = 60_000;
-let consecutiveFailures = 0;
-let circuitOpenUntil = 0;
 
-function recordFailure(): void {
-  consecutiveFailures++;
-  if (consecutiveFailures >= BREAKER_THRESHOLD) {
-    circuitOpenUntil = Date.now() + BREAKER_COOLDOWN_MS;
-  }
+interface Breaker {
+  isOpen(): boolean;
+  recordFailure(): void;
+  recordSuccess(): void;
 }
-function recordSuccess(): void {
-  consecutiveFailures = 0;
-  circuitOpenUntil = 0;
+
+/**
+ * Build an isolated circuit breaker: opens after BREAKER_THRESHOLD consecutive
+ * failures, stays open for BREAKER_COOLDOWN_MS, and logs each open / recovery
+ * transition under `name`. Each breaker owns its own counter so an unrelated
+ * caller's failures can never trip it.
+ *
+ * @param name Identifier used in the breaker's log lines.
+ * @returns The breaker handle.
+ */
+function createBreaker(name: string): Breaker {
+  let consecutiveFailures = 0;
+  let openUntil = 0;
+  return {
+    isOpen: () => Date.now() < openUntil,
+    recordFailure() {
+      consecutiveFailures++;
+      if (consecutiveFailures >= BREAKER_THRESHOLD && openUntil <= Date.now()) {
+        openUntil = Date.now() + BREAKER_COOLDOWN_MS;
+        console.warn(
+          `[otp-routing] circuit OPEN (${name}) after ${consecutiveFailures} consecutive failures — pausing ${BREAKER_COOLDOWN_MS / 1000}s`,
+        );
+      }
+    },
+    recordSuccess() {
+      if (openUntil !== 0 || consecutiveFailures > 0) {
+        console.info(`[otp-routing] circuit recovered (${name})`);
+      }
+      consecutiveFailures = 0;
+      openUntil = 0;
+    },
+  };
+}
+
+const planBreaker = createBreaker("plan");
+const railGeomBreaker = createBreaker("railgeom");
+
+/**
+ * Whether the main OTP plan circuit is currently open (tripped). Lets callers
+ * tell "OTP planner temporarily unavailable" apart from "no route exists", so a
+ * skipped plan is not misreported as a 404.
+ *
+ * @returns True when the plan circuit is open.
+ */
+export function isOtpCircuitOpen(): boolean {
+  return planBreaker.isOpen();
 }
 
 function hhmm(epochMs: number): string {
@@ -265,7 +305,7 @@ export async function fetchRailLegGeometry(
   dateYmd: string,
   timeHHmm: string,
 ): Promise<[number, number][] | null> {
-  if (Date.now() < circuitOpenUntil) return null;
+  if (railGeomBreaker.isOpen()) return null;
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), OTP_TIMEOUT_MS);
@@ -296,7 +336,7 @@ export async function fetchRailLegGeometry(
         };
       };
     };
-    recordSuccess();
+    railGeomBreaker.recordSuccess();
     const legs = json.data?.plan?.itineraries?.[0]?.legs ?? [];
     const coords: [number, number][] = [];
     for (const leg of legs) {
@@ -308,7 +348,7 @@ export async function fetchRailLegGeometry(
     }
     return coords.length >= 2 ? coords : null;
   } catch {
-    recordFailure();
+    railGeomBreaker.recordFailure();
     return null;
   } finally {
     clearTimeout(timer);
@@ -601,7 +641,7 @@ export async function planOtpRoute(
   destination: { lat: number; lng: number },
   opts?: PlanOtpRouteOptions,
 ): Promise<AccessibleRoute[]> {
-  if (Date.now() < circuitOpenUntil) return [];
+  if (planBreaker.isOpen()) return [];
 
   const departure = opts?.departureTime ?? new Date();
   const mode = opts?.mode ?? "normal";
@@ -617,9 +657,9 @@ export async function planOtpRoute(
       wheelchair,
       walkSpeed,
     );
-    recordSuccess();
+    planBreaker.recordSuccess();
   } catch (err) {
-    recordFailure();
+    planBreaker.recordFailure();
     console.warn("[otp-routing] plan query failed (fail-soft to [])", err);
     return [];
   }
@@ -641,7 +681,7 @@ export async function planOtpRoute(
           walkSpeed,
         );
       } catch (err) {
-        recordFailure();
+        planBreaker.recordFailure();
         console.warn("[otp-routing] snap retry failed (fail-soft to [])", err);
         return [];
       }
