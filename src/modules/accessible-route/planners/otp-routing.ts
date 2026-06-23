@@ -12,10 +12,18 @@
 
 import { decode } from "@googlemaps/polyline-codec";
 import { GtfsTrip } from "../../../model/gtfs-trip.model";
+import MetroStationModel from "../../../model/metro-station.model";
+import TrainStationModel from "../../../model/train-station.model";
+import BusStopModel from "../../../model/bus-stop.model";
 import { haversineCoords } from "./ors";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
 import { walkSpeedMps } from "../scoring";
+import type {
+  ITdxMetroStation,
+  ITdxTrainStation,
+  ITdxBusStop,
+} from "../../../types";
 import type {
   AccessibilityMode,
   AccessibleRoute,
@@ -43,8 +51,7 @@ export type {
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
 const OTP_NUM_ITINERARIES = 5;
 
-const SNAP_RADIUS_M = 500;
-const SNAP_CANDIDATES = 10;
+const SNAP_RADIUS_M = 1500;
 
 const METRO_SYSTEMS = new Set([
   "TRTC",
@@ -355,75 +362,65 @@ export async function fetchRailLegGeometry(
   }
 }
 
-const NEARBY_STOPS_QUERY = `
-query NearbyStops($lat: Float!, $lon: Float!, $radius: Int!, $first: Int!) {
-  stopsByRadius(lat: $lat, lon: $lon, radius: $radius, first: $first) {
-    edges {
-      node {
-        distance
-        stop { gtfsId name lat lon routes { gtfsId } }
-      }
-    }
-  }
-}`;
-
 /**
- * Nearest stop within SNAP_RADIUS_M that has ≥1 route serving it (results come
- * back distance-ascending). Fail-soft: null on any error or no candidate.
+ * Snap a raw endpoint to the nearest transit station by straight-line distance,
+ * so geocoded venue centroids stranded behind a physical barrier still resolve
+ * to a routable stop. Motivating case: "松山機場" geocodes to the runway side of
+ * the airport fence — metres from the BR13 metro entrance as the crow flies, but
+ * ~2 km away on foot — so OTP's walking-distance stopsByRadius returned nothing
+ * and the trip 404'd.
  *
- * @param point The [lat, lng] point to snap from.
- * @returns The nearest route-bearing stop, or null.
+ * Rail stations (MRT + TRA/THSR) are preferred over bus stops within
+ * SNAP_RADIUS_M: they are higher-capacity anchors with near-universal service
+ * and the natural access point for the large venues that trigger this fallback.
+ * Falls back to the nearest bus stop when no rail station is in range. Uses a
+ * Mongo 2dsphere $near (great-circle), not OTP's walking distance, which the
+ * barrier defeats. Fail-soft: null on any error or no candidate.
+ *
+ * @param point The {lat, lng} point to snap from.
+ * @returns The nearest rail-then-bus station, or null.
  */
 async function findSnapStop(point: {
   lat: number;
   lng: number;
 }): Promise<SnapStop | null> {
-  const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), OTP_TIMEOUT_MS);
+  const origin: [number, number] = [point.lng, point.lat];
+  const nearQuery = {
+    location: {
+      $near: {
+        $geometry: { type: "Point" as const, coordinates: origin },
+        $maxDistance: SNAP_RADIUS_M,
+      },
+    },
+  };
   try {
-    const res = await fetch(`${baseUrl}/otp/gtfs/v1`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        query: NEARBY_STOPS_QUERY,
-        variables: {
-          lat: point.lat,
-          lon: point.lng,
-          radius: SNAP_RADIUS_M,
-          first: SNAP_CANDIDATES,
-        },
-      }),
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as {
-      data?: {
-        stopsByRadius?: {
-          edges?: {
-            node?: {
-              stop?: {
-                name?: string;
-                lat?: number;
-                lon?: number;
-                routes?: unknown[];
-              } | null;
-            } | null;
-          }[];
-        };
+    const [metro, train] = await Promise.all([
+      MetroStationModel.find(nearQuery).limit(1).lean<ITdxMetroStation[]>(),
+      TrainStationModel.find(nearQuery).limit(1).lean<ITdxTrainStation[]>(),
+    ]);
+    const rail = [...metro, ...train]
+      .map((s) => ({ coords: s.location.coordinates, name: s.stationName.Zh_tw }))
+      .sort(
+        (a, b) =>
+          haversineCoords(origin, a.coords) - haversineCoords(origin, b.coords),
+      )[0];
+    if (rail) {
+      return { lat: rail.coords[1], lng: rail.coords[0], name: rail.name };
+    }
+
+    const [bus] = await BusStopModel.find(nearQuery)
+      .limit(1)
+      .lean<ITdxBusStop[]>();
+    if (bus) {
+      return {
+        lat: bus.location.coordinates[1],
+        lng: bus.location.coordinates[0],
+        name: bus.stopName.Zh_tw,
       };
-    };
-    for (const edge of json.data?.stopsByRadius?.edges ?? []) {
-      const stop = edge?.node?.stop;
-      if (!stop?.routes?.length) continue;
-      if (typeof stop.lat !== "number" || typeof stop.lon !== "number") continue;
-      return { lat: stop.lat, lng: stop.lon, name: stop.name ?? "鄰近站點" };
     }
     return null;
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -627,6 +624,28 @@ function transitLegFrom(
 }
 
 /**
+ * An itinerary is usable iff it has ≥1 transit leg, every transit leg rides a
+ * supported mode, and its transfer count (transit legs − 1) is within
+ * maxTransfers. Used both to decide whether a stop-snap retry is needed and to
+ * filter the final output, so the snap trigger and the output filter never drift
+ * apart: OTP can return only itineraries that all exceed the transfer cap (e.g.
+ * a venue centroid stranded far from any stop forces extra hops), which must
+ * count as "no usable route" and trigger the snap, not slip through as success.
+ *
+ * @param it The OTP itinerary to test.
+ * @param maxTransfers The transfer cap, or undefined for no cap.
+ * @returns Whether the itinerary survives the output filter.
+ */
+function itineraryUsable(it: OtpItinerary, maxTransfers?: number): boolean {
+  const transit = it.legs.filter(isTransitLeg);
+  if (!transit.length) return false;
+  if (transit.some((l) => !SUPPORTED_TRANSIT_MODES.has(l.mode))) return false;
+  if (maxTransfers !== undefined && transit.length - 1 > maxTransfers)
+    return false;
+  return true;
+}
+
+/**
  * Plan transit routes via the OTP2 sidecar. Output is AccessibleRoute-compatible
  * and un-enriched (no a11y arrays, no highlights) — finalizeRoutes() handles
  * scoring, enrichment and overlays downstream. Fail-soft: [] on any error.
@@ -664,9 +683,10 @@ export async function planOtpRoute(
     return [];
   }
 
+  const maxTransfers = opts?.maxTransfers;
   let snapPre: WalkLeg | null = null;
   let snapPost: WalkLeg | null = null;
-  if (!itineraries.length) {
+  if (!itineraries.some((it) => itineraryUsable(it, maxTransfers))) {
     const [originSnap, destSnap] = await Promise.all([
       findSnapStop(origin),
       findSnapStop(destination),
@@ -687,7 +707,7 @@ export async function planOtpRoute(
       }
       if (itineraries.length) {
         console.info(
-          `[otp-routing] empty plan recovered by stop snap` +
+          `[otp-routing] no usable plan recovered by stop snap` +
             (originSnap ? ` origin→${originSnap.name}` : "") +
             (destSnap ? ` dest→${destSnap.name}` : ""),
         );
@@ -709,7 +729,6 @@ export async function planOtpRoute(
     }
   }
 
-  const maxTransfers = opts?.maxTransfers;
   const queryDate = ymdDash(departure);
   const allTripIds = [
     ...new Set(
@@ -725,15 +744,8 @@ export async function planOtpRoute(
 
   const out: AccessibleRoute[] = [];
   for (const [i, it] of itineraries.entries()) {
+    if (!itineraryUsable(it, maxTransfers)) continue;
     const transitOtpLegs = it.legs.filter(isTransitLeg);
-    if (!transitOtpLegs.length) continue;
-    if (transitOtpLegs.some((l) => !SUPPORTED_TRANSIT_MODES.has(l.mode)))
-      continue;
-    if (
-      maxTransfers !== undefined &&
-      transitOtpLegs.length - 1 > maxTransfers
-    )
-      continue;
 
     const legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
     const transitLegs: (BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
