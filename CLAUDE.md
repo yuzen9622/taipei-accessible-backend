@@ -13,7 +13,11 @@ npm test           # Run tests once (vitest)
 npm run test:watch # Vitest in watch mode
 ```
 
-Tests use **vitest**; specs live next to the code as `*.test.ts` (e.g. `src/modules/accessible-route/scoring.test.ts`, `ranking.test.ts`, `nav-instructions.service.test.ts`).
+Tests use **vitest**; specs live next to the code as `*.test.ts` (e.g. `src/modules/accessible-route/scoring.test.ts`).
+We support unit tests and route-level integration tests. The integration test harness uses **supertest** to drive the Express application:
+- `buildTestApp()` (from `test/test-helpers.ts`) returns the real Express app instance (from `src/app.ts`) without starting the HTTP server or connecting to MongoDB.
+- `buildAuthorizationHeader(user?)` (from `test/test-helpers.ts`) signs a JWT token and returns a Bearer header string for authenticated routes.
+- Mock the service layer with `vi.mock` in test files so that the request exercises router + middleware + validation + controller + envelope without touching the network or DB.
 
 Data-import scripts run via dotenvx + ts-node and populate MongoDB from TDX / GTFS / OSM sources — e.g. `npm run import:gtfs-all`, `npm run import:tdx-tra`, `npm run import:osm`. See `package.json` for the full list (`src/scripts/*`).
 
@@ -82,11 +86,12 @@ Each module exposes a `createXRouter()` factory via its `index.ts` (the single r
 | `/api/v1/a11y` | `createA11yRouter` | Accessibility places + bathrooms |
 | `/api/v1/a11y` | `createAccessibleRouteRouter` | `POST /accessible-route` planner |
 | `/api/v1/a11y` | `createNavInstructionsRouter` | Turn-by-turn navigation instructions |
+| `/api/v1/a11y` | `createHazardReportRouter` | Hazard reporting & confirmation |
 | `/api/v1/a11y` | `createEnvironmentRouter` | `GET /environment` pre-trip weather/air/CCTV aggregation |
 | `/api/v1/air` | `createAirRouter` | Air quality |
 | `/api/v1/ai` | `createAiRouter` | `/intent`, `/explain`, `/chat` |
 
-Several routers share the `/api/v1/a11y` prefix. Only `/api/v1/user` is wrapped in the auth middleware; all other routes are public.
+Several routers share the `/api/v1/a11y` prefix. Only `/api/v1/user` is wrapped in the auth middleware; all other routes are public (or use route-level auth hooks).
 
 The auth middleware (`src/middleware/middleware.ts`) **gates** (token expired → 401, missing/invalid → 403) and bypasses `/login`, `/token`, `/refresh`, `/logout`. On success it now **injects** `req.auth = { userId, user }` (typed in `express.d.ts`), so controllers behind it (e.g. hazard-report's `POST /reports`, `GET /reports/mine`) read identity from `req.auth.userId` instead of re-decoding. Public routes that optionally use a token (e.g. hazard-report's `/confirm`) still call `verifyAccessToken` themselves since the middleware never ran. The JWT payload is `{ user }`. It is mounted whole on `/api/v1/user`, and applied **per-route** elsewhere (the hazard-report router chains it onto just its protected routes).
 
@@ -102,7 +107,7 @@ All controllers use `sendResponse()` from `src/config/lib.ts`:
 { ok, status, code, message, data?, accessToken? }
 ```
 
-`code` is the HTTP status from the `ResponseCode` enum (`src/types/code.ts` — currently 200/201/204/205/400/401/403/404/500; no 410/429). Domain-specific error categories go in `data` (e.g. `data.reason`), not in `code`. The refresh token is set as an `httpOnly` cookie, not in the JSON body.
+`code` is the HTTP status from the `ResponseCode` enum (`src/types/code.ts` — currently 200/201/204/205/400/401/403/404/410/429/500/503). Domain-specific error categories go in `data` (e.g. `data.reason`), not in `code`. The refresh token is set as an `httpOnly` cookie, not in the JSON body.
 
 ### Agent Chat flow (`POST /api/v1/ai/chat`)
 
@@ -124,3 +129,10 @@ Agent tools include `findGooglePlaces`, `findA11yPlaces`, `planAccessibleRoute`,
 - `bathroom.model.ts` — accessible bathrooms, also geospatial.
 - `user.model.ts` — user accounts.
 - Transit/routing data consumed by the accessible-route planner: `bus-stop`, `metro-station`, `train-station`, `osm-a11y`, and the GTFS models (`gtfs-stop`, `gtfs-trip`, `gtfs-pathway`, `gtfs-level`).
+
+### Circuit Breakers
+
+External calls to the OTP planner (for routing and rail geometry) are wrapped in isolated circuit breakers (`createBreaker` in `src/modules/accessible-route/planners/otp-routing.ts`).
+- **Breakers**: `planBreaker` and `railGeomBreaker`.
+- **Threshold**: Trips after 3 (`BREAKER_THRESHOLD`) consecutive failures, staying open for 60,000ms (`BREAKER_COOLDOWN_MS`).
+- **Behavior**: When the main planner circuit is open (`isOtpCircuitOpen()`), the routing service returns `ResponseCode.SERVICE_UNAVAILABLE` (503) with a localized error message (`路線規劃服務暫時忙線，請稍後再試`) so callers can distinguish temporary service outages from a genuine `404 Not Found` (no route exists).
