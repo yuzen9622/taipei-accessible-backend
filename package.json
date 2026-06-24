@@ -26,6 +26,7 @@
         "import:gtfs-all": "npx dotenvx run -- node --max-old-space-size=2048 -r ts-node/register src/scripts/import-gtfs-all.ts",
         "import:bathrooms": "npx dotenvx run -- ts-node src/scripts/import-bathrooms.ts",
         "import:parking": "npx dotenvx run -- ts-node src/scripts/import-disabled-parking.ts",
+        "import:welfare": "npx dotenvx run -- ts-node src/scripts/import-welfare.ts",
         "hazard:expire": "npx dotenvx run -- ts-node src/scripts/expire-hazard-reports.ts"
     },
     "keywords": [

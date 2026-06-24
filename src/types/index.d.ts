@@ -61,6 +61,23 @@ export interface IDisabledParking {
   importedAt: Date;
 }
 
+export interface IWelfare {
+  _id: string;
+  name: string;
+  county: string;
+  district: string;
+  address: string;
+  phone: string;
+  type: string;
+  approvedCapacity: { residential: number; night: number; day: number };
+  actualServed: { residential: number; night: number; day: number };
+  evaluationTerm: string;
+  evaluationGrade: string;
+  geocoded: boolean;
+  location?: { type: "Point"; coordinates: [number, number] };
+  importedAt: Date;
+}
+
 export interface RankRequest {
   start: google.maps.LatLngLiteral;
   end: google.maps.LatLngLiteral;
