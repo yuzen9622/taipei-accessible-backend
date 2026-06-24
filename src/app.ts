@@ -31,7 +31,7 @@ app.use(
 const corsOrigins = process.env.CORS_ORIGINS?.split(",")
   .map((o) => o.trim())
   .filter(Boolean) ?? ["http://localhost:3000"];
-app.use(cors());
+app.use(cors({ origin: corsOrigins, credentials: true }));
 
 app.use(morgan("common"));
 app.use(cookieParser());
