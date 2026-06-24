@@ -82,7 +82,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findGooglePlaces",
       description:
-        "使用 Google Maps 搜尋地點。可搜尋附近設施或特定地標（如「台北101」），不受距離限制。",
+        "使用 Google Maps 搜尋一般地點、商家或景點。這是 fallback 工具——若上述專用工具（無障礙設施 findA11yPlaces、停車位 findNearbyParking、路況 getNearbyHazards、天氣 getEnvironmentInfo）都不適用，才使用此工具。",
       parameters: {
         type: "object",
         properties: {
@@ -99,7 +99,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findA11yPlaces",
       description:
-        "查詢無障礙設施資料庫（捷運電梯出口、無障礙廁所、OSM 坡道/導盲磚等）。當使用者提到「無障礙、電梯、坡道、廁所、輪椅」時優先使用。",
+        "查詢無障礙設施資料庫（捷運電梯出口、無障礙廁所、OSM 坡道/導盲磚等）。當使用者提到「無障礙、電梯、坡道、廁所、輪椅」時優先使用。注意：本工具不含停車位資料，停車位請用 findNearbyParking。",
       parameters: {
         type: "object",
         properties: {
@@ -117,7 +117,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "planAccessibleRoute",
       description:
-        "規劃無障礙混合式交通路線（公車/捷運/步行/高鐵/台鐵），回傳真實路線名稱、轉乘次數、預估時間與無障礙評分。當使用者說「從 A 到 B」、「怎麼去」、「路線規劃」時使用。",
+        "規劃無障礙混合式交通路線（公車/捷運/步行/高鐵/台鐵），回傳路線摘要（名稱、轉乘次數、預估時間、無障礙評分）。當使用者說「從 A 到 B」、「怎麼去」、「路線規劃」但**沒有要求逐步詳細指引**時使用。若使用者要求「每一步怎麼走」、「詳細步驟」、「帶我走」，請改用 getNavInstructions。",
       parameters: {
         type: "object",
         properties: {
@@ -226,7 +226,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "getAirQuality",
-      description: "根據經緯度查詢該地區的即時空氣品質指標 (PM2.5) 與健康防護建議。",
+      description: "僅查詢 PM2.5 數值與分級。若使用者同時問天氣、出門建議或 CCTV，請改用 getEnvironmentInfo（含天氣+空品+CCTV 三合一）。",
       parameters: {
         type: "object",
         properties: {
@@ -251,6 +251,89 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
         },
         required: ["osmId"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getEnvironmentInfo",
+      description:
+        "查詢指定地點的即時出行環境資訊，包括天氣（溫度、降雨、風速）、空氣品質（PM2.5 與健康建議）和附近路況監視器畫面。當使用者問「那邊天氣怎樣」、「現在適合出門嗎」、「空氣品質好嗎」、「附近有沒有監視器」時使用。支持地名或經緯度查詢。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "地點名稱，例如：'台北車站'、'台中公園'。與 latitude/longitude 二擇一。" },
+          latitude: { type: "number", description: "查詢中心緯度（選填）" },
+          longitude: { type: "number", description: "查詢中心經度（選填）" },
+          radius: { type: "number", description: "CCTV 搜尋範圍（公尺），預設 1000" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getNearbyHazards",
+      description:
+        "查詢指定地點附近的即時路況危險回報（施工 construction、路面障礙物 obstacle、資料錯誤 data_error）。當使用者問「前面有沒有施工」、「附近路況安全嗎」、「那邊有什麼危險」時使用。也可在規劃路線後主動查詢起終點附近的危險資訊。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "地點名稱，例如：'台北車站'。與 latitude/longitude 二擇一。" },
+          latitude: { type: "number", description: "查詢中心緯度（選填）" },
+          longitude: { type: "number", description: "查詢中心經度（選填）" },
+          radiusM: { type: "number", description: "搜尋範圍（公尺），預設 500，最大 5000" },
+          hazardType: {
+            type: "string",
+            enum: ["obstacle", "construction", "data_error"],
+            description: "篩選特定危險類型（選填）",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "findNearbyParking",
+      description:
+        "查詢指定地點附近的身障停車位（身心障礙者專用停車格）。當使用者問「附近有沒有身障停車位」、「殘障車位在哪」、「輪椅停車」、「無障礙停車格」時使用。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "地點名稱，例如：'台北101'、'板橋車站'。與 latitude/longitude 二擇一。" },
+          latitude: { type: "number", description: "搜尋中心緯度（選填）" },
+          longitude: { type: "number", description: "搜尋中心經度（選填）" },
+          radiusM: { type: "number", description: "搜尋範圍（公尺），預設 500" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getNavInstructions",
+      description:
+        "產生從起點到終點的逐步導航指引（「沿中山路直行 120 公尺」、「請向右轉」、「請在台北車站搭乘板南線」）。當使用者在看過路線規劃後要求「詳細步驟」、「每一步怎麼走」、「導航指引」、「帶我走」時使用。也可在使用者一開始就要求詳細導航時直接使用（不需先呼叫 planAccessibleRoute）。",
+      parameters: {
+        type: "object",
+        properties: {
+          origin: { type: "string", description: "起點名稱，請完整照抄使用者說的地名；若說「這裡/目前位置」請填 'current_location'" },
+          destination: { type: "string", description: "終點名稱，請完整照抄使用者說的地名" },
+          mode: {
+            type: "string",
+            enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
+            description: "無障礙需求模式，預設 'normal'",
+          },
+          departureTime: { type: "string", description: "出發時間，ISO8601 或 HH:mm；不指定表示現在" },
+          routeIndex: { type: "number", description: "選擇第幾條路線（0-based），預設 0（最佳路線）" },
+          userHeading: { type: "number", description: "使用者當前朝向（度，正北=0，順時針），有此值時會產生相對方向（左前方/右側等）" },
+        },
+        required: ["origin", "destination"],
       },
     },
   },

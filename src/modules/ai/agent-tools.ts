@@ -1,8 +1,11 @@
 import * as a11yService from "../a11y/a11y.service";
 import * as busService from "../transit/bus.service";
 import * as airService from "../air/air.service";
+import * as hazardService from "../hazard-report/hazard-report.service";
+import { getEnvironmentInfo as fetchEnvironment } from "../environment/environment.service";
 import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
+import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
 import type {
   AccessibleRoute,
   WalkLeg,
@@ -381,6 +384,171 @@ export async function getA11yFacilityDetails(args: {
   }
 }
 
+export async function getEnvironmentInfo(args: {
+  latitude: number;
+  longitude: number;
+  radius?: number;
+  query?: string;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    let { latitude, longitude } = args;
+    if (args.query && (!latitude || !longitude)) {
+      const coords = await getCoordinates(
+        args.query,
+        args.userLocation?.latitude,
+        args.userLocation?.longitude,
+      );
+      if (!coords) {
+        return JSON.stringify({ ok: false, error: `找不到地點「${args.query}」的座標` });
+      }
+      latitude = coords.latitude;
+      longitude = coords.longitude;
+    }
+    if (!latitude || !longitude) {
+      return JSON.stringify({ ok: false, error: "缺少位置資訊（query 或 lat/lng 必填）" });
+    }
+    const data = await fetchEnvironment(latitude, longitude, args.radius ?? 1000);
+    return JSON.stringify({ ok: true, query: args.query ?? null, ...data });
+  } catch (error: any) {
+    console.error("[agent-tool:getEnvironmentInfo]", error);
+    return JSON.stringify({ ok: false, error: "環境資訊查詢失敗" });
+  }
+}
+
+export async function getNearbyHazards(args: {
+  latitude?: number;
+  longitude?: number;
+  query?: string;
+  radiusM?: number;
+  hazardType?: string;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    let { latitude, longitude } = args;
+    if (args.query && (!latitude || !longitude)) {
+      const coords = await getCoordinates(
+        args.query,
+        args.userLocation?.latitude,
+        args.userLocation?.longitude,
+      );
+      if (!coords) {
+        return JSON.stringify({ ok: false, error: `找不到地點「${args.query}」的座標` });
+      }
+      latitude = coords.latitude;
+      longitude = coords.longitude;
+    }
+    if (!latitude || !longitude) {
+      return JSON.stringify({ ok: false, error: "缺少位置資訊（query 或 lat/lng 必填）" });
+    }
+    const result = await hazardService.findNearby({
+      lat: latitude,
+      lng: longitude,
+      radius: args.radiusM,
+      hazardType: args.hazardType as any,
+    });
+    return JSON.stringify({ ok: result.ok, data: result.data });
+  } catch (error: any) {
+    console.error("[agent-tool:getNearbyHazards]", error);
+    return JSON.stringify({ ok: false, error: "附近路況查詢失敗" });
+  }
+}
+
+export async function findNearbyParking(args: {
+  latitude?: number;
+  longitude?: number;
+  query?: string;
+  radiusM?: number;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    let { latitude, longitude } = args;
+    if (args.query && (!latitude || !longitude)) {
+      const coords = await getCoordinates(
+        args.query,
+        args.userLocation?.latitude,
+        args.userLocation?.longitude,
+      );
+      if (!coords) {
+        return JSON.stringify({ ok: false, error: `找不到地點「${args.query}」的座標` });
+      }
+      latitude = coords.latitude;
+      longitude = coords.longitude;
+    }
+    if (!latitude || !longitude) {
+      return JSON.stringify({ ok: false, error: "缺少位置資訊（query 或 lat/lng 必填）" });
+    }
+    const spots = await a11yService.findNearbyParking(latitude, longitude, args.radiusM ?? 500);
+    return JSON.stringify({
+      ok: true,
+      query: args.query ?? null,
+      searchLocation: { lat: latitude, lng: longitude },
+      total: spots.length,
+      parkingSpots: spots,
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:findNearbyParking]", error);
+    return JSON.stringify({ ok: false, error: "身障停車位查詢失敗" });
+  }
+}
+
+export async function getNavInstructions(args: {
+  origin: string;
+  destination: string;
+  mode?: string;
+  departureTime?: string;
+  routeIndex?: number;
+  userHeading?: number;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    if (args.origin === "current_location" && !args.userLocation) {
+      return JSON.stringify({ ok: false, error: "需要使用者位置以使用「目前位置」作為起點" });
+    }
+    const originInput = args.origin === "current_location" ? args.userLocation : args.origin;
+    const validMode = ["wheelchair", "elderly", "visual_impaired", "normal"].includes(args.mode ?? "")
+      ? (args.mode as "wheelchair" | "elderly" | "visual_impaired" | "normal")
+      : "normal";
+
+    const result = await planAccessibleRouteFromRequest({
+      origin: originInput,
+      destination: args.destination,
+      userLocation: args.userLocation,
+      mode: validMode,
+      maxTransfers: 2,
+      departureTime: args.departureTime,
+    });
+    if (!result.ok) {
+      return JSON.stringify({ ok: false, error: result.error });
+    }
+
+    const routes = result.data.routes;
+    const idx = Math.min(Math.max(args.routeIndex ?? 0, 0), routes.length - 1);
+    const route = routes[idx];
+
+    const navResult = generateNavInstructions(
+      { legs: route.legs as any },
+      args.userHeading,
+    );
+    if (!navResult.ok) {
+      return JSON.stringify({ ok: false, error: navResult.message });
+    }
+
+    return JSON.stringify({
+      ok: true,
+      routeName: route.routeName,
+      totalMinutes: route.totalMinutes,
+      instructions: navResult.data.instructions,
+      totalSteps: navResult.data.totalSteps,
+      initialBearing: navResult.data.initialBearing,
+      warnings: navResult.data.warnings,
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:getNavInstructions]", error);
+    return JSON.stringify({ ok: false, error: error?.message ?? "導航指引產生失敗" });
+  }
+}
+
 export async function executeLocalTool(
   name: string,
   args: Record<string, any>,
@@ -447,6 +615,45 @@ export async function executeLocalTool(
 
     case "getA11yFacilityDetails":
       return getA11yFacilityDetails({ osmId: args.osmId });
+
+    case "getEnvironmentInfo":
+      return getEnvironmentInfo({
+        latitude: args.latitude,
+        longitude: args.longitude,
+        radius: args.radius,
+        query: args.query,
+        userLocation,
+      });
+
+    case "getNearbyHazards":
+      return getNearbyHazards({
+        latitude: args.latitude,
+        longitude: args.longitude,
+        query: args.query,
+        radiusM: args.radiusM,
+        hazardType: args.hazardType,
+        userLocation,
+      });
+
+    case "findNearbyParking":
+      return findNearbyParking({
+        latitude: args.latitude,
+        longitude: args.longitude,
+        query: args.query,
+        radiusM: args.radiusM,
+        userLocation,
+      });
+
+    case "getNavInstructions":
+      return getNavInstructions({
+        origin: args.origin as string,
+        destination: args.destination as string,
+        mode: args.mode as string | undefined,
+        departureTime: args.departureTime as string | undefined,
+        routeIndex: args.routeIndex as number | undefined,
+        userHeading: args.userHeading as number | undefined,
+        userLocation,
+      });
 
     default:
       return JSON.stringify({ error: `未知工具：${name}` });
