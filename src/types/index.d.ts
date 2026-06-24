@@ -45,6 +45,22 @@ export interface IBathroom {
   diaper: string;
 }
 
+export interface IDisabledParking {
+  _id: string;
+  city: string;
+  district: string;
+  areacode: string;
+  quantity: number;
+  placeName: string;
+  chargeType: string;
+  spaceLabel: string;
+  isMarked: boolean;
+  latitude: number;
+  longitude: number;
+  location: { type: "Point"; coordinates: [number, number] };
+  importedAt: Date;
+}
+
 export interface RankRequest {
   start: google.maps.LatLngLiteral;
   end: google.maps.LatLngLiteral;

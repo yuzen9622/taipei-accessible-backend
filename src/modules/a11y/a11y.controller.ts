@@ -47,4 +47,19 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
   }
 }
 
-export { getA11yData, nearbyA11y, getBathroomData, getA11yPlace };
+async function nearbyParking(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { lat, lng, radius } = req.query;
+    const radiusM = radius != null ? Number(radius as string) : undefined;
+    const result = await a11yService.findNearbyParking(
+      Number(lat as string),
+      Number(lng as string),
+      radiusM
+    );
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
+  } catch (error) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, (error as string) || ERROR_MESSAGE.INTERNAL);
+  }
+}
+
+export { getA11yData, nearbyA11y, nearbyParking, getBathroomData, getA11yPlace };

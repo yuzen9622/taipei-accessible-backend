@@ -30,6 +30,24 @@ export const A11yPlaceQuerySchema = z
   })
   .strict();
 
+export const ParkingNearbyQuerySchema = z
+  .object({
+    lat: z
+      .string()
+      .regex(/^-?\d+(\.\d+)?$/, "Must be a valid latitude")
+      .openapi({ example: "25.1500" }),
+    lng: z
+      .string()
+      .regex(/^-?\d+(\.\d+)?$/, "Must be a valid longitude")
+      .openapi({ example: "121.4000" }),
+    radius: z
+      .string()
+      .regex(/^\d+$/, "Must be a positive integer (metres)")
+      .optional()
+      .openapi({ example: "300", description: "搜尋半徑（公尺），預設 300" }),
+  })
+  .strict();
+
 const GeoPointSchema = z
   .object({
     type: z.literal("Point").openapi({ example: "Point" }),
@@ -93,6 +111,24 @@ export const OsmA11ySchema = z
   })
   .openapi("OsmA11y");
 
+export const DisabledParkingSchema = z
+  .object({
+    _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0c3" }),
+    city: z.string().openapi({ example: "新北市" }),
+    district: z.string().openapi({ example: "八里區" }),
+    areacode: z.string().optional().openapi({ example: "65000230" }),
+    quantity: z.number().openapi({ example: 1 }),
+    placeName: z.string().openapi({ example: "商港八路" }),
+    chargeType: z.string().optional().openapi({ example: "假日計時收費" }),
+    spaceLabel: z.string().optional().openapi({ example: "身汽1" }),
+    isMarked: z.boolean().openapi({ example: true }),
+    latitude: z.number().openapi({ example: 25.1043 }),
+    longitude: z.number().openapi({ example: 121.4011 }),
+    location: GeoPointSchema,
+    importedAt: z.string().openapi({ example: "2026-06-24T00:00:00.000Z" }),
+  })
+  .openapi("DisabledParking");
+
 const ApiResponseSchema = <T extends z.ZodTypeAny>(
   data: T,
   refName: string
@@ -123,6 +159,7 @@ export const NearbyA11yDataSchema = z
     nearbyMetroA11y: z.array(A11ySchema),
     nearbyBathroom: z.array(BathroomSchema),
     nearbyOsm: z.array(OsmA11ySchema),
+    nearbyParking: z.array(DisabledParkingSchema),
   })
   .openapi("NearbyA11yData");
 
@@ -166,14 +203,40 @@ registry.registerPath({
   path: "/a11y/nearby-a11y",
   tags: ["Accessibility"],
   summary: "鄰近無障礙設施",
-  description: "回傳指定座標 150 公尺內的捷運無障礙出口、廁所與 OSM 節點。",
+  description:
+    "回傳指定座標 150 公尺內的捷運無障礙出口、廁所、OSM 節點與身障停車格。",
   request: {
     query: NearbyA11yQuerySchema,
   },
   responses: {
     200: {
-      description: "鄰近無障礙、廁所與 OSM 資料",
+      description: "鄰近無障礙、廁所、OSM 與停車格資料",
       content: { "application/json": { schema: NearbyA11yResponseSchema } },
+    },
+    400: { description: "缺少或無效的經緯度" },
+    500: { description: "伺服器錯誤" },
+  },
+});
+
+export const ParkingNearbyResponseSchema = ApiResponseSchema(
+  z.array(DisabledParkingSchema),
+  "ParkingNearbyResponse"
+);
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/parking/nearby",
+  tags: ["Accessibility"],
+  summary: "鄰近身障停車格",
+  description:
+    "回傳指定座標附近的身障汽車停車格（預設半徑 300 公尺，可用 radius 覆寫）。",
+  request: {
+    query: ParkingNearbyQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "鄰近身障停車格清單",
+      content: { "application/json": { schema: ParkingNearbyResponseSchema } },
     },
     400: { description: "缺少或無效的經緯度" },
     500: { description: "伺服器錯誤" },
