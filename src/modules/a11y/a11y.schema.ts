@@ -55,7 +55,7 @@ export const A11ySchema = z
 export const BathroomSchema = z
   .object({
     _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0b2" }),
-    contury: z.string().openapi({ example: "臺北市" }),
+    county: z.string().openapi({ example: "臺北市" }),
     areacode: z.string().openapi({ example: "100" }),
     village: z.string().openapi({ example: "黎明里" }),
     number: z.string().openapi({ example: "A001" }),

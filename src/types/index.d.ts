@@ -28,7 +28,7 @@ export interface IA11y {
 
 export interface IBathroom {
   _id: string;
-  contury: string;
+  county: string;
   areacode: string;
   village: string;
   number: string;
@@ -37,6 +37,7 @@ export interface IBathroom {
   administration: string;
   latitude: number;
   longitude: number;
+  location: { type: "Point"; coordinates: [number, number] };
   grade: string;
   type2: string;
   type: string;

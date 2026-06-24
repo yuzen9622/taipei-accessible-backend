@@ -24,6 +24,7 @@
         "import:gtfs-pathways": "npx dotenvx run -- ts-node src/scripts/import-gtfs-pathways.ts",
         "import:gtfs-levels": "npx dotenvx run -- ts-node src/scripts/import-gtfs-levels.ts",
         "import:gtfs-all": "npx dotenvx run -- node --max-old-space-size=2048 -r ts-node/register src/scripts/import-gtfs-all.ts",
+        "import:bathrooms": "npx dotenvx run -- ts-node src/scripts/import-bathrooms.ts",
         "hazard:expire": "npx dotenvx run -- ts-node src/scripts/expire-hazard-reports.ts"
     },
     "keywords": [
