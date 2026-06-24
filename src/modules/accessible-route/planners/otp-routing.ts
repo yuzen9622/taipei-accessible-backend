@@ -667,7 +667,9 @@ export async function planOtpRoute(
   const wheelchair = mode === "wheelchair";
   const walkSpeed = walkSpeedMps(mode);
 
+  const tm: Record<string, number> = {};
   let itineraries: OtpItinerary[];
+  const tFirst = Date.now();
   try {
     itineraries = await queryOtpPlan(
       origin,
@@ -682,16 +684,20 @@ export async function planOtpRoute(
     console.warn("[otp-routing] plan query failed (fail-soft to [])", err);
     return [];
   }
+  tm.otpFirst = Date.now() - tFirst;
 
   const maxTransfers = opts?.maxTransfers;
   let snapPre: WalkLeg | null = null;
   let snapPost: WalkLeg | null = null;
   if (!itineraries.some((it) => itineraryUsable(it, maxTransfers))) {
+    const tSnap = Date.now();
     const [originSnap, destSnap] = await Promise.all([
       findSnapStop(origin),
       findSnapStop(destination),
     ]);
+    tm.snapLookup = Date.now() - tSnap;
     if (originSnap || destSnap) {
+      const tRetry = Date.now();
       try {
         itineraries = await queryOtpPlan(
           originSnap ?? origin,
@@ -705,6 +711,7 @@ export async function planOtpRoute(
         console.warn("[otp-routing] snap retry failed (fail-soft to [])", err);
         return [];
       }
+      tm.otpRetry = Date.now() - tRetry;
       if (itineraries.length) {
         console.info(
           `[otp-routing] no usable plan recovered by stop snap` +
@@ -740,7 +747,9 @@ export async function planOtpRoute(
       ),
     ),
   ];
+  const tDir = Date.now();
   const directions = await lookupDirections(allTripIds);
+  tm.directions = Date.now() - tDir;
 
   const out: AccessibleRoute[] = [];
   for (const [i, it] of itineraries.entries()) {
@@ -799,5 +808,13 @@ export async function planOtpRoute(
     });
   }
 
+  console.log(
+    "[route-timing] otp",
+    JSON.stringify({
+      ...tm,
+      snapped: !!(snapPre || snapPost),
+      routes: out.length,
+    }),
+  );
   return out.slice(0, opts?.limit ?? OTP_NUM_ITINERARIES);
 }

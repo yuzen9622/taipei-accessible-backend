@@ -1677,6 +1677,7 @@ export async function planAccessibleRouteFromRequest(
     };
   }
 
+  const tGeo = Date.now();
   const [originCoords, destCoords] = await Promise.all([
     typeof origin === "string"
       ? getCoordinates(origin)
@@ -1685,6 +1686,7 @@ export async function planAccessibleRouteFromRequest(
       ? getCoordinates(destination)
       : Promise.resolve(destination as { latitude: number; longitude: number }),
   ]);
+  const geocodeMs = Date.now() - tGeo;
   if (!originCoords || !destCoords) {
     return {
       ok: false,
@@ -1696,8 +1698,10 @@ export async function planAccessibleRouteFromRequest(
   const lat = originCoords.latitude;
   const lng = originCoords.longitude;
 
+  const tCity = Date.now();
   const city = ((await resolveCityFromStops(lat, lng)) ??
     (await getCity(lat, lng))) as TaiwanCityEn;
+  const cityMs = Date.now() - tCity;
 
   const parsedDeparture = departureTime ? new Date(departureTime) : undefined;
   const futureDeparture =
@@ -1707,6 +1711,7 @@ export async function planAccessibleRouteFromRequest(
       ? parsedDeparture
       : undefined;
 
+  const tPlan = Date.now();
   const routes = await findAccessibleRoutes(
     { lat, lng },
     { lat: destCoords.latitude, lng: destCoords.longitude },
@@ -1717,6 +1722,14 @@ export async function planAccessibleRouteFromRequest(
       departureTime: futureDeparture,
       format: format === "compact" ? "compact" : "standard",
     },
+  );
+  console.log(
+    "[route-timing] request",
+    JSON.stringify({
+      geocode: geocodeMs,
+      city: cityMs,
+      plan: Date.now() - tPlan,
+    }),
   );
 
   if (!routes.length) {
