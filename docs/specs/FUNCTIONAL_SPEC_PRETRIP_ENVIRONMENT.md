@@ -133,10 +133,10 @@ src/modules/environment/
 
 「降級」不是塞在 adapter 與 service 之間的一層，而是拆成兩個**正交**的關注點，各自下沉 / 上收到正確的層，且依賴方向單向、永不回頭：
 
-| 關注點 | 內容 | 住哪 | 理由 |
-|-------|------|------|------|
-| **機制** | timeout、斷路、重試、例外正規化、log | **infra**（`src/config/resilience.ts`） | 橫切關注點，不屬任何 domain；位於依賴圖最底層，誰都能用、不依賴任何人。與既有 `tdxFetch`（`src/config/fetch.ts`，掛 token + 401 重試）同層同理 |
-| **政策** | `Promise.allSettled`、部分回 200、「unavailable 對本端點的語意」、cache-aside TTL | **service**（`environment.service.ts`） | 「本端點容忍缺哪幾塊」是業務決策 |
+| 關注點    | 內容                                                                 | 住哪                                    | 理由                                                                                                |
+| ------ | ------------------------------------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **機制** | timeout、斷路、重試、例外正規化、log                                            | **infra**（`src/config/resilience.ts`） | 橫切關注點，不屬任何 domain；位於依賴圖最底層，誰都能用、不依賴任何人。與既有 `tdxFetch`（`src/config/fetch.ts`，掛 token + 401 重試）同層同理 |
+| **政策** | `Promise.allSettled`、部分回 200、「unavailable 對本端點的語意」、cache-aside TTL | **service**（`environment.service.ts`） | 「本端點容忍缺哪幾塊」是業務決策                                                                                  |
 
 **adapter 失敗直接 throw、由 service 決定容忍**：
 
