@@ -337,4 +337,60 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "searchAccessibilityGuide",
+      description:
+        "搜尋無障礙知識庫（車站無障礙指南、輪椅搭乘 SOP、身障福利法規、交通營運商政策）。當使用者問的是一般知識性問題（不需要即時位置或交通資料）時使用，例如「輪椅怎麼搭公車」「身障停車證怎麼申請」「捷運有哪些無障礙設施」。此工具從策展知識庫搜尋，比模型內建知識更準確。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "搜尋關鍵字或問題" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+];
+
+export const memoryTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "saveMemory",
+      description:
+        "儲存一筆關於使用者的記憶。當你觀察到使用者透露個人資訊時主動呼叫：行動模式（輪椅/長者/視障）、常去地點、住家/工作地點、交通偏好、出行習慣。不需要使用者明確要求「記住」。",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "string",
+            description: "用自然語言描述要記住的事實，例如：「使用者坐輪椅」「家住板橋車站附近（25.0143, 121.4623）」「常搭307公車通勤」",
+          },
+          category: {
+            type: "string",
+            enum: ["preference", "place", "habit", "context"],
+            description: "preference=行動模式/偏好, place=地點, habit=交通習慣, context=近期計畫",
+          },
+        },
+        required: ["content", "category"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "deleteMemory",
+      description:
+        "刪除一筆使用者記憶。當使用者要求「忘掉…」「不要記住…」「刪除那個記憶」時使用。memoryId 從【使用者記憶】區塊中取得。",
+      parameters: {
+        type: "object",
+        properties: {
+          memoryId: { type: "string", description: "要刪除的記憶 ID" },
+        },
+        required: ["memoryId"],
+      },
+    },
+  },
 ];

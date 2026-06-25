@@ -67,3 +67,17 @@ export async function redisSet(
     /* no-op */
   }
 }
+
+/**
+ * Deletes a key. No-ops on unavailable / error.
+ *
+ * @param key The cache key to delete.
+ */
+export async function redisDel(key: string): Promise<void> {
+  if (!redisClient) return;
+  try {
+    await redisClient.del(key);
+  } catch {
+    /* no-op */
+  }
+}

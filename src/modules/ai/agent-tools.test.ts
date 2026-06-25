@@ -32,6 +32,16 @@ vi.mock("../accessible-route/accessible-route.service", () => ({
 vi.mock("../nav-instructions/nav-instructions.service", () => ({
   generateNavInstructions: vi.fn(),
 }));
+vi.mock("../accessible-route/facility-slim", () => ({
+  slimFacility: vi.fn((f: any) => ({ osmId: f.osmId, category: f.category })),
+}));
+vi.mock("./memory.service", () => ({
+  saveMemory: vi.fn(),
+  deleteMemory: vi.fn(),
+}));
+vi.mock("./knowledge.service", () => ({
+  searchKnowledge: vi.fn(),
+}));
 
 import * as a11yService from "../a11y/a11y.service";
 import * as hazardService from "../hazard-report/hazard-report.service";
@@ -39,11 +49,16 @@ import { getEnvironmentInfo as fetchEnvironment } from "../environment/environme
 import { getCoordinates } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
+import * as memoryServiceMod from "./memory.service";
+import { searchKnowledge } from "./knowledge.service";
 import {
   getEnvironmentInfo,
   getNearbyHazards,
   findNearbyParking,
   getNavInstructions,
+  saveMemory,
+  deleteMemory,
+  searchAccessibilityGuide,
   executeLocalTool,
 } from "./agent-tools";
 
@@ -534,5 +549,129 @@ describe("executeLocalTool dispatches new tools", () => {
   it("未知工具回錯誤", async () => {
     const raw = await executeLocalTool("noSuchTool", {}, undefined);
     expect(JSON.parse(raw).error).toContain("未知工具");
+  });
+
+  it("saveMemory 走到正確函式", async () => {
+    const mockSave = memoryServiceMod.saveMemory as unknown as ReturnType<typeof vi.fn>;
+    mockSave.mockResolvedValue({ _id: "m1", content: "坐輪椅", category: "preference" });
+    const raw = await executeLocalTool(
+      "saveMemory",
+      { content: "坐輪椅", category: "preference" },
+      undefined,
+      "user123",
+    );
+    expect(JSON.parse(raw).ok).toBe(true);
+    expect(JSON.parse(raw).memory.content).toBe("坐輪椅");
+  });
+
+  it("deleteMemory 走到正確函式", async () => {
+    const mockDel = memoryServiceMod.deleteMemory as unknown as ReturnType<typeof vi.fn>;
+    mockDel.mockResolvedValue(true);
+    const raw = await executeLocalTool(
+      "deleteMemory",
+      { memoryId: "m1" },
+      undefined,
+      "user123",
+    );
+    expect(JSON.parse(raw).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// saveMemory / deleteMemory (agent tool functions)
+// ---------------------------------------------------------------------------
+describe("saveMemory agent tool", () => {
+  const mockSave = memoryServiceMod.saveMemory as unknown as ReturnType<typeof vi.fn>;
+
+  it("有 userId + 有效 category 成功儲存", async () => {
+    mockSave.mockResolvedValue({ _id: "m1", content: "家住板橋", category: "place" });
+    const raw = await saveMemory({ content: "家住板橋", category: "place", userId: "u1" });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(true);
+    expect(result.memory.content).toBe("家住板橋");
+  });
+
+  it("無 userId 回錯誤", async () => {
+    const raw = await saveMemory({ content: "test", category: "place" });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("登入");
+  });
+
+  it("空 content 回錯誤", async () => {
+    const raw = await saveMemory({ content: "", category: "place", userId: "u1" });
+    expect(JSON.parse(raw).ok).toBe(false);
+  });
+
+  it("無效 category 回錯誤", async () => {
+    const raw = await saveMemory({ content: "test", category: "invalid", userId: "u1" });
+    expect(JSON.parse(raw).ok).toBe(false);
+    expect(JSON.parse(raw).error).toContain("無效");
+  });
+});
+
+describe("deleteMemory agent tool", () => {
+  const mockDel = memoryServiceMod.deleteMemory as unknown as ReturnType<typeof vi.fn>;
+
+  it("有 userId 成功刪除", async () => {
+    mockDel.mockResolvedValue(true);
+    const raw = await deleteMemory({ memoryId: "m1", userId: "u1" });
+    expect(JSON.parse(raw).ok).toBe(true);
+  });
+
+  it("找不到回錯誤", async () => {
+    mockDel.mockResolvedValue(false);
+    const raw = await deleteMemory({ memoryId: "m1", userId: "u1" });
+    expect(JSON.parse(raw).ok).toBe(false);
+  });
+
+  it("無 userId 回錯誤", async () => {
+    const raw = await deleteMemory({ memoryId: "m1" });
+    expect(JSON.parse(raw).ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// searchAccessibilityGuide
+// ---------------------------------------------------------------------------
+describe("searchAccessibilityGuide", () => {
+  const mockSearch = searchKnowledge as unknown as ReturnType<typeof vi.fn>;
+
+  it("有結果時回傳 content + source", async () => {
+    mockSearch.mockResolvedValue([
+      { content: "輪椅搭公車步驟…", source: "台北市公共運輸處", category: "transit_tips", title: "輪椅搭公車 SOP", score: 0.92 },
+    ]);
+    const raw = await searchAccessibilityGuide({ query: "輪椅怎麼搭公車" });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(true);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].title).toBe("輪椅搭公車 SOP");
+  });
+
+  it("無結果時回空陣列", async () => {
+    mockSearch.mockResolvedValue([]);
+    const raw = await searchAccessibilityGuide({ query: "火星交通" });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(true);
+    expect(result.results).toEqual([]);
+  });
+
+  it("空 query 回錯誤", async () => {
+    const raw = await searchAccessibilityGuide({ query: "" });
+    expect(JSON.parse(raw).ok).toBe(false);
+  });
+
+  it("service 拋錯回 fallback", async () => {
+    mockSearch.mockRejectedValue(new Error("chroma down"));
+    const raw = await searchAccessibilityGuide({ query: "test" });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("知識庫查詢失敗");
+  });
+
+  it("executeLocalTool dispatch 正確", async () => {
+    mockSearch.mockResolvedValue([]);
+    const raw = await executeLocalTool("searchAccessibilityGuide", { query: "test" }, undefined);
+    expect(JSON.parse(raw).ok).toBe(true);
   });
 });

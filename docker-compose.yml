@@ -78,5 +78,15 @@ services:
       start_period: 120s
     restart: unless-stopped
 
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: chroma
+    ports:
+      - "127.0.0.1:8100:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    restart: unless-stopped
+
 volumes:
   mongo-data:
+  chroma-data:

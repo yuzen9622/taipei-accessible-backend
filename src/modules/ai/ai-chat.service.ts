@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import { openai } from "../../config/ai";
-import { openAiChatTools } from "../../config/ai/tool";
+import { openAiChatTools, memoryTools } from "../../config/ai/tool";
 import { executeLocalTool } from "./agent-tools";
 import type { OAIMessage } from "./ai.types";
 
@@ -42,16 +42,20 @@ export async function runToolLoop(
   useTemp: number,
   userLocation?: { latitude: number; longitude: number },
   onToolCall?: (name: string, args: Record<string, unknown>) => void,
-  onToolResult?: (name: string, result: unknown) => void
+  onToolResult?: (name: string, result: unknown) => void,
+  userId?: string,
 ): Promise<void> {
   const MAX_ROUNDS = 5;
   const toolCache = new Map<string, string>();
+  const tools = userId
+    ? [...openAiChatTools, ...memoryTools]
+    : openAiChatTools;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const response = await openai.chat.completions.create({
       model: useModel,
       messages,
-      tools: openAiChatTools,
+      tools,
       tool_choice: "auto",
       temperature: useTemp,
       stream: false,
@@ -84,7 +88,7 @@ export async function runToolLoop(
       if (toolCache.has(cacheKey)) {
         resultStr = toolCache.get(cacheKey)!;
       } else {
-        resultStr = await executeLocalTool(fnCall.function.name, toolArgs, userLocation);
+        resultStr = await executeLocalTool(fnCall.function.name, toolArgs, userLocation, userId);
         if (isSuccessResult(resultStr)) {
           toolCache.set(cacheKey, resultStr);
         }

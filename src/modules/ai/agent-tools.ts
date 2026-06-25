@@ -7,6 +7,8 @@ import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
 import { slimFacility } from "../accessible-route/facility-slim";
+import * as memoryService from "./memory.service";
+import { searchKnowledge } from "./knowledge.service";
 import type {
   AccessibleRoute,
   WalkLeg,
@@ -553,10 +555,91 @@ export async function getNavInstructions(args: {
   }
 }
 
+export async function searchAccessibilityGuide(args: {
+  query: string;
+}): Promise<string> {
+  if (!args.query?.trim()) {
+    return JSON.stringify({ ok: false, error: "搜尋關鍵字不能為空" });
+  }
+  try {
+    const results = await searchKnowledge(args.query.trim(), 3);
+    if (!results.length) {
+      return JSON.stringify({ ok: true, results: [], message: "未找到相關指南" });
+    }
+    return JSON.stringify({
+      ok: true,
+      results: results.map((r) => ({
+        title: r.title,
+        content: r.content,
+        source: r.source,
+        category: r.category,
+      })),
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:searchAccessibilityGuide]", error.message);
+    return JSON.stringify({ ok: false, error: "知識庫查詢失敗" });
+  }
+}
+
+const VALID_MEMORY_CATEGORIES = new Set(["preference", "place", "habit", "context"]);
+
+export async function saveMemory(args: {
+  content: string;
+  category: string;
+  userId?: string;
+}): Promise<string> {
+  if (!args.userId) {
+    return JSON.stringify({ ok: false, error: "需要登入才能儲存記憶" });
+  }
+  if (!args.content?.trim()) {
+    return JSON.stringify({ ok: false, error: "記憶內容不能為空" });
+  }
+  if (!VALID_MEMORY_CATEGORIES.has(args.category)) {
+    return JSON.stringify({ ok: false, error: `無效的記憶類別：${args.category}` });
+  }
+  try {
+    const memory = await memoryService.saveMemory(
+      args.userId,
+      args.content.trim(),
+      args.category as "preference" | "place" | "habit" | "context",
+    );
+    return JSON.stringify({
+      ok: true,
+      memory: { id: memory._id, content: memory.content, category: memory.category },
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:saveMemory]", error);
+    return JSON.stringify({ ok: false, error: "記憶儲存失敗" });
+  }
+}
+
+export async function deleteMemory(args: {
+  memoryId: string;
+  userId?: string;
+}): Promise<string> {
+  if (!args.userId) {
+    return JSON.stringify({ ok: false, error: "需要登入才能刪除記憶" });
+  }
+  if (!args.memoryId?.trim()) {
+    return JSON.stringify({ ok: false, error: "缺少 memoryId" });
+  }
+  try {
+    const deleted = await memoryService.deleteMemory(args.userId, args.memoryId.trim());
+    if (!deleted) {
+      return JSON.stringify({ ok: false, error: "找不到該筆記憶或無權刪除" });
+    }
+    return JSON.stringify({ ok: true, deleted: true });
+  } catch (error: any) {
+    console.error("[agent-tool:deleteMemory]", error);
+    return JSON.stringify({ ok: false, error: "記憶刪除失敗" });
+  }
+}
+
 export async function executeLocalTool(
   name: string,
   args: Record<string, any>,
   userLocation?: { latitude: number; longitude: number },
+  userId?: string,
 ): Promise<string> {
   switch (name) {
     case "findGooglePlaces":
@@ -657,6 +740,24 @@ export async function executeLocalTool(
         routeIndex: args.routeIndex as number | undefined,
         userHeading: args.userHeading as number | undefined,
         userLocation,
+      });
+
+    case "saveMemory":
+      return saveMemory({
+        content: args.content as string,
+        category: args.category as string,
+        userId,
+      });
+
+    case "deleteMemory":
+      return deleteMemory({
+        memoryId: args.memoryId as string,
+        userId,
+      });
+
+    case "searchAccessibilityGuide":
+      return searchAccessibilityGuide({
+        query: args.query as string,
       });
 
     default:
