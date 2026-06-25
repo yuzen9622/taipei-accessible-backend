@@ -220,6 +220,23 @@ export interface IGtfsTrip {
   bikesAllowed?: 0 | 1 | 2;
 }
 
+export interface IVisualA11y {
+  _id: string;
+  osmNodeId: number;
+  type: "audio_signal" | "tactile_paving";
+  location: { type: "Point"; coordinates: [number, number] };
+  properties: {
+    buttonOperated?: boolean | null;
+    vibration?: boolean | null;
+    roadName?: string | null;
+    subType?: string | null;
+    name?: string | null;
+    nameEn?: string | null;
+    wheelchair?: string | null;
+  };
+  updatedAt: Date;
+}
+
 export type HazardType = "obstacle" | "construction" | "data_error";
 export type AiVerdict = "verified" | "suspicious" | "rejected" | "skipped";
 export type HazardStatus = "pending" | "verified" | "rejected" | "expired";

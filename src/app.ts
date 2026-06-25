@@ -18,6 +18,7 @@ import { createAiRouter } from "./modules/ai";
 import { createHazardReportRouter } from "./modules/hazard-report";
 import { createEnvironmentRouter } from "./modules/environment";
 import { createWelfareRouter } from "./modules/welfare";
+import { createVisualA11yRouter } from "./modules/visual-a11y";
 import { generateOpenAPIDocument } from "./openapi/document";
 
 const app: Express = express();
@@ -67,6 +68,7 @@ app.use("/api/v1/a11y", createNavInstructionsRouter());
 app.use("/api/v1/a11y", createHazardReportRouter());
 app.use("/api/v1/a11y", createEnvironmentRouter());
 app.use("/api/v1/a11y", createWelfareRouter());
+app.use("/api/v1/a11y", createVisualA11yRouter());
 app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/ai", createAiRouter());
 
