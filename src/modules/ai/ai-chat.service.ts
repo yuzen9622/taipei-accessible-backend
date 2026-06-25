@@ -18,6 +18,24 @@ export type { OAIMessage };
  * @param onToolCall Hook invoked when a tool call starts
  * @param onToolResult Hook invoked with a tool's parsed result
  */
+function stableCacheKey(name: string, args: Record<string, unknown>): string {
+  const sorted = Object.keys(args)
+    .sort()
+    .reduce<Record<string, unknown>>((o, k) => { o[k] = args[k]; return o; }, {});
+  return name + "\0" + JSON.stringify(sorted);
+}
+
+function isSuccessResult(json: string): boolean {
+  try {
+    const parsed = JSON.parse(json);
+    if (parsed.error) return false;
+    if (parsed.ok === false) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function runToolLoop(
   messages: OAIMessage[],
   useModel: string,
@@ -27,6 +45,7 @@ export async function runToolLoop(
   onToolResult?: (name: string, result: unknown) => void
 ): Promise<void> {
   const MAX_ROUNDS = 5;
+  const toolCache = new Map<string, string>();
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const response = await openai.chat.completions.create({
@@ -60,7 +79,16 @@ export async function runToolLoop(
 
       onToolCall?.(fnCall.function.name, toolArgs);
 
-      const resultStr = await executeLocalTool(fnCall.function.name, toolArgs, userLocation);
+      const cacheKey = stableCacheKey(fnCall.function.name, toolArgs);
+      let resultStr: string;
+      if (toolCache.has(cacheKey)) {
+        resultStr = toolCache.get(cacheKey)!;
+      } else {
+        resultStr = await executeLocalTool(fnCall.function.name, toolArgs, userLocation);
+        if (isSuccessResult(resultStr)) {
+          toolCache.set(cacheKey, resultStr);
+        }
+      }
 
       let parsedResult: unknown;
       try {

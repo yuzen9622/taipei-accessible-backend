@@ -6,6 +6,7 @@ import { getEnvironmentInfo as fetchEnvironment } from "../environment/environme
 import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
+import { slimFacility } from "../accessible-route/facility-slim";
 import type {
   AccessibleRoute,
   WalkLeg,
@@ -77,7 +78,10 @@ export async function findA11yPlaces(args: {
     return JSON.stringify({
       ok: true,
       searchLocation: { lat: searchLat, lng: searchLng, query: args.query },
-      places,
+      places: {
+        ...places,
+        nearbyOsm: places.nearbyOsm.map(slimFacility),
+      },
     });
   } catch (error) {
     console.error("[agent-tool:findA11yPlaces]", error);
@@ -376,7 +380,7 @@ export async function getA11yFacilityDetails(args: {
     return JSON.stringify({
       ok: true,
       count: places.length,
-      facilities: places,
+      facilities: places.map(slimFacility),
     });
   } catch (error: any) {
     console.error("[agent-tool:getA11yFacilityDetails]", error);
