@@ -1,5 +1,5 @@
 <div align="center">
-  # accessible-map-backend
+    <h1>accessible-map-backend</h1>
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![NodeJS](https://img.shields.io/badge/Node.js->=20.x-green?style=flat-square&logo=nodedotjs)](https://nodejs.org/)
@@ -68,7 +68,7 @@
 
 ### 無障礙導航引擎與標準導航引擎對比
 
-| 分析指標         | 標準導航引擎                             | taipei-accessible-backend                          |
+| 分析指標         | 標準導航引擎                             | accessible-map-backend                             |
 | :--------------- | :--------------------------------------- | :------------------------------------------------- |
 | **物理通道約束** | 導引至階梯、天橋、手扶梯或缺乏緩坡之路徑 | 物理約束檢修：100% 無障礙電梯與緩坡道路徑          |
 | **三維內部網絡** | 將站體簡化為二維座標，忽略垂直高度與阻礙 | 站內多樓層感知：實作 GTFS-pathways 跨樓層路徑規劃  |
