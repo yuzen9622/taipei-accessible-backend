@@ -75,6 +75,50 @@ export const BusPositionsQuerySchema = z
   })
   .strict();
 
+export const BusSearchQuerySchema = z
+  .object({
+    keyword: z.string().min(1).openapi({ example: "307", description: "路線名稱搜尋關鍵字" }),
+  })
+  .strict();
+
+export const BusRouteStopsQuerySchema = z
+  .object({
+    routeName: z.string().min(1).openapi({ example: "307", description: "路線名稱" }),
+    city: z.string().min(1).openapi({ example: "Taipei", description: "縣市名稱" }),
+  })
+  .strict();
+
+export const BusNearbyQuerySchema = z
+  .object({
+    lat: z.preprocess(
+      (val) => {
+        if (val === undefined || val === null || val === "") return undefined;
+        const num = Number(val);
+        return isNaN(num) ? undefined : num;
+      },
+      z.number({
+        message: "緯度為必填且必須為有效數字",
+      })
+      .min(-90, "緯度必須大於或等於 -90")
+      .max(90, "緯度必須小於或等於 90")
+    ).openapi({ example: 25.0478, description: "使用者緯度" }),
+    lng: z.preprocess(
+      (val) => {
+        if (val === undefined || val === null || val === "") return undefined;
+        const num = Number(val);
+        return isNaN(num) ? undefined : num;
+      },
+      z.number({
+        message: "經度為必填且必須為有效數字",
+      })
+      .min(-180, "經度必須大於或等於 -180")
+      .max(180, "經度必須小於或等於 180")
+    ).openapi({ example: 121.5171, description: "使用者經度" }),
+    radius: z.coerce.number().int().min(1).max(5000).default(500).openapi({ example: 500, description: "搜尋半徑 (公尺，預設 500)" }),
+    limit: z.coerce.number().int().min(1).max(50).default(10).openapi({ example: 10, description: "限制筆數 (預設 10)" }),
+  })
+  .strict();
+
 const BilingualNameSchema = z
   .object({
     Zh_tw: z.string().openapi({ example: "台北車站" }),
@@ -243,5 +287,48 @@ registry.registerPath({
     400: { description: "缺少縣市或參數" },
     404: { description: "目前無營運車輛" },
     500: { description: "TDX 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/search-routes",
+  tags: ["Transit"],
+  summary: "搜尋公車路線",
+  description: "依關鍵字模糊搜尋所有縣市的公車路線，回傳匹配的路線、縣市及去程起迄站，供前端做下拉選擇。",
+  request: { query: BusSearchQuerySchema },
+  responses: {
+    200: { description: "搜尋結果列表", content: { "application/json": { schema: BusServiceResponseSchema } } },
+    400: { description: "缺少必要參數" },
+    500: { description: "DB 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/route-stops",
+  tags: ["Transit"],
+  summary: "取得公車路線的所有站牌",
+  description: "依路線名稱與縣市回傳該路線去/返程的所有站牌列表（供前端呈現讓使用者選擇）。",
+  request: { query: BusRouteStopsQuerySchema },
+  responses: {
+    200: { description: "路線站牌列表", content: { "application/json": { schema: BusServiceResponseSchema } } },
+    400: { description: "缺少必要參數" },
+    404: { description: "找不到路線" },
+    500: { description: "DB/TDX 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/nearby-stops",
+  tags: ["Transit"],
+  summary: "自動抓離使用者最近的站牌",
+  description: "依使用者經緯度搜尋最近的公車站牌列表，依距離排序，並回傳行經各站牌的公車路線清單。",
+  request: { query: BusNearbyQuerySchema },
+  responses: {
+    200: { description: "附近站牌列表", content: { "application/json": { schema: BusServiceResponseSchema } } },
+    400: { description: "缺少必要參數或參數無效" },
+    500: { description: "DB 錯誤" },
   },
 });

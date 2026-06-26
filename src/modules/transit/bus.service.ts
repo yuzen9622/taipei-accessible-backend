@@ -18,6 +18,7 @@ import { tdxFetch } from "../../config/fetch";
 import { getCity } from "../../adapters/google.adapter";
 import BusRouteModel from "../../model/bus-route.model";
 import BusVehicleModel from "../../model/bus-vehicle.model";
+import BusStopModel from "../../model/bus-stop.model";
 import { TaiwanCityEn } from "../../types/transit";
 import { ITdxBusVehicle } from "../../types";
 import {
@@ -38,6 +39,9 @@ import type {
   BusScheduleByDirection,
   BusRealtimeOnRouteResult,
   BusOnRoad,
+  BusSearchRouteResult,
+  BusNearbyStopsResult,
+  BusNearbyStop,
 } from "./transit.types";
 
 /**
@@ -400,5 +404,153 @@ export async function getBusRealtimeOnRoute(params: {
     };
   } catch (err) {
     return { ok: false, error: (err as Error).message || "即時位置查詢失敗", status: 500 };
+  }
+}
+
+/**
+ * Search bus routes by keyword across all cities in the DB.
+ */
+export async function searchBusRoutes(keyword: string): Promise<BusSearchRouteResult> {
+  try {
+    const escaped = keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const routes = await BusRouteModel.aggregate([
+      {
+        $match: {
+          "routeName.Zh_tw": { $regex: escaped, $options: "i" }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            routeName: "$routeName.Zh_tw",
+            city: "$city"
+          },
+          subRoutes: {
+            $push: {
+              direction: "$direction",
+              stops: "$stops"
+            }
+          }
+        }
+      },
+      {
+        $limit: 50
+      }
+    ]);
+
+    const result = routes.map((r) => {
+      const dir0 = r.subRoutes.find((sr: any) => sr.direction === 0) || r.subRoutes[0];
+      const stops = dir0?.stops || [];
+      const sortedStops = [...stops].sort((a: any, b: any) => a.seq - b.seq);
+      const departure = sortedStops[0]?.stopName?.Zh_tw || "";
+      const destination = sortedStops[sortedStops.length - 1]?.stopName?.Zh_tw || "";
+
+      return {
+        routeName: r._id.routeName,
+        city: r._id.city,
+        departure,
+        destination,
+      };
+    });
+
+    return { ok: true, routes: result };
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error).message || "路線搜尋失敗",
+      status: 500,
+    };
+  }
+}
+
+/**
+ * Get nearby bus stops sorted by distance.
+ */
+export async function getNearbyStops(params: {
+  lat: number;
+  lng: number;
+  radius: number;
+  limit: number;
+}): Promise<BusNearbyStopsResult> {
+  const { lat, lng, radius, limit } = params;
+  try {
+    // Expand the aggregate limit since we will merge stops with the same name in memory
+    const queryLimit = limit * 5;
+    const stops = await BusStopModel.aggregate([
+      {
+        $geoNear: {
+          near: { type: "Point", coordinates: [lng, lat] },
+          distanceField: "distance",
+          maxDistance: radius,
+          spherical: true,
+        },
+      },
+      {
+        $limit: queryLimit,
+      },
+    ]);
+
+    if (!stops.length) {
+      return { ok: true, stops: [] };
+    }
+
+    // Collect all subRouteIds (which are actually route/sub-route names, e.g., "2", "307")
+    const allSubRouteIds = [...new Set(stops.flatMap((s) => s.subRouteIds || []))];
+    const routes = await BusRouteModel.find({
+      "subRouteName.Zh_tw": { $in: allSubRouteIds },
+    })
+      .select("subRouteName.Zh_tw routeName.Zh_tw")
+      .lean();
+
+    const routeMap = new Map<string, string>();
+    for (const r of routes) {
+      if (r.subRouteName?.Zh_tw && r.routeName?.Zh_tw) {
+        routeMap.set(r.subRouteName.Zh_tw, r.routeName.Zh_tw);
+      }
+    }
+
+    const mergedMap = new Map<string, BusNearbyStop>();
+
+    for (const s of stops) {
+      const stopNameZh = s.stopName.Zh_tw;
+      const routesForStop = (s.subRouteIds || [])
+        .map((id: string) => routeMap.get(id) || id)
+        .filter(Boolean) as string[];
+
+      const existing = mergedMap.get(stopNameZh);
+      const dist = Math.round(s.distance);
+
+      if (existing) {
+        // Union routes and sort
+        existing.routes = [...new Set([...existing.routes, ...routesForStop])].sort();
+        // If this stop instance is closer, update distance, coordinates, and UID
+        if (dist < existing.distance) {
+          existing.distance = dist;
+          existing.coordinates = s.location.coordinates as [number, number];
+          existing.stopUid = s.stopUid;
+        }
+      } else {
+        mergedMap.set(stopNameZh, {
+          stopUid: s.stopUid,
+          stopName: stopNameZh,
+          city: s.city,
+          coordinates: s.location.coordinates as [number, number],
+          distance: dist,
+          routes: [...new Set(routesForStop)].sort(),
+        });
+      }
+    }
+
+    const finalStops = [...mergedMap.values()]
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, limit);
+
+    return { ok: true, stops: finalStops };
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error).message || "尋找附近站牌失敗",
+      status: 500,
+    };
   }
 }

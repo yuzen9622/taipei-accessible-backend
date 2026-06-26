@@ -6,6 +6,9 @@ import {
   getBusArrivalHandler,
   getBusTimetableHandler,
   getBusPositionsHandler,
+  searchBusRoutesHandler,
+  getBusRouteStopsHandler,
+  getNearbyStopsHandler,
 } from "./transit.controller";
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
@@ -15,6 +18,9 @@ import {
   BusArrivalQuerySchema,
   BusTimetableQuerySchema,
   BusPositionsQuerySchema,
+  BusSearchQuerySchema,
+  BusRouteStopsQuerySchema,
+  BusNearbyQuerySchema,
 } from "./transit.schema";
 
 export function createTransitRouter(): Router {
@@ -46,6 +52,22 @@ export function createTransitRouter(): Router {
     "/bus/positions",
     validateRequest({ query: BusPositionsQuerySchema }),
     getBusPositionsHandler,
+  );
+
+  router.get(
+    "/bus/search-routes",
+    validateRequest({ query: BusSearchQuerySchema }),
+    searchBusRoutesHandler,
+  );
+  router.get(
+    "/bus/route-stops",
+    validateRequest({ query: BusRouteStopsQuerySchema }),
+    getBusRouteStopsHandler,
+  );
+  router.get(
+    "/bus/nearby-stops",
+    validateRequest({ query: BusNearbyQuerySchema }),
+    getNearbyStopsHandler,
   );
 
   return router;

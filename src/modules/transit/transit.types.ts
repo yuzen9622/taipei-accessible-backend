@@ -99,3 +99,33 @@ export type BusRealtimeOnRouteResult =
       buses: BusOnRoad[];
     }
   | BusServiceError;
+
+export type BusSearchResult = {
+  routeName: string;
+  city: string;
+  departure: string;
+  destination: string;
+};
+
+export type BusSearchRouteResult =
+  | {
+      ok: true;
+      routes: BusSearchResult[];
+    }
+  | BusServiceError;
+
+export type BusNearbyStop = {
+  stopUid: string;
+  stopName: string;
+  city: string;
+  coordinates: [number, number];
+  distance: number;
+  routes: string[];
+};
+
+export type BusNearbyStopsResult =
+  | {
+      ok: true;
+      stops: BusNearbyStop[];
+    }
+  | BusServiceError;

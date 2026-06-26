@@ -165,6 +165,55 @@ async function getHighSpeedTrainData(req: Request, res: Response<ApiResponse<nul
   const { type, detail } = req.query;
 }
 
+async function searchBusRoutesHandler(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { keyword } = req.validated?.query as { keyword: string };
+    const result = await busService.searchBusRoutes(keyword);
+    if (!result.ok) {
+      return sendResponse(res, false, "error", result.status || ResponseCode.INTERNAL_ERROR, result.error);
+    }
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error: any) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error.message);
+  }
+}
+
+async function getBusRouteStopsHandler(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { routeName, city } = req.validated?.query as { routeName: string; city: string };
+    const resolved = await resolveCityOr400(city, res);
+    if (!resolved) return;
+    const result = await busService.getBusRouteInfo({ routeName, city: resolved });
+    if (!result.ok) {
+      return sendResponse(res, false, "error", result.status || ResponseCode.NOT_FOUND, result.error);
+    }
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error: any) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error.message);
+  }
+}
+
+async function getNearbyStopsHandler(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { lat, lng, radius, limit } = req.validated?.query as {
+      lat: number;
+      lng: number;
+      radius: number;
+      limit: number;
+    };
+    const result = await busService.getNearbyStops({ lat, lng, radius, limit });
+    if (!result.ok) {
+      return sendResponse(res, false, "error", result.status || ResponseCode.INTERNAL_ERROR, result.error);
+    }
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error: any) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error.message);
+  }
+}
+
 export {
   getBusData,
   getTrainData,
@@ -174,4 +223,7 @@ export {
   getBusArrivalHandler,
   getBusTimetableHandler,
   getBusPositionsHandler,
+  searchBusRoutesHandler,
+  getBusRouteStopsHandler,
+  getNearbyStopsHandler,
 };
