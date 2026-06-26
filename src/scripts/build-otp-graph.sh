@@ -153,6 +153,18 @@ python3 "$SCRIPT_DIR/inject-station-wheelchair.py" \
   "$WORK_DIR/feed-1.gtfs.zip" "$FACILITY_DIR" \
   || log "WARN: station wheelchair injection failed — continuing"
 
+# ── 1e. TRTC local database wheelchair injection ──
+log "injecting TRTC station wheelchair flags from local MongoDB accessibilities"
+npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-db-a11y-stops.ts" "$WORK_DIR/feed-1.gtfs.zip" \
+  || log "WARN: TRTC local database injection failed — continuing"
+
+# ── 1f. Bus trip wheelchair accessibility injection ──
+log "injecting bus trip wheelchair accessibility flags from TDX schedules"
+npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-tdx-bus-trips-a11y.ts" "$WORK_DIR/feed-1.gtfs.zip" \
+  || log "WARN: bus trip accessibility injection failed — continuing"
+
+
+
 # ── 2. OSM extract (monthly refresh, spec §5) ──
 OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"
 OSM_CLIPPED="$WORK_DIR/taiwan-clipped.osm.pbf"
@@ -173,6 +185,15 @@ elif command -v osmium >/dev/null 2>&1; then
 else
   log "WARN: osmium not installed — building with the full Taiwan pbf"
   cp "$OSM_CACHE" "$OSM_CLIPPED"
+fi
+
+# ── 2b. Inject road slopes from DEM GeoTIFFs ──
+log "injecting road slopes from DEM GeoTIFFs..."
+python3 "$SCRIPT_DIR/inject-osm-dem-slopes.py" \
+  "$OSM_CLIPPED" "$OSM_CLIPPED.enriched" "${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}" \
+  || log "WARN: DEM slope injection failed — continuing"
+if [ -f "$OSM_CLIPPED.enriched" ]; then
+  mv "$OSM_CLIPPED.enriched" "$OSM_CLIPPED"
 fi
 
 # ── 3. Feed validation gate (red light = abort, old graph keeps serving) ──
