@@ -86,7 +86,18 @@ services:
     volumes:
       - chroma-data:/chroma/chroma
     restart: unless-stopped
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflare-tunnel
 
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    restart: always
+
+networks:
+  tunnel-net:
+    driver: bridge
 volumes:
   mongo-data:
   chroma-data:
