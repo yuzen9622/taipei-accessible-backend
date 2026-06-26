@@ -51,7 +51,7 @@ export type {
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
 const OTP_NUM_ITINERARIES = 5;
 
-const SNAP_RADIUS_M = 1500;
+const SNAP_RADIUS_M = 500;
 
 const METRO_SYSTEMS = new Set([
   "TRTC",
@@ -638,7 +638,6 @@ function transitLegFrom(
  */
 function itineraryUsable(it: OtpItinerary, maxTransfers?: number): boolean {
   const transit = it.legs.filter(isTransitLeg);
-  if (!transit.length) return false;
   if (transit.some((l) => !SUPPORTED_TRANSIT_MODES.has(l.mode))) return false;
   if (maxTransfers !== undefined && transit.length - 1 > maxTransfers)
     return false;
@@ -669,15 +668,17 @@ export async function planOtpRoute(
 
   const tm: Record<string, number> = {};
   let itineraries: OtpItinerary[];
+  let firstItineraries: OtpItinerary[] = [];
   const tFirst = Date.now();
   try {
-    itineraries = await queryOtpPlan(
+    firstItineraries = await queryOtpPlan(
       origin,
       destination,
       departure,
       wheelchair,
       walkSpeed,
     );
+    itineraries = firstItineraries;
     planBreaker.recordSuccess();
   } catch (err) {
     planBreaker.recordFailure();
@@ -689,7 +690,13 @@ export async function planOtpRoute(
   const maxTransfers = opts?.maxTransfers;
   let snapPre: WalkLeg | null = null;
   let snapPost: WalkLeg | null = null;
-  if (!itineraries.some((it) => itineraryUsable(it, maxTransfers))) {
+
+  const hasUsableTransit = (its: OtpItinerary[]) => its.some((it) => {
+    const transit = it.legs.filter(isTransitLeg);
+    return transit.length > 0 && (maxTransfers === undefined || transit.length - 1 <= maxTransfers);
+  });
+
+  if (!hasUsableTransit(itineraries)) {
     const tSnap = Date.now();
     const [originSnap, destSnap] = await Promise.all([
       findSnapStop(origin),
@@ -699,39 +706,42 @@ export async function planOtpRoute(
     if (originSnap || destSnap) {
       const tRetry = Date.now();
       try {
-        itineraries = await queryOtpPlan(
+        const retryItineraries = await queryOtpPlan(
           originSnap ?? origin,
           destSnap ?? destination,
           departure,
           wheelchair,
           walkSpeed,
         );
+        tm.otpRetry = Date.now() - tRetry;
+        if (hasUsableTransit(retryItineraries)) {
+          itineraries = retryItineraries;
+          if (originSnap) {
+            snapPre = snapWalkLeg(
+              { ...origin, name: "出發地" },
+              originSnap,
+              mode,
+            );
+          }
+          if (destSnap) {
+            snapPost = snapWalkLeg(
+              destSnap,
+              { ...destination, name: "目的地" },
+              mode,
+            );
+          }
+          console.info(
+            `[otp-routing] transit plan recovered by stop snap` +
+              (originSnap ? ` origin→${originSnap.name}` : "") +
+              (destSnap ? ` dest→${destSnap.name}` : ""),
+          );
+        } else {
+          itineraries = firstItineraries;
+        }
       } catch (err) {
         planBreaker.recordFailure();
-        console.warn("[otp-routing] snap retry failed (fail-soft to [])", err);
-        return [];
-      }
-      tm.otpRetry = Date.now() - tRetry;
-      if (itineraries.length) {
-        console.info(
-          `[otp-routing] no usable plan recovered by stop snap` +
-            (originSnap ? ` origin→${originSnap.name}` : "") +
-            (destSnap ? ` dest→${destSnap.name}` : ""),
-        );
-        if (originSnap) {
-          snapPre = snapWalkLeg(
-            { ...origin, name: "出發地" },
-            originSnap,
-            mode,
-          );
-        }
-        if (destSnap) {
-          snapPost = snapWalkLeg(
-            destSnap,
-            { ...destination, name: "目的地" },
-            mode,
-          );
-        }
+        console.warn("[otp-routing] snap retry failed, falling back to walk-only", err);
+        itineraries = firstItineraries;
       }
     }
   }
@@ -780,28 +790,36 @@ export async function planOtpRoute(
       transitLegs.push(mapped);
     }
 
-    const routeName = transitLegs
-      .map((l) =>
-        l.type === "BUS"
-          ? l.routeName
-          : l.type === "METRO"
-            ? l.lineName
-            : l.trainNo,
-      )
-      .join(" → ");
+    const routeName = transitLegs.length > 0
+      ? transitLegs
+          .map((l) =>
+            l.type === "BUS"
+              ? l.routeName
+              : l.type === "METRO"
+                ? l.lineName
+                : l.trainNo,
+          )
+          .join(" → ")
+      : "步行路線";
 
-    const firstDepDate = ymdDash(new Date(transitOtpLegs[0].startTime));
+    const firstDepDate = transitOtpLegs.length > 0
+      ? ymdDash(new Date(transitOtpLegs[0].startTime))
+      : queryDate;
 
     if (snapPre) legs.unshift({ ...snapPre });
     if (snapPost) legs.push({ ...snapPost });
     const snapMinutes =
       (snapPre?.minutesEst ?? 0) + (snapPost?.minutesEst ?? 0);
 
+    const tripIdToken = transitOtpLegs.length > 0
+      ? (stripFeedId(transitOtpLegs[0].trip?.gtfsId) || "unknown")
+      : "walk";
+
     out.push({
-      routeId: `otp-${i}-${stripFeedId(transitOtpLegs[0].trip?.gtfsId) || "unknown"}`,
-      routeName: routeName || "OTP Route",
+      routeId: `otp-${i}-${tripIdToken}`,
+      routeName,
       totalMinutes: Math.max(1, Math.round(it.duration / 60)) + snapMinutes,
-      transferCount: transitLegs.length - 1,
+      transferCount: Math.max(0, transitLegs.length - 1),
       legs,
       accessibilityHighlights: [],
       ...(firstDepDate !== queryDate ? { departureDate: firstDepDate } : {}),
