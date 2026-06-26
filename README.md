@@ -9,7 +9,7 @@
 
 **無障礙地圖多模態路徑規劃與即時交通數據整合 API 服務**
 
-  [快速開始](#快速開始) · [API 接口](#api-接口分組說明) · [開發指令](#開發與建構指令)
+[快速開始](#快速開始) · [API 接口](#api-接口分組說明) · [開發指令](#開發與建構指令)
 
 </div>
 
@@ -338,50 +338,6 @@ curl http://localhost:5000/health
 
 ---
 
-## 貢獻者名單
+## 授權條款
 
-本專案歡迎任何形式的貢獻與反饋！
-
-<a href="https://github.com/yuzen9622/taipei-accessible-backend/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=yuzen9622/taipei-accessible-backend" alt="Contributors" />
-</a>
-
----
-
-## 參與方式
-
-1. 快速部署：按照 [快速開始](#快速開始) 步驟在本地部署 API 服務與 MongoDB。
-2. 技術架構研究：參閱 [架構稽核報告](docs/reports/architecture-audit.md) 了解邊界控制規範。
-3. GitHub 支持：若本專案的無障礙路徑引擎對您的研究或開發有所啟發，請於 GitHub 上點亮 Star 支持。
-
----
-
-## 授權條款 (MIT License)
-
-本專案基於 **MIT 授權條款** 開源發布，您可以自由使用、修改並散布本軟體。
-
-完整授權聲明如下：
-
-```text
-MIT License
-
-Copyright (c) 2025 yuzen9622
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
+本專案基於 [MIT](./LICENSE.md) 開源發布，您可以自由使用、修改並散布本軟體。
