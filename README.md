@@ -4,6 +4,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![NodeJS](https://img.shields.io/badge/Node.js->=20.x-green?style=flat-square&logo=nodedotjs)](https://nodejs.org/)
 [![Express](https://img.shields.io/badge/Express-4.x-lightgrey?style=flat-square&logo=express)](https://expressjs.com/)
+[![OTP](https://img.shields.io/badge/OTP-2.9.0-orange?style=flat-square&logo=opentripplanner)](https://opentripplanner.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE.md)
 
 **無障礙地圖多模態路徑規劃與即時交通數據整合 API 服務**
