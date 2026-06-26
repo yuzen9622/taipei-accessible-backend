@@ -20,7 +20,7 @@ services:
       DATABASE_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin
     ports:
       # Publish the API. Prefix 127.0.0.1: to keep it host-only.
-      - "${PORT:-8000}:${PORT:-8000}"
+      - "127.0.0.1:${PORT:-8000}:${PORT:-8000}"
     depends_on:
       mongo:
         condition: service_healthy
