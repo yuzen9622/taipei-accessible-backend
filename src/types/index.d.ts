@@ -245,8 +245,6 @@ export interface IHazardReport {
   _id: string;
   reporterId: string;
   reportedLocation: { type: "Point"; coordinates: [number, number] };
-  reporterLocation: { type: "Point"; coordinates: [number, number] };
-  distanceM: number;
   hazardType: HazardType;
   description?: string;
   photoUrl: string;

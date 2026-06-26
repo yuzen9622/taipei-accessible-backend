@@ -11,8 +11,6 @@ const hazardReportSchema = new Schema<IHazardReport>(
     reporterId: { type: String, required: true, index: true },
 
     reportedLocation: GeoPoint,
-    reporterLocation: GeoPoint,
-    distanceM: { type: Number, required: true },
 
     hazardType: {
       type: String,

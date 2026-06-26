@@ -10,10 +10,8 @@ const STATUSES = ["pending", "verified", "rejected", "expired"] as const;
 export const CreateHazardReportSchema = z
   .object({
     hazardType: z.enum(HAZARD_TYPES).openapi({ example: "obstacle" }),
-    reportedLat: z.coerce.number().min(-90).max(90).openapi({ example: 25.033 }),
-    reportedLng: z.coerce.number().min(-180).max(180).openapi({ example: 121.5654 }),
-    reporterLat: z.coerce.number().min(-90).max(90).openapi({ example: 25.0331 }),
-    reporterLng: z.coerce.number().min(-180).max(180).openapi({ example: 121.5655 }),
+    latitude: z.coerce.number().min(-90).max(90).openapi({ example: 25.033 }),
+    longitude: z.coerce.number().min(-180).max(180).openapi({ example: 121.5654 }),
     description: z
       .string()
       .max(500)
@@ -154,8 +152,7 @@ registry.registerPath({
   tags: ["Hazard Report"],
   summary: "提交路況回報",
   description:
-    "已登入使用者以即時拍攝照片提交路況回報。後端執行地理柵欄（20m）、EXIF 時間/GPS 驗證、GCS 上傳並建立回報；AI 影像辨識於回應後非同步進行。Content-Type 為 multipart/form-data。",
-  security: [{ bearerAuth: [] }],
+    "以即時拍攝照片提交路況回報（免登入）。`latitude`/`longitude` 為使用者當下位置，同時作為回報地點。後端執行 EXIF 時間/GPS 驗證、GCS 上傳並建立回報；AI 影像辨識於回應後非同步進行。Content-Type 為 multipart/form-data。",
   request: {
     body: {
       content: {
@@ -163,10 +160,8 @@ registry.registerPath({
           schema: z.object({
             photo: z.string().openapi({ type: "string", format: "binary" }),
             hazardType: z.enum(HAZARD_TYPES),
-            reportedLat: z.number(),
-            reportedLng: z.number(),
-            reporterLat: z.number(),
-            reporterLng: z.number(),
+            latitude: z.number(),
+            longitude: z.number(),
             description: z.string().optional(),
           }),
         },
@@ -178,9 +173,7 @@ registry.registerPath({
       description: "回報已建立（pending），含 _id 供輪詢",
       content: { "application/json": { schema: CreateReportResponseSchema } },
     },
-    400: { description: "驗證失敗（地理柵欄/EXIF/照片）" },
-    401: { description: "未登入或 token 過期" },
-    403: { description: "token 無效" },
+    400: { description: "驗證失敗（EXIF/照片）" },
     429: { description: "回報過於頻繁" },
     500: { description: "照片上傳或伺服器錯誤" },
   },

@@ -21,10 +21,8 @@ export interface ServiceResult<T = unknown> {
 export interface CreateReportInput {
   reporterId: string;
   hazardType: HazardType;
-  reportedLat: number;
-  reportedLng: number;
-  reporterLat: number;
-  reporterLng: number;
+  latitude: number;
+  longitude: number;
   description?: string;
   photo: UploadedPhoto;
 }

@@ -1,6 +1,5 @@
 import { Types, type HydratedDocument } from "mongoose";
 import HazardReport from "../../model/hazard-report.model";
-import { haversineMeters } from "../../utils/geo";
 import { uploadHazardPhoto } from "../../adapters/gcs.adapter";
 import { parsePhotoExif } from "./hazard-report.parse";
 import { verifyHazardReport } from "./hazard-report.ai-verify";
@@ -15,7 +14,6 @@ import type {
   ServiceResult,
 } from "./hazard-report.types";
 
-const MAX_DISTANCE_M = Number(process.env.HAZARD_REPORT_MAX_DISTANCE_M ?? 20);
 const DEDUP_RADIUS_M = 50;
 const DEFAULT_NEARBY_RADIUS_M = 500;
 const MAX_NEARBY_RADIUS_M = 5000;
@@ -33,10 +31,6 @@ const EXPIRY_MS: Record<HazardType, number> = {
 const PUBLIC_SELECT = "-reporterId -photoStoragePath -confirmedBy -deniedBy";
 const MINE_SELECT = "-photoStoragePath -confirmedBy -deniedBy";
 const DEFAULT_NEARBY_STATUS = ["pending", "verified"];
-
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
-}
 
 function fail(
   httpCode: number,
@@ -65,33 +59,22 @@ function toView(
 }
 
 /**
- * Validates and persists a new hazard report: geofence (≤20m), EXIF freshness
- * and GPS match, same-location dedup merge, GCS photo upload, then document
- * creation with a `skipped` AI placeholder. The AI image check is fired
- * asynchronously and does not block the returned result.
+ * Validates and persists a new hazard report: EXIF freshness and GPS match,
+ * same-location dedup merge, GCS photo upload, then document creation with a
+ * `skipped` AI placeholder. The AI image check is fired asynchronously and does
+ * not block the returned result. The report location is the reporter's own
+ * coordinates (no separate reported point, no auth required).
  *
- * @param input The reporter id, claimed/actual coordinates, hazard type, description and photo.
+ * @param input The reporter id, coordinates, hazard type, description and photo.
  * @returns A 201 with the created report, a 200 merge into a nearby report, or a domain failure.
  */
 export async function createReport(input: CreateReportInput): Promise<ServiceResult> {
   const now = new Date();
 
-  const distanceM = haversineMeters(
-    input.reportedLat,
-    input.reportedLng,
-    input.reporterLat,
-    input.reporterLng,
-  );
-  if (distanceM > MAX_DISTANCE_M) {
-    return fail(ResponseCode.INVALID_INPUT, "GEOFENCE_VIOLATION", {
-      distanceM: round1(distanceM),
-    });
-  }
-
   const exif = await parsePhotoExif(
     input.photo.buffer,
-    input.reporterLat,
-    input.reporterLng,
+    input.latitude,
+    input.longitude,
     now,
   );
   if (!exif.timestampFresh) {
@@ -104,7 +87,7 @@ export async function createReport(input: CreateReportInput): Promise<ServiceRes
   const existing = await HazardReport.findOne({
     reportedLocation: {
       $near: {
-        $geometry: { type: "Point", coordinates: [input.reportedLng, input.reportedLat] },
+        $geometry: { type: "Point", coordinates: [input.longitude, input.latitude] },
         $maxDistance: DEDUP_RADIUS_M,
       },
     },
@@ -141,9 +124,7 @@ export async function createReport(input: CreateReportInput): Promise<ServiceRes
   const doc = await HazardReport.create({
     _id,
     reporterId: input.reporterId,
-    reportedLocation: { type: "Point", coordinates: [input.reportedLng, input.reportedLat] },
-    reporterLocation: { type: "Point", coordinates: [input.reporterLng, input.reporterLat] },
-    distanceM: round1(distanceM),
+    reportedLocation: { type: "Point", coordinates: [input.longitude, input.latitude] },
     hazardType: input.hazardType,
     description: input.description ?? null,
     photoUrl: uploaded.url,

@@ -47,7 +47,6 @@ export const ENV_MSG = {
  * schema, so they are centralized here to avoid magic literals.
  */
 export const HAZARD_REASON = {
-  GEOFENCE_VIOLATION: "GEOFENCE_VIOLATION",
   EXIF_TOO_OLD: "EXIF_TOO_OLD",
   EXIF_GPS_MISMATCH: "EXIF_GPS_MISMATCH",
   PHOTO_REQUIRED: "PHOTO_REQUIRED",
@@ -73,7 +72,6 @@ export const REVIEW_MSG = {
 } as const;
 
 export const HAZARD_MSG = {
-  GEOFENCE_VIOLATION: "使用者位置距回報地點超過 20 公尺",
   EXIF_TOO_OLD: "照片拍攝時間距回報時間超過 10 分鐘",
   EXIF_GPS_MISMATCH: "照片 GPS 位置與宣稱位置不符",
   PHOTO_REQUIRED: "未上傳照片",

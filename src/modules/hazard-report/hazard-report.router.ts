@@ -28,7 +28,6 @@ export function createHazardReportRouter(): Router {
   router.post(
     "/reports",
     postReportsLimiter,
-    middleware,
     uploadPhoto,
     validateRequest({ body: CreateHazardReportSchema }),
     createReport,

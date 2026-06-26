@@ -34,7 +34,7 @@ function parseStatusList(raw?: string): string[] | undefined {
   return list.length ? list : undefined;
 }
 
-function resolveVoterId(req: Request): string {
+function resolveIdentity(req: Request): string {
   const token = req.headers.authorization?.split(" ")[1];
   if (token) {
     const verify = verifyAccessToken(token);
@@ -59,20 +59,16 @@ async function createReport(req: Request, res: Response) {
 
   const body = req.validated?.body as {
     hazardType: HazardType;
-    reportedLat: number;
-    reportedLng: number;
-    reporterLat: number;
-    reporterLng: number;
+    latitude: number;
+    longitude: number;
     description?: string;
   };
 
   const result = await service.createReport({
-    reporterId: req.auth!.userId,
+    reporterId: resolveIdentity(req),
     hazardType: body.hazardType,
-    reportedLat: body.reportedLat,
-    reportedLng: body.reportedLng,
-    reporterLat: body.reporterLat,
-    reporterLng: body.reporterLng,
+    latitude: body.latitude,
+    longitude: body.longitude,
     description: body.description,
     photo: {
       buffer: req.file.buffer,
@@ -131,7 +127,7 @@ async function confirmReport(req: Request, res: Response) {
   const result = await service.confirmReport({
     reportId: req.params.id,
     action: body.action,
-    voterId: resolveVoterId(req),
+    voterId: resolveIdentity(req),
   });
   return send(res, result);
 }
