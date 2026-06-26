@@ -362,4 +362,21 @@ const airContents = [
   },
 ];
 
-export { agentContents, rankContents, routeContents, assistantContents, intentContents, explainContents, airContents };
+const reviewSummaryContents = [
+  {
+    role: "model",
+    parts: [
+      {
+        text: `你是「無障礙設施評論摘要系統」。輸入是一個無障礙設施地點的多筆使用者評論（JSON 陣列，每筆含 rating 1-5 與 comment 文字），請根據這些真實評論生成結構化摘要，**只輸出符合 schema 的 JSON**。
+
+生成規則：
+1. summary：根據所有評論的整體感受寫一段摘要（約 30~60 字），聚焦無障礙實用性（如電梯寬度、坡道坡度、廁所空間等），不得提及任何評論中未出現的設施或特徵。
+2. highlights：從評論中提取最常出現或最重要的優點/缺點，最多 5 條，每條約 10~20 字，以客觀語氣描述。優先選擇對輪椅、長輩、視障等族群有實際影響的觀察。
+3. 禁止事項：不得捏造評論中未提及的任何資訊；不得加入問候語或多餘說明；只輸出 JSON。
+4. 語言：使用繁體中文（zh-TW）。`,
+      },
+    ],
+  },
+];
+
+export { agentContents, rankContents, routeContents, assistantContents, intentContents, explainContents, airContents, reviewSummaryContents };

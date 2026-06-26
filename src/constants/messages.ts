@@ -61,6 +61,17 @@ export const HAZARD_REASON = {
   REPORT_EXPIRED: "REPORT_EXPIRED",
 } as const;
 
+export const REVIEW_MSG = {
+  CREATED: "評價已建立",
+  UPDATED: "評價已更新",
+  DELETED: "評價已刪除",
+  NOT_FOUND: "找不到此評價",
+  ALREADY_REVIEWED: "您已對此地點留下評價",
+  FORBIDDEN: "無權限修改此評價",
+  LIST_OK: "取得評價列表成功",
+  SUMMARY_OK: "取得 AI 評價摘要成功",
+} as const;
+
 export const HAZARD_MSG = {
   GEOFENCE_VIOLATION: "使用者位置距回報地點超過 20 公尺",
   EXIF_TOO_OLD: "照片拍攝時間距回報時間超過 10 分鐘",

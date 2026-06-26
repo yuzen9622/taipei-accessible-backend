@@ -163,4 +163,27 @@ const airConfig: GenerateContentConfig = {
   topK: 1,
 };
 
-export { agentConfig, rankConfig, routeConfig, intentConfig, explainConfig, airConfig };
+const reviewSummaryConfig: GenerateContentConfig = {
+  responseMimeType: "application/json",
+  responseJsonSchema: {
+    type: "object",
+    properties: {
+      summary: {
+        type: "string",
+        description: "整體評論摘要（一段，僅基於使用者真實評論，不得捏造）",
+      },
+      highlights: {
+        type: "array",
+        items: { type: "string" },
+        description: "從評論中萃取的優點或缺點，最多 5 條",
+      },
+    },
+    propertyOrdering: ["summary", "highlights"],
+    required: ["summary", "highlights"],
+  },
+  temperature: 0.2,
+  topP: 0,
+  topK: 1,
+};
+
+export { agentConfig, rankConfig, routeConfig, intentConfig, explainConfig, airConfig, reviewSummaryConfig };
