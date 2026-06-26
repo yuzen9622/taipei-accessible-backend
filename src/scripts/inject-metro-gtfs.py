@@ -10,6 +10,11 @@ MaaS planner (which returns bus instead). This converts the TDX Metro
 S2STravelTime + Frequency APIs into a frequency-based GTFS schedule for ONLY
 those gap lines, leaving the feed's working lines untouched.
 
+Additionally, this script checks if existing metro trips in the feed are missing
+their corresponding shape points in shapes.txt (a common TDX data issue for systems
+like TMRT that have native trips but no shapes in shapes.txt). If missing, it fetches
+the shapes from TDX and injects them under their native shape_ids.
+
 Metro runs on headways, not numbered trains (unlike TRA), so each gap route
 gets ONE template trip whose stop_times encode the ride-time pattern, plus a
 single frequencies.txt window — OTP clones it across the day. One window per
@@ -40,8 +45,9 @@ S2STravelTime, is skipped and logged — it just stays 0-trips (no regression).
 Idempotent: re-running first drops previously injected MRT_ rows.
 
 Usage: inject-metro-gtfs.py <feed.zip> <metro-data-dir>
-  where <metro-data-dir> holds {SYSTEM}.s2s.json and {SYSTEM}.freq.json files
-  (raw TDX /Rail/Metro/S2STravelTime/{SYSTEM} and /Frequency/{SYSTEM} responses).
+  where <metro-data-dir> holds {SYSTEM}.s2s.json, {SYSTEM}.freq.json, and
+  {SYSTEM}.shape.json files (raw TDX /Rail/Metro/S2STravelTime/{SYSTEM},
+  /Frequency/{SYSTEM}, and /Shape/{SYSTEM} responses).
 """
 import csv
 import io
@@ -179,6 +185,19 @@ def main(zip_path, metro_dir):
         freq_fields, freqs = read_rows(zf, "frequencies.txt")
         valid_stop_ids = {r["stop_id"] for r in read_rows(zf, "stops.txt")[1]}
 
+        # Load existing valid shape IDs (skipping previous injected shape IDs)
+        valid_shape_ids = set()
+        if "shapes.txt" in zf.namelist():
+            with zf.open("shapes.txt") as f:
+                wrapper = io.TextIOWrapper(f, encoding="utf-8-sig")
+                wrapper.readline()  # skip header
+                for line in wrapper:
+                    parts = line.split(',', 1)
+                    if parts:
+                        sid = parts[0]
+                        if not sid.startswith(TRIP_PREFIX):
+                            valid_shape_ids.add(sid)
+
         # ── Idempotency: strip a previous injection (everything we add is MRT_-keyed) ──
         before = (len(trips), len(calendar), len(stop_times), len(freqs))
         trips = [r for r in trips if not r["trip_id"].startswith(TRIP_PREFIX)]
@@ -199,12 +218,8 @@ def main(zip_path, metro_dir):
             if (r.get("route_type") or "").strip() == "1"
             and rid not in routes_with_trips
         )
-        if not gap_routes:
-            log("no 0-trips metro routes — nothing to inject")
-            _rewrite(zip_path, zf, {})
-            return
 
-        # Group gap routes by (system, lineId, variant): the two directions share a source.
+        # Group gap routes by (system, line_id, variant): the two directions share a source.
         by_variant = {}
         for rid in gap_routes:
             parsed = parse_route_id(rid)
@@ -214,7 +229,7 @@ def main(zip_path, metro_dir):
             by_variant.setdefault((system, line_id, variant), []).append(rid)
 
         # Lazily load each system's TDX data once.
-        s2s_cache, freq_cache = {}, {}
+        s2s_cache, freq_cache, shape_cache = {}, {}, {}
 
         def s2s_records(system, line_id, variant):
             if system not in s2s_cache:
@@ -244,9 +259,71 @@ def main(zip_path, metro_dir):
             return hw, (op_start if op_start is not None else DEFAULT_OP_START), \
                 (op_end if op_end is not None else DEFAULT_OP_END)
 
+        def load_shapes(system):
+            if system not in shape_cache:
+                shape_cache[system] = load_json(os.path.join(metro_dir, f"{system}.shape.json"))
+            return shape_cache[system]
+
+        def parse_geometry(geometry_str):
+            if not geometry_str:
+                return []
+            # Strip geometry type and all parentheses to handle LINESTRING and MULTILINESTRING robustly
+            cleaned = geometry_str.replace("MULTILINESTRING", "").replace("LINESTRING", "")
+            cleaned = cleaned.replace("(", "").replace(")", "").strip()
+            coords = []
+            for pt in cleaned.split(','):
+                parts = pt.strip().split()
+                if len(parts) == 2:
+                    try:
+                        lon, lat = float(parts[0]), float(parts[1])
+                        coords.append((lat, lon))
+                    except ValueError:
+                        continue
+            return coords
+
+        def find_shape(system, line_id, variant, direction):
+            shapes = load_shapes(system)
+            if not shapes:
+                return []
+            dir_val = str(direction)
+            match = None
+            # 1. Exact RouteID and Direction
+            for s in shapes:
+                if s.get("RouteID") == variant and str(s.get("Direction", "")) == dir_val:
+                    match = s
+                    break
+            # 2. RouteID only
+            if not match:
+                for s in shapes:
+                    if s.get("RouteID") == variant:
+                        match = s
+                        break
+            # 3. LineID and Direction
+            if not match:
+                for s in shapes:
+                    if s.get("LineID") == line_id and str(s.get("Direction", "")) == dir_val:
+                        match = s
+                        break
+            # 4. LineID only
+            if not match:
+                for s in shapes:
+                    if s.get("LineID") == line_id:
+                        match = s
+                        break
+            if not match:
+                return []
+            coords = parse_geometry(match.get("Geometry"))
+            matched_dir = str(match.get("Direction", ""))
+            # If shape is direction-agnostic (or Direction=0) and direction is 1, reverse points
+            if direction == "1" and (matched_dir == "" or matched_dir == "0"):
+                coords = coords[::-1]
+            return coords
+
         new_trips, new_st, new_freq = [], [], []
+        new_shapes = {}
         covered, skipped = [], []
 
+        # ── Step 1: Gap routes (no trips in feed) ──
         for (system, line_id, variant), rids in sorted(by_variant.items()):
             recs = s2s_records(system, line_id, variant)
             if not recs:
@@ -281,9 +358,19 @@ def main(zip_path, metro_dir):
                     skipped.append(f"{rid} (<2 stations in feed)")
                     continue
                 trip_id = f"{TRIP_PREFIX}{rid}"
+                
+                # Fetch rail line shape geometry
+                shape_id = f"{TRIP_PREFIX}{rid}"
+                shape_pts = find_shape(system, line_id, variant, direction)
+                if shape_pts:
+                    new_shapes[shape_id] = shape_pts
+                    shape_val = shape_id
+                else:
+                    shape_val = ""
+
                 new_trips.append({
                     "route_id": rid, "service_id": SERVICE_ID, "trip_id": trip_id,
-                    "shape_id": "", "direction_id": direction, "bikes_allowed": "",
+                    "shape_id": shape_val, "direction_id": direction, "bikes_allowed": "",
                 })
                 for seq, (stop_id, arr, dep) in enumerate(rows, start=1):
                     new_st.append({
@@ -295,7 +382,39 @@ def main(zip_path, metro_dir):
                     "trip_id": trip_id, "start_time": hms(op_start),
                     "end_time": hms(op_end), "headway_secs": str(hw_secs),
                 })
-                covered.append(f"{rid}({len(rows)}st,{hw_secs // 60}m)")
+                covered.append(f"{rid}({len(rows)}st,{hw_secs // 60}m,shape:{bool(shape_pts)})")
+
+        # ── Step 2: Non-gap routes (already have trips, but shape is missing from shapes.txt) ──
+        # Check existing trips for missing shape data
+        injected_native_shapes = 0
+        for trip in trips:
+            # Skip injected MRT_ trips
+            if trip["trip_id"].startswith(TRIP_PREFIX):
+                continue
+            rid = trip["route_id"]
+            shape_id = trip.get("shape_id")
+            if not shape_id or shape_id in valid_shape_ids or shape_id in new_shapes:
+                continue
+            
+            # Check if this route is a metro route (type 1)
+            route = routes_by_id.get(rid)
+            if not route or (route.get("route_type") or "").strip() != "1":
+                continue
+                
+            # Parse route details
+            parsed = parse_route_id(rid)
+            if not parsed:
+                continue
+            system, line_id, variant, direction = parsed
+            
+            # Find shapes for this trip
+            direction_id = trip.get("direction_id", direction)
+            shape_pts = find_shape(system, line_id, variant, direction_id)
+            if shape_pts:
+                new_shapes[shape_id] = shape_pts
+                injected_native_shapes += 1
+                # Mark as valid so we don't process it multiple times
+                valid_shape_ids.add(shape_id)
 
         if new_trips:
             calendar.append({
@@ -306,7 +425,8 @@ def main(zip_path, metro_dir):
             })
 
         log(f"injecting: trips={len(new_trips)} stop_times={len(new_st)} "
-            f"freq={len(new_freq)} calendar {start_date}–{end_date}")
+            f"freq={len(new_freq)} gap_shapes={len(new_shapes) - injected_native_shapes} "
+            f"native_shapes={injected_native_shapes} calendar {start_date}–{end_date}")
         log("covered: " + (", ".join(covered) if covered else "(none)"))
         if skipped:
             log("skipped: " + ", ".join(skipped))
@@ -316,11 +436,11 @@ def main(zip_path, metro_dir):
             "calendar.txt": (cal_fields, calendar),
             "stop_times.txt": (st_fields, stop_times + new_st),
             "frequencies.txt": (freq_fields, freqs + new_freq),
-        })
+        }, new_shapes)
     log(f"rewrote {zip_path}")
 
 
-def _rewrite(zip_path, zf, rewritten):
+def _rewrite(zip_path, zf, rewritten, new_shapes=None):
     """Stream every entry through, replacing the rewritten ones."""
     with tempfile.NamedTemporaryFile(dir=os.path.dirname(zip_path) or ".",
                                      suffix=".zip", delete=False) as tmp:
@@ -333,8 +453,38 @@ def _rewrite(zip_path, zf, rewritten):
                     w.writeheader()
                     w.writerows(rows)
                     out.writestr(name, buf.getvalue())
+                elif name == "shapes.txt" and new_shapes is not None:
+                    # Write shapes in streaming mode to keep memory usage low
+                    with out.open("shapes.txt", "w") as f:
+                        wrapper = io.TextIOWrapper(f, encoding="utf-8")
+                        wrapper.write("shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n")
+                        
+                        # Copy existing shapes (skipping old injected shapes)
+                        if "shapes.txt" in zf.namelist():
+                            with zf.open("shapes.txt") as in_f:
+                                in_wrapper = io.TextIOWrapper(in_f, encoding="utf-8-sig")
+                                in_wrapper.readline() # skip original header
+                                for line in in_wrapper:
+                                    if line.startswith(TRIP_PREFIX):
+                                        continue
+                                    wrapper.write(line)
+                        
+                        # Append new shapes
+                        for shape_id, points in new_shapes.items():
+                            for seq, (lat, lon) in enumerate(points, start=1):
+                                wrapper.write(f"{shape_id},{lat},{lon},{seq}\n")
                 else:
                     out.writestr(name, zf.read(name))
+            
+            # If shapes.txt did not exist at all, write it now
+            if "shapes.txt" not in zf.namelist() and new_shapes:
+                with out.open("shapes.txt", "w") as f:
+                    wrapper = io.TextIOWrapper(f, encoding="utf-8")
+                    wrapper.write("shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n")
+                    for shape_id, points in new_shapes.items():
+                        for seq, (lat, lon) in enumerate(points, start=1):
+                            wrapper.write(f"{shape_id},{lat},{lon},{seq}\n")
+                            
         tmp_path = tmp.name
     os.replace(tmp_path, zip_path)
 

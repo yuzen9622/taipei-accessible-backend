@@ -103,7 +103,7 @@ METRO_DIR="$WORK_DIR/metro"
 mkdir -p "$METRO_DIR"
 METRO_SYSTEMS="${OTP_METRO_SYSTEMS:-TRTC NTMC TMRT TYMC}"
 METRO_BASE="https://tdx.transportdata.tw/api/basic/v2/Rail/Metro"
-log "fetching metro S2STravelTime + Frequency: $METRO_SYSTEMS"
+log "fetching metro S2STravelTime + Frequency + Shape: $METRO_SYSTEMS"
 for sys in $METRO_SYSTEMS; do
   curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
     -o "$METRO_DIR/$sys.s2s.json" \
@@ -114,6 +114,11 @@ for sys in $METRO_SYSTEMS; do
     -o "$METRO_DIR/$sys.freq.json" \
     "$METRO_BASE/Frequency/$sys?%24format=JSON" \
     || log "WARN: metro Frequency fetch failed for $sys"
+  sleep 3
+  curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
+    -o "$METRO_DIR/$sys.shape.json" \
+    "$METRO_BASE/Shape/$sys?%24format=JSON" \
+    || log "WARN: metro Shape fetch failed for $sys"
   sleep 3
 done
 python3 "$SCRIPT_DIR/inject-metro-gtfs.py" \
