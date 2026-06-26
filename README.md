@@ -8,7 +8,7 @@
 
 **無障礙地圖多模態路徑規劃與即時交通數據整合 API 服務**
 
-[架構稽核報告](docs/reports/architecture-audit.md) · [開發者指引](CLAUDE.md) · [本地 API 文件](http://localhost:5000/docs)
+  [快速開始](#快速開始) · [API 接口](#api-接口分組說明) · [開發指令](#開發與建構指令)
 
 </div>
 
