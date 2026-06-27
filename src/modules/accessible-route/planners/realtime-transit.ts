@@ -301,12 +301,17 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
     boards.push(board);
     if (board.EstimateTime == null || board.EstimateTime < 0) continue;
     const alight = recordForStop(records, leg.arrivalStop, dir);
-    if (
-      alight &&
-      alight.EstimateTime != null &&
-      alight.EstimateTime <= board.EstimateTime
-    ) {
-      continue;
+    if (alight) {
+      if (alight.StopSequence != null && board.StopSequence != null) {
+        if (alight.StopSequence <= board.StopSequence) {
+          continue;
+        }
+      } else if (
+        alight.EstimateTime != null &&
+        alight.EstimateTime <= board.EstimateTime
+      ) {
+        continue;
+      }
     }
     candidates.push({ est: board.EstimateTime, dir });
   }
@@ -765,12 +770,6 @@ export async function overlayRealtimeTransit(
   opts: { departureTime?: Date } = {},
 ): Promise<void> {
   if (process.env.USE_REALTIME_TRANSIT === "false") return;
-  if (
-    opts.departureTime &&
-    Math.abs(opts.departureTime.getTime() - Date.now()) > MAX_DEPARTURE_SKEW_MS
-  ) {
-    return;
-  }
 
   const live = routes.filter((r) => !r.departureDate);
   if (!live.length) return;
