@@ -14,11 +14,10 @@ import time
 # Preserves non-bus (TRA, THSR, Metro) schedules by matching route_type != 3.
 
 CITIES = [
-    "Taipei", "NewTaipei", "Taoyuan", "Taichung", "Tainan", "Kaohsiung",
-    "Keelung", "Hsinchu", "HsinchuCounty", "MiaoliCounty", "ChanghuaCounty",
-    "NantouCounty", "YunlinCounty", "ChiayiCounty", "Chiayi", "PingtungCounty",
-    "YilanCounty", "HualienCounty", "TaitungCounty", "KinmenCounty", "PenghuCounty",
-    "LienchiangCounty"
+    "Taichung", "Taoyuan", "Keelung", "Hsinchu", "HsinchuCounty", "MiaoliCounty",
+    "ChanghuaCounty", "NantouCounty", "YunlinCounty", "ChiayiCounty", "Chiayi",
+    "PingtungCounty", "YilanCounty", "HualienCounty", "TaitungCounty", "Kaohsiung",
+    "PenghuCounty"
 ]
 
 def get_tdx_token(client_id, client_secret):
