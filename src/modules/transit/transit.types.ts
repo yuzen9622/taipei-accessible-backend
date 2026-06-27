@@ -11,6 +11,7 @@ export type BusEtaResult =
   | { ok: true; routeId: string; direction: number; city: TaiwanCityEn; etaData: any }
   | { ok: false; error: string; status: 400 | 500 };
 
+
 export type BusPositionResult =
   | { ok: true; positionData: any }
   | { ok: false; error: string; status: 400 | 500 };
@@ -35,6 +36,35 @@ export type BusRouteInfoResult =
       source: "db" | "tdx";
       operators: string[];
       directions: BusRouteDirection[];
+    }
+  | BusServiceError;
+
+export type BusRouteDetailStop = {
+  seq: number;
+  name: string;
+  lat?: number;
+  lng?: number;
+  estimateMinutes: number | null;
+  statusLabel: string;
+};
+
+export type BusRouteDetailDirection = {
+  direction: number;
+  directionLabel: string;
+  from: string;
+  to: string;
+  stopCount: number;
+  stops: BusRouteDetailStop[];
+};
+
+export type BusRouteDetailResult =
+  | {
+      ok: true;
+      routeName: string;
+      city: TaiwanCityEn;
+      operators: string[];
+      schedules?: BusScheduleByDirection[];
+      directions: BusRouteDetailDirection[];
     }
   | BusServiceError;
 

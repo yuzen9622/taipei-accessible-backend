@@ -42,6 +42,9 @@ import type {
   BusSearchRouteResult,
   BusNearbyStopsResult,
   BusNearbyStop,
+  BusRouteDetailResult,
+  BusRouteDetailDirection,
+  BusRouteDetailStop,
 } from "./transit.types";
 
 /**
@@ -252,6 +255,99 @@ export async function getBusArrivalAtStop(params: {
     return { ok: false, error: (err as Error).message || "到站查詢失敗", status: 500 };
   }
 }
+
+/**
+ * Get full route details: stops, ETA for all stops, and timetables.
+ * Ideal for a full bus route view in an app.
+ */
+export async function getBusRouteDetail(params: {
+  routeName: string;
+  city: TaiwanCityEn;
+}): Promise<BusRouteDetailResult> {
+  const { city, routeName } = params;
+  const { type, routeId } = detectBusApiType(routeName);
+
+  try {
+    // 1. Get base route info (stops)
+    const routeInfoRes = await getBusRouteInfo(params);
+    if (!routeInfoRes.ok) return routeInfoRes;
+
+    // 2. Get timetable (optional, we won't fail if not found)
+    const timetableRes = await getBusTimetable(params);
+
+    // 3. Get ETAs for all stops on the route
+    const etaUrl =
+      type === "City"
+        ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${routeId}?$format=JSON`
+        : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${routeId}?$format=JSON`;
+    
+    let etaRecords: any[] = [];
+    try {
+      etaRecords = await fetchTdxArray(etaUrl);
+    } catch (e) {
+      console.error("Failed to fetch ETA in getBusRouteDetail", e);
+    }
+
+    const etaMap = new Map<number, Map<string, { estimateMinutes: number | null; statusLabel: string }>>();
+    for (const r of etaRecords) {
+      const dir = r.Direction;
+      const stopName = r.StopName?.Zh_tw;
+      if (dir == null || !stopName) continue;
+      
+      let dirMap = etaMap.get(dir);
+      if (!dirMap) {
+        dirMap = new Map();
+        etaMap.set(dir, dirMap);
+      }
+      
+      const est: number | null =
+        typeof r.EstimateTime === "number" && r.EstimateTime >= 0
+          ? Math.round(r.EstimateTime / 60)
+          : null;
+          
+      dirMap.set(stopName, {
+        estimateMinutes: est,
+        statusLabel: STOP_STATUS_LABEL[r.StopStatus] ?? "正常",
+      });
+    }
+
+    const directions: BusRouteDetailDirection[] = routeInfoRes.directions.map((d) => {
+      const dirMap = etaMap.get(d.direction);
+      const stops: BusRouteDetailStop[] = d.stops.map((s) => {
+        let etaData = { estimateMinutes: null as number | null, statusLabel: "未發車" };
+        if (dirMap) {
+          for (const [key, value] of dirMap.entries()) {
+            if (equalStopName(key, s.name)) {
+              etaData = value;
+              break;
+            }
+          }
+        }
+        return {
+          ...s,
+          estimateMinutes: etaData.estimateMinutes,
+          statusLabel: etaData.statusLabel,
+        };
+      });
+      return {
+        ...d,
+        stops,
+      };
+    });
+
+    return {
+      ok: true,
+      routeName: routeId,
+      city,
+      operators: routeInfoRes.operators,
+      schedules: timetableRes.ok ? timetableRes.schedules : undefined,
+      directions,
+    };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message || "路線詳情查詢失敗", status: 500 };
+  }
+}
+
 
 function serviceDayLabel(sd?: Record<string, number>): string {
   if (!sd) return "";

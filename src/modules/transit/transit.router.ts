@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   getBusRouteHandler,
+  getBusRouteDetailHandler,
   getBusArrivalHandler,
   getBusTimetableHandler,
   getBusPositionsHandler,
@@ -24,6 +25,11 @@ export function createTransitRouter(): Router {
     "/bus/route",
     validateRequest({ query: BusRouteQuerySchema }),
     getBusRouteHandler,
+  );
+  router.get(
+    "/bus/route-detail",
+    validateRequest({ query: BusRouteQuerySchema }), // Use the same schema
+    getBusRouteDetailHandler,
   );
   router.get(
     "/bus/arrival",

@@ -193,6 +193,21 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/transit/bus/route-detail",
+  tags: ["Transit"],
+  summary: "公車路線詳細資訊",
+  description: "回傳指定路線的所有站點列表、每個站點的預估到站時間（ETA）以及當前時刻表。",
+  request: { query: BusRouteQuerySchema },
+  responses: {
+    200: { description: "路線詳細資訊", content: { "application/json": { schema: BusServiceResponseSchema } } },
+    400: { description: "缺少縣市或參數" },
+    404: { description: "找不到路線" },
+    500: { description: "TDX/DB 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/transit/bus/arrival",
   tags: ["Transit"],
   summary: "公車到站時間",

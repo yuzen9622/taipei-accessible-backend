@@ -274,6 +274,22 @@ export async function getBusRoute(args: {
   }
 }
 
+export async function getBusRouteDetail(args: {
+  routeName: string;
+  city?: string;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    const city = await resolveBusCityOrError(args.city, args.userLocation);
+    if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
+    const result = await busService.getBusRouteDetail({ routeName: args.routeName, city });
+    return JSON.stringify(result);
+  } catch (error: any) {
+    console.error("[agent-tool:getBusRouteDetail]", error);
+    return JSON.stringify({ ok: false, error: "公車路線詳情查詢失敗" });
+  }
+}
+
 export async function getBusArrival(args: {
   routeName: string;
   stopName: string;
@@ -665,6 +681,13 @@ export async function executeLocalTool(
 
     case "getBusRoute":
       return getBusRoute({
+        routeName: args.routeName,
+        city: args.city,
+        userLocation,
+      });
+
+    case "getBusRouteDetail":
+      return getBusRouteDetail({
         routeName: args.routeName,
         city: args.city,
         userLocation,

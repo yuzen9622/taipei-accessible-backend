@@ -40,6 +40,20 @@ async function getBusRouteHandler(req: Request, res: Response<ApiResponse<any>>)
   }
 }
 
+async function getBusRouteDetailHandler(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { routeName, city } = req.validated?.query as { routeName: string; city?: string };
+    const resolved = await resolveCityOr400(city, res);
+    if (!resolved) return;
+    const result = await busService.getBusRouteDetail({ routeName, city: resolved });
+    if (!result.ok) return sendResponse(res, false, "error", result.status, result.error);
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error: any) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error.message);
+  }
+}
+
 async function getBusArrivalHandler(req: Request, res: Response<ApiResponse<any>>) {
   try {
     const { routeName, stopName, city, direction } = req.validated?.query as {
@@ -144,6 +158,7 @@ export {
   getTrainData,
   getHighSpeedTrainData,
   getBusRouteHandler,
+  getBusRouteDetailHandler,
   getBusArrivalHandler,
   getBusTimetableHandler,
   getBusPositionsHandler,

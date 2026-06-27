@@ -159,6 +159,25 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "getBusRouteDetail",
+      description:
+        "查詢公車路線的所有站點列表、每個站點的預估到站時間（ETA）以及當前的班次時刻表。當使用者需要『像公車app一樣的完整路線動態（站點+幾分鐘來+時刻表）』時使用。",
+      parameters: {
+        type: "object",
+        properties: {
+          routeName: { type: "string", description: "公車路線名稱，例如：'307'、'紅2'" },
+          city: {
+            type: "string",
+            description: "公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
+          },
+        },
+        required: ["routeName"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "getBusArrival",
       description:
         "查詢某條公車路線在某個站牌的即時預估到站時間（還有幾分鐘到）。當使用者問「X 路在 Y 站還有多久」、「X 路到 Y 站的時間」時使用。若已知該班車車牌，會一併回報是否為低底盤車。",
