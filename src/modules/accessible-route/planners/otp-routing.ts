@@ -11,6 +11,9 @@
  */
 
 import { decode } from "@googlemaps/polyline-codec";
+import axios from "axios";
+import http from "http";
+import https from "https";
 import { GtfsTrip } from "../../../model/gtfs-trip.model";
 import MetroStationModel from "../../../model/metro-station.model";
 import TrainStationModel from "../../../model/train-station.model";
@@ -50,6 +53,15 @@ export type {
 
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
 const OTP_NUM_ITINERARIES = 5;
+
+const otpAgent = new http.Agent({ keepAlive: true });
+const otpAgentHttps = new https.Agent({ keepAlive: true });
+
+const otpClient = axios.create({
+  httpAgent: otpAgent,
+  httpsAgent: otpAgentHttps,
+  timeout: OTP_TIMEOUT_MS,
+});
 
 const SNAP_RADIUS_M = 500;
 
@@ -240,40 +252,28 @@ async function queryOtpPlan(
   walkSpeed: number,
 ): Promise<OtpItinerary[]> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), OTP_TIMEOUT_MS);
-  try {
-    const res = await fetch(`${baseUrl}/otp/gtfs/v1`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        query: PLAN_QUERY,
-        variables: {
-          fromLat: origin.lat,
-          fromLon: origin.lng,
-          toLat: destination.lat,
-          toLon: destination.lng,
-          date: ymdDash(departure),
-          time: hhmm(departure.getTime()),
-          wheelchair,
-          walkSpeed,
-          numItineraries: OTP_NUM_ITINERARIES,
-        },
-      }),
-    });
-    if (!res.ok) throw new Error(`OTP HTTP ${res.status}`);
-    const json = (await res.json()) as {
-      data?: { plan?: { itineraries?: OtpItinerary[] } };
-      errors?: { message?: string }[];
-    };
-    if (json.errors?.length) {
-      throw new Error(`OTP GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
-    }
-    return json.data?.plan?.itineraries ?? [];
-  } finally {
-    clearTimeout(timer);
+  const response = await otpClient.post(`${baseUrl}/otp/gtfs/v1`, {
+    query: PLAN_QUERY,
+    variables: {
+      fromLat: origin.lat,
+      fromLon: origin.lng,
+      toLat: destination.lat,
+      toLon: destination.lng,
+      date: ymdDash(departure),
+      time: hhmm(departure.getTime()),
+      wheelchair,
+      walkSpeed,
+      numItineraries: OTP_NUM_ITINERARIES,
+    },
+  });
+  const json = response.data as {
+    data?: { plan?: { itineraries?: OtpItinerary[] } };
+    errors?: { message?: string }[];
+  };
+  if (json.errors?.length) {
+    throw new Error(`OTP GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
   }
+  return json.data?.plan?.itineraries ?? [];
 }
 
 const RAIL_GEOMETRY_QUERY = `
@@ -314,27 +314,19 @@ export async function fetchRailLegGeometry(
 ): Promise<[number, number][] | null> {
   if (railGeomBreaker.isOpen()) return null;
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), OTP_TIMEOUT_MS);
   try {
-    const res = await fetch(`${baseUrl}/otp/gtfs/v1`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        query: RAIL_GEOMETRY_QUERY,
-        variables: {
-          fromLat: from.lat,
-          fromLon: from.lng,
-          toLat: to.lat,
-          toLon: to.lng,
-          date: dateYmd,
-          time: timeHHmm,
-        },
-      }),
+    const response = await otpClient.post(`${baseUrl}/otp/gtfs/v1`, {
+      query: RAIL_GEOMETRY_QUERY,
+      variables: {
+        fromLat: from.lat,
+        fromLon: from.lng,
+        toLat: to.lat,
+        toLon: to.lng,
+        date: dateYmd,
+        time: timeHHmm,
+      },
     });
-    if (!res.ok) throw new Error(`OTP HTTP ${res.status}`);
-    const json = (await res.json()) as {
+    const json = response.data as {
       data?: {
         plan?: {
           itineraries?: {
@@ -357,8 +349,6 @@ export async function fetchRailLegGeometry(
   } catch {
     railGeomBreaker.recordFailure();
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
