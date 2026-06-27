@@ -2,6 +2,10 @@ import axios from "axios";
 
 const MAPS_KEY = () => process.env.GOOGLE_MAPS_API_KEY ?? "";
 
+const cityCache = new Map<string, string>();
+const cityZhCache = new Map<string, string>();
+const coordsCache = new Map<string, { latitude: number; longitude: number } | null>();
+
 /**
  * Returns the English-style administrative area name used by TDX
  * (e.g. "Taipei", "NewTaipei", "Taichung").
@@ -11,6 +15,10 @@ const MAPS_KEY = () => process.env.GOOGLE_MAPS_API_KEY ?? "";
  * @returns The TDX-style city name
  */
 export async function getCity(lat: number, lng: number): Promise<string> {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  const hit = cityCache.get(key);
+  if (hit) return hit;
+
   const geocode = await fetch(
     `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${MAPS_KEY()}`,
   );
@@ -18,10 +26,15 @@ export async function getCity(lat: number, lng: number): Promise<string> {
   if (!data.results || data.results.length === 0) {
     throw new Error(`Geocoding failed: ${data.status ?? "NO_RESULTS"}`);
   }
-  return data.results[0].address_components
+  const result = data.results[0].address_components
     .find((c: any) => c.types.includes("administrative_area_level_1"))
     ?.long_name.replace("City", "")
     .replace(" ", "") as string;
+  
+  if (result) {
+    cityCache.set(key, result);
+  }
+  return result;
 }
 
 /**
@@ -33,6 +46,10 @@ export async function getCity(lat: number, lng: number): Promise<string> {
  * @returns The Chinese city name
  */
 export async function getCityZh(lat: number, lng: number): Promise<string> {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  const hit = cityZhCache.get(key);
+  if (hit) return hit;
+
   const geocode = await fetch(
     `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${MAPS_KEY()}&language=zh-TW`,
   );
@@ -42,6 +59,8 @@ export async function getCityZh(lat: number, lng: number): Promise<string> {
     c.types.includes("administrative_area_level_1"),
   );
   if (cityComp) city = (cityComp.long_name as string).replace("台", "臺");
+  
+  cityZhCache.set(key, city);
   return city;
 }
 
@@ -59,6 +78,15 @@ export async function getCoordinates(
   latitude?: number,
   longitude?: number,
 ): Promise<{ latitude: number; longitude: number } | null> {
+  const trimmed = query.trim().toLowerCase();
+  const cacheKey = latitude && longitude 
+    ? `${trimmed}|${latitude.toFixed(3)},${longitude.toFixed(3)}` 
+    : trimmed;
+  
+  if (coordsCache.has(cacheKey)) {
+    return coordsCache.get(cacheKey)!;
+  }
+
   if (!MAPS_KEY()) return null;
 
   const body: Record<string, unknown> = {
@@ -78,8 +106,11 @@ export async function getCoordinates(
         "X-Goog-FieldMask": "places.location",
       },
     });
-    return response.data.places?.[0]?.location ?? null;
+    const result = response.data.places?.[0]?.location ?? null;
+    coordsCache.set(cacheKey, result);
+    return result;
   } catch {
+    coordsCache.set(cacheKey, null);
     return null;
   }
 }
