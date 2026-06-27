@@ -67,6 +67,7 @@ Project specifics:
    `src/app.ts` under `/api/v1`.
 4. Update `.env.example` when adding a required env var.
 5. Run `npm run build` — must be green (this also runs `lint:arch`).
+6. Run and verify any modified or added scripts (like Python tools, build pipelines) locally on actual or mock data to prove correctness before committing.
 
 ## 4) Handoff requirements
 
