@@ -83,29 +83,63 @@ def fetch_paginated_api(token, url_template):
         
     return records
 
-def process_daily_records_to_gtfs(records, new_trips, new_stop_times, seen_trips, valid_route_ids):
+def process_daily_records_to_gtfs(records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set):
     for route in records:
-        route_id = route.get("RouteID")
-        if not route_id:
-            continue
+        route_uid = route.get("RouteUID")
+        sub_route_uid = route.get("SubRouteUID")
+        route_id_tdx = route.get("RouteID")
+        name = route.get("RouteName", {}).get("Zh_tw")
+        direction = route.get("Direction", 0)
         
-        # Only inject if the RouteID exists in the static GTFS stops/routes mapping
-        if route_id not in valid_route_ids:
+        suffix = f"_{direction}"
+        matched_id = None
+        
+        # 1. Match by RouteUID + Direction
+        if route_uid:
+            exact = f"{route_uid}{suffix}"
+            if exact in route_ids_set:
+                matched_id = exact
+            else:
+                for r_id in route_ids_set:
+                    if r_id.startswith(route_uid) and r_id.endswith(suffix):
+                        matched_id = r_id
+                        break
+                        
+        # 2. Match by SubRouteUID + Direction
+        if not matched_id and sub_route_uid:
+            exact = f"{sub_route_uid}{suffix}"
+            if exact in route_ids_set:
+                matched_id = exact
+            else:
+                for r_id in route_ids_set:
+                    if r_id.startswith(sub_route_uid) and r_id.endswith(suffix):
+                        matched_id = r_id
+                        break
+                        
+        # 3. Match by RouteName / RouteID
+        if not matched_id:
+            for r in route_list:
+                r_id = r["route_id"]
+                r_short = r.get("route_short_name")
+                if r_short == name or r_short == route_id_tdx:
+                    if r_id.endswith(suffix):
+                        matched_id = r_id
+                        break
+                        
+        if not matched_id:
             continue
             
-        direction = route.get("Direction", 0)
-        timetables = route.get("TimeTables", [])
-        
+        timetables = route.get("Timetables") or route.get("TimeTables") or []
         for tt in timetables:
             trip_id_raw = tt.get("TripID", "unknown")
-            trip_id = f"patched_{route_id}_{direction}_{trip_id_raw}"
+            trip_id = f"patched_{matched_id}_{trip_id_raw}"
             
             if trip_id in seen_trips:
                 continue
             seen_trips.add(trip_id)
             
             new_trips.append({
-                "route_id": route_id,
+                "route_id": matched_id,
                 "service_id": "service_today",
                 "trip_id": trip_id,
                 "direction_id": str(direction)
@@ -136,7 +170,12 @@ def patch_gtfs_zip(zip_path, daily_records, date_str):
     
     # 1. Read existing routes to know which ones are bus (route_type == 3)
     route_types = {}
-    valid_route_ids = set()
+    route_list = []
+    route_ids_set = set()
+    
+    trips_fields = ["route_id", "service_id", "trip_id", "direction_id"]
+    st_fields = ["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"]
+    cd_fields = ["service_id", "date", "exception_type"]
     
     temp_zip_path = zip_path + ".tmp"
     with zipfile.ZipFile(zip_path, "r") as zin:
@@ -146,7 +185,8 @@ def patch_gtfs_zip(zip_path, daily_records, date_str):
                 reader = csv.DictReader(text)
                 for row in reader:
                     route_types[row["route_id"]] = row.get("route_type")
-                    valid_route_ids.add(row["route_id"])
+                    route_list.append(row)
+                    route_ids_set.add(row["route_id"])
         
         # 2. Extract and preserve all non-bus (TRA, THSR, Metro) trips
         kept_trips = []
@@ -155,9 +195,10 @@ def patch_gtfs_zip(zip_path, daily_records, date_str):
             with zin.open("trips.txt") as f:
                 text = io.TextIOWrapper(f, encoding="utf-8-sig")
                 reader = csv.DictReader(text)
+                if reader.fieldnames:
+                    trips_fields = reader.fieldnames
                 for row in reader:
                     route_id = row["route_id"]
-                    # If it's not a bus (type 3), keep it!
                     if route_types.get(route_id) != "3":
                         kept_trips.append(row)
                         kept_trip_ids.add(row["trip_id"])
@@ -168,6 +209,8 @@ def patch_gtfs_zip(zip_path, daily_records, date_str):
             with zin.open("stop_times.txt") as f:
                 text = io.TextIOWrapper(f, encoding="utf-8-sig")
                 reader = csv.DictReader(text)
+                if reader.fieldnames:
+                    st_fields = reader.fieldnames
                 for row in reader:
                     if row["trip_id"] in kept_trip_ids:
                         kept_stop_times.append(row)
@@ -178,6 +221,8 @@ def patch_gtfs_zip(zip_path, daily_records, date_str):
             with zin.open("calendar_dates.txt") as f:
                 text = io.TextIOWrapper(f, encoding="utf-8-sig")
                 reader = csv.DictReader(text)
+                if reader.fieldnames:
+                    cd_fields = reader.fieldnames
                 for row in reader:
                     kept_calendar_dates.append(row)
 
@@ -187,15 +232,18 @@ def patch_gtfs_zip(zip_path, daily_records, date_str):
     new_trips = []
     new_stop_times = []
     seen_trips = set()
-    process_daily_records_to_gtfs(daily_records, new_trips, new_stop_times, seen_trips, valid_route_ids)
+    process_daily_records_to_gtfs(daily_records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set)
     print(f"Generated {len(new_trips)} new daily bus trips and {len(new_stop_times)} new stop times.")
 
     # 6. Combine kept non-bus + new daily bus data
     final_trips = kept_trips + new_trips
     final_stop_times = kept_stop_times + new_stop_times
-    final_calendar_dates = kept_calendar_dates + [
-        {"service_id": "service_today", "date": gtfs_date, "exception_type": "1"}
-    ]
+    
+    # Check if our target service_today is already in calendar_dates, if not, append it
+    today_active = any(cd["service_id"] == "service_today" and cd["date"] == gtfs_date for cd in kept_calendar_dates)
+    final_calendar_dates = kept_calendar_dates
+    if not today_active:
+        final_calendar_dates.append({"service_id": "service_today", "date": gtfs_date, "exception_type": "1"})
 
     # 7. Rewrite Zip
     with zipfile.ZipFile(zip_path, "r") as zin:
@@ -207,21 +255,21 @@ def patch_gtfs_zip(zip_path, daily_records, date_str):
             
             # Write trips.txt
             trips_out = io.StringIO()
-            trips_writer = csv.DictWriter(trips_out, fieldnames=["route_id", "service_id", "trip_id", "direction_id"])
+            trips_writer = csv.DictWriter(trips_out, fieldnames=trips_fields, extrasaction='ignore')
             trips_writer.writeheader()
             trips_writer.writerows(final_trips)
             zout.writestr("trips.txt", trips_out.getvalue())
             
             # Write stop_times.txt
             st_out = io.StringIO()
-            st_writer = csv.DictWriter(st_out, fieldnames=["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"])
+            st_writer = csv.DictWriter(st_out, fieldnames=st_fields, extrasaction='ignore')
             st_writer.writeheader()
             st_writer.writerows(final_stop_times)
             zout.writestr("stop_times.txt", st_out.getvalue())
             
             # Write calendar_dates.txt
             cd_out = io.StringIO()
-            cd_writer = csv.DictWriter(cd_out, fieldnames=["service_id", "date", "exception_type"])
+            cd_writer = csv.DictWriter(cd_out, fieldnames=cd_fields, extrasaction='ignore')
             cd_writer.writeheader()
             cd_writer.writerows(final_calendar_dates)
             zout.writestr("calendar_dates.txt", cd_out.getvalue())
@@ -258,7 +306,7 @@ def main():
     intercity_url = "https://tdx.transportdata.tw/api/basic/v2/Bus/DailyTimeTable/InterCity?%24format=JSON"
     daily_records.extend(fetch_paginated_api(token, intercity_url))
     
-    # 2. Fetch City Bus for all 22 cities
+    # 2. Fetch City Bus for all 17 supported cities
     print("\nStep 3: Fetching City Bus (各縣市市區公車) Daily Timetables...")
     for city in CITIES:
         print(f"  Fetching {city} Daily Timetable...")
