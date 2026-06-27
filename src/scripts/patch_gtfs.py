@@ -149,7 +149,7 @@ def process_daily_records_to_gtfs(records, new_trips, new_stop_times, seen_trips
             for st in stop_times:
                 arr = st.get("ArrivalTime")
                 dep = st.get("DepartureTime")
-                stop_id = st.get("StopID")
+                stop_id = st.get("StopUID") or st.get("StopID")
                 
                 if not arr or not dep or not stop_id:
                     continue
