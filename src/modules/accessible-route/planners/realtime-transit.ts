@@ -299,7 +299,21 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
     const board = recordForStop(records, leg.departureStop, dir);
     if (!board) continue;
     boards.push(board);
-    if (board.EstimateTime == null || board.EstimateTime < 0) continue;
+
+    let estSeconds: number | null = null;
+    if (board.EstimateTime != null && board.EstimateTime >= 0) {
+      estSeconds = board.EstimateTime;
+    } else if (board.NextBusTime) {
+      const parsedMs = Date.parse(board.NextBusTime);
+      if (!isNaN(parsedMs)) {
+        const diffMs = parsedMs - Date.now();
+        if (diffMs > 0) {
+          estSeconds = Math.round(diffMs / 1000);
+        }
+      }
+    }
+    if (estSeconds == null) continue;
+
     const alight = recordForStop(records, leg.arrivalStop, dir);
     if (alight) {
       if (alight.StopSequence != null && board.StopSequence != null) {
@@ -308,12 +322,12 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
         }
       } else if (
         alight.EstimateTime != null &&
-        alight.EstimateTime <= board.EstimateTime
+        alight.EstimateTime <= (board.EstimateTime ?? estSeconds)
       ) {
         continue;
       }
     }
-    candidates.push({ est: board.EstimateTime, dir });
+    candidates.push({ est: estSeconds, dir });
   }
 
   if (candidates.length) {

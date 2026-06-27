@@ -9,6 +9,7 @@ export interface TdxEtaRecord {
   StopName?: { Zh_tw?: string };
   Direction?: number;
   StopSequence?: number;
+  NextBusTime?: string;
 }
 
 export interface TdxTrainLiveBoardItem {
