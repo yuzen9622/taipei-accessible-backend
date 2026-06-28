@@ -228,7 +228,7 @@ query Plan(
         route { gtfsId shortName longName type agency { gtfsId } }
         trip { gtfsId wheelchairAccessible }
         legGeometry { points }
-        intermediatePlaces { stop { gtfsId } }
+        intermediatePlaces { name lat lon stop { gtfsId code lat lon } }
         steps {
           distance
           lon
@@ -529,6 +529,16 @@ function transitLegFrom(
     agencyId === "THSR" || system === "THSR" || tripId.startsWith("THSR");
   const isRail = leg.mode === "RAIL" || isThsr || system === "TRA";
 
+  const intermediateStops = leg.intermediatePlaces?.map((p) => {
+    const lat = p.lat ?? p.stop?.lat;
+    const lon = p.lon ?? p.stop?.lon;
+    return {
+      name: p.name || "",
+      stationUid: stripFeedId(p.stop?.gtfsId),
+      location: lat && lon ? [lon, lat] as [number, number] : undefined,
+    };
+  });
+
   if (isMetro) {
     return {
       type: "METRO",
@@ -551,6 +561,7 @@ function transitLegFrom(
       departureStationA11y: [],
       arrivalStationA11y: [],
       facilityHighlights: [],
+      intermediateStops,
     };
   }
 
@@ -573,6 +584,7 @@ function transitLegFrom(
         departureStationA11y: [],
         arrivalStationA11y: [],
         facilityHighlights: [],
+        intermediateStops,
       };
     }
     return {
@@ -592,6 +604,7 @@ function transitLegFrom(
       departureStationA11y: [],
       arrivalStationA11y: [],
       facilityHighlights: [],
+      intermediateStops,
     };
   }
 
@@ -610,6 +623,7 @@ function transitLegFrom(
     polyline,
     departureStopA11y: [],
     arrivalStopA11y: [],
+    intermediateStops,
   };
 }
 

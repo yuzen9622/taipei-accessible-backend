@@ -39,6 +39,12 @@ export interface WalkStep {
   location: [number, number];
 }
 
+export interface IntermediateStop {
+  name: string;
+  stationUid?: string;
+  location?: [number, number];
+}
+
 export interface WalkLeg {
   type: "WALK";
   a11yRefs?: string[];
@@ -75,6 +81,7 @@ export interface BusLeg {
   departureStopA11y: IOsmA11y[];
   arrivalStopA11y: IOsmA11y[];
   tdxCity?: string;
+  intermediateStops?: IntermediateStop[];
 }
 
 export interface MetroLeg {
@@ -99,6 +106,7 @@ export interface MetroLeg {
   departureStationA11y: IOsmA11y[];
   arrivalStationA11y: IOsmA11y[];
   facilityHighlights: string[];
+  intermediateStops?: IntermediateStop[];
 }
 
 export interface ThsrLeg {
@@ -118,6 +126,7 @@ export interface ThsrLeg {
   departureStationA11y: IOsmA11y[];
   arrivalStationA11y: IOsmA11y[];
   facilityHighlights: string[];
+  intermediateStops?: IntermediateStop[];
 }
 
 export interface TraLeg {
@@ -138,6 +147,7 @@ export interface TraLeg {
   departureStationA11y: IOsmA11y[];
   arrivalStationA11y: IOsmA11y[];
   facilityHighlights: string[];
+  intermediateStops?: IntermediateStop[];
 }
 
 export interface AccessibleRoute {

@@ -31,7 +31,7 @@ export interface OtpLeg {
   } | null;
   trip?: { gtfsId?: string; wheelchairAccessible?: string } | null;
   legGeometry?: { points?: string } | null;
-  intermediatePlaces?: { stop?: OtpStop | null }[] | null;
+  intermediatePlaces?: { name?: string; lat?: number; lon?: number; stop?: OtpStop | null }[] | null;
   steps?: OtpStep[] | null;
 }
 export interface OtpStep {

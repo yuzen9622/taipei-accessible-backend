@@ -175,6 +175,16 @@ const WaitInfoSchema = z
   })
   .openapi("WaitInfo");
 
+const IntermediateStopSchema = z
+  .object({
+    name: z.string().openapi({ example: "中間站名" }),
+    stationUid: z.string().optional().openapi({ example: "TRTC-R08" }),
+    location: z.tuple([z.number(), z.number()]).optional().openapi({
+      example: [121.5, 25.0],
+    }),
+  })
+  .openapi("IntermediateStop");
+
 const BusLegSchema = z
   .object({
     type: z.literal("BUS").openapi({ example: "BUS" }),
@@ -221,6 +231,7 @@ const BusLegSchema = z
         "TDX City 路徑段，前端用來「另外打」RealTimeByFrequency 即時車輛位置 " +
         "（tdxCity + routeName + direction）做持續追蹤；公路客運（THB）無城市路徑、省略此欄。",
     }),
+    intermediateStops: z.array(IntermediateStopSchema).optional(),
   })
   .openapi("BusLeg");
 
@@ -263,6 +274,7 @@ const MetroLegSchema = z
     facilityHighlights: z
       .array(z.string())
       .openapi({ example: ["乘車站有電梯", "下車站有無障礙廁所"] }),
+    intermediateStops: z.array(IntermediateStopSchema).optional(),
   })
   .openapi("MetroLeg");
 
@@ -292,6 +304,7 @@ const ThsrLegSchema = z
     facilityHighlights: z
       .array(z.string())
       .openapi({ example: ["高鐵站設有無障礙設施", "列車備有無障礙座位及輪椅空間"] }),
+    intermediateStops: z.array(IntermediateStopSchema).optional(),
   })
   .openapi("ThsrLeg");
 
@@ -325,6 +338,7 @@ const TraLegSchema = z
     facilityHighlights: z
       .array(z.string())
       .openapi({ example: ["臺鐵自強 列車", "乘車站附近有電梯"] }),
+    intermediateStops: z.array(IntermediateStopSchema).optional(),
   })
   .openapi("TraLeg");
 
