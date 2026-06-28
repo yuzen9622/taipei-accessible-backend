@@ -52,7 +52,7 @@ export type {
 };
 
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
-const OTP_NUM_ITINERARIES = 5;
+const OTP_NUM_ITINERARIES = 15;
 
 const otpAgent = new http.Agent({ keepAlive: true });
 const otpAgentHttps = new https.Agent({ keepAlive: true });
@@ -63,7 +63,7 @@ const otpClient = axios.create({
   timeout: OTP_TIMEOUT_MS,
 });
 
-const SNAP_RADIUS_M = 500;
+const SNAP_RADIUS_M = 2000;
 
 const METRO_SYSTEMS = new Set([
   "TRTC",
@@ -252,7 +252,7 @@ async function queryOtpPlan(
   walkSpeed: number,
 ): Promise<OtpItinerary[]> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
-  const response = await otpClient.post(`${baseUrl}/otp/gtfs/v1`, {
+  const response = await otpClient.post(`${baseUrl}/otp/routers/default/index/graphql`, {
     query: PLAN_QUERY,
     variables: {
       fromLat: origin.lat,
@@ -315,7 +315,7 @@ export async function fetchRailLegGeometry(
   if (railGeomBreaker.isOpen()) return null;
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   try {
-    const response = await otpClient.post(`${baseUrl}/otp/gtfs/v1`, {
+    const response = await otpClient.post(`${baseUrl}/otp/routers/default/index/graphql`, {
       query: RAIL_GEOMETRY_QUERY,
       variables: {
         fromLat: from.lat,
