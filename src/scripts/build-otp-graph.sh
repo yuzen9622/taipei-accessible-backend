@@ -165,6 +165,11 @@ log "injecting bus trip wheelchair accessibility flags from TDX schedules"
 npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-tdx-bus-trips-a11y.ts" "$WORK_DIR/feed-1.gtfs.zip" \
   || log "WARN: bus trip accessibility injection failed — continuing"
 
+# ── 1g. Bus stop logical clustering (parent_station) ──
+log "generating logical parent stations for nearby bus stops"
+npx dotenvx run -- ts-node "$SCRIPT_DIR/generate-gtfs-parents.ts" "$WORK_DIR/feed-1.gtfs.zip" \
+  || log "WARN: parent station generation failed — continuing"
+
 
 
 # ── 2. OSM extract (monthly refresh, spec §5) ──
