@@ -57,7 +57,9 @@ export async function runToolLoop(
       messages,
       tools,
       tool_choice: "auto",
-      temperature: useTemp,
+      parallel_tool_calls: false,
+      reasoning_effort: "medium",
+      temperature: 0,
       stream: false,
     });
 
