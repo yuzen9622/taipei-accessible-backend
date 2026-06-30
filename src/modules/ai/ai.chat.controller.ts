@@ -1,13 +1,12 @@
 import type { Request, Response } from "express";
-import { openai, model } from "../../config/ai";
+import { googleGenAi, model } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import { verifyAccessToken } from "../../config/jwt";
-import { runToolLoop, type OAIMessage } from "./ai-chat.service";
+import { runToolLoop, toGeminiHistory, type OAIMessage } from "./ai-chat.service";
 import { loadMemories } from "./memory.service";
 import type { IUser } from "../../types";
-import { openAiChatTools, memoryTools } from "../../config/ai/tool";
 
 const SYSTEM_PROMPT = `你是「無障礙交通導航 AI 助理」，服務輪椅使用者、年長者與視障人士。
 用使用者的語言回覆、稱呼「您」，把工具回傳的 JSON 整理成自然、簡潔的話，不要把原始 JSON 丟給使用者。
@@ -81,7 +80,6 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   const useTemp = temperature ?? 0.2;
   const authUser = resolveAuthUser(req);
   const userId = authUser ? String(authUser._id) : undefined;
-  const tools = userId ? [...openAiChatTools, ...memoryTools] : openAiChatTools;
 
   const messages: OAIMessage[] = [];
   if (!rawMessages.length || rawMessages[0].role !== "system") {
@@ -108,6 +106,8 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   }
   messages.push(...rawMessages);
 
+  const { systemInstruction, contents } = toGeminiHistory(messages);
+
   if (stream) {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -117,27 +117,23 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
 
     try {
       await runToolLoop(
-        messages,
+        contents,
+        systemInstruction,
         model,
-        useTemp,
         userLocation,
         (name, args) => sendSse(res, "tool_call", { name, args }),
         (name, result) => sendSse(res, "tool_result", { name, result }),
         userId,
       );
 
-      const finalStream = await openai.chat.completions.create({
-        model: model,
-        messages,
-        temperature: useTemp,
-        reasoning_effort: "low",
-        stream: true,
-        tools,
-        tool_choice: "none",
+      const finalStream = await googleGenAi.models.generateContentStream({
+        model,
+        contents,
+        config: { systemInstruction, temperature: useTemp },
       });
 
       for await (const chunk of finalStream) {
-        const text = chunk.choices[0]?.delta?.content;
+        const text = chunk.text;
         if (text) sendSse(res, "token", { text });
       }
 
@@ -156,25 +152,33 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   }
 
   try {
-    await runToolLoop(messages, model, useTemp, userLocation, undefined, undefined, userId);
+    await runToolLoop(contents, systemInstruction, model, userLocation, undefined, undefined, userId);
 
-    const response = await openai.chat.completions.create({
-      model: model,
-      messages,
-      temperature: useTemp,
-      reasoning_effort: "low",
-      stream: false,
-      tools,
-      tool_choice: "none",
+    const response = await googleGenAi.models.generateContent({
+      model,
+      contents,
+      config: { systemInstruction, temperature: useTemp },
     });
 
+    const text = response.text ?? "";
+    const usage = response.usageMetadata;
     sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, {
-      id: response.id,
-      object: response.object,
-      created: response.created,
-      model: response.model,
-      choices: response.choices,
-      usage: response.usage,
+      id: `chatcmpl-${Date.now().toString(36)}`,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: text },
+          finish_reason: "stop",
+        },
+      ],
+      usage: {
+        prompt_tokens: usage?.promptTokenCount ?? 0,
+        completion_tokens: usage?.candidatesTokenCount ?? 0,
+        total_tokens: usage?.totalTokenCount ?? 0,
+      },
     });
   } catch (error: any) {
     console.error("[ai/chat]", error);
