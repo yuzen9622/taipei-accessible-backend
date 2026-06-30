@@ -12,12 +12,18 @@ services:
     build: .
     container_name: taipei-backend
     # env_file injects the whole .env into the container environment, so
-    # `node dist/server.js` sees the vars WITHOUT needing dotenv. The two
+    # `node dist/server.js` sees the vars WITHOUT needing dotenv. The
     # host-centric values are overridden for the compose network below.
     env_file: .env
     environment:
       OTP_BASE_URL: http://otp:8080
       DATABASE_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin
+      # .env's GCS_KEY_FILE is a host path; mount it (below) and point the
+      # container at the in-container path so GCS auth works inside Docker.
+      GCS_KEY_FILE: /secrets/gcs-key.json
+    volumes:
+      # Bind the service-account JSON (host path from .env) read-only.
+      - ${GCS_KEY_FILE}:/secrets/gcs-key.json:ro
     ports:
       # Publish the API. Prefix 127.0.0.1: to keep it host-only.
       - "127.0.0.1:${PORT:-8000}:${PORT:-8000}"
