@@ -82,8 +82,20 @@ log "fetching TRA general timetable"
 if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
   -o "$WORK_DIR/tra-timetable.json" \
   "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/GeneralTrainTimetable?%24format=JSON"; then
+  # Track geometry (Rail/TRA/Shape — WKT LINESTRING per line) so injected TRA
+  # trips follow the rails instead of drawing station-to-station straight lines.
+  # Fail-soft: a missing/failed Shape just leaves trips shapeless (legacy).
+  sleep 3 # TDX 429s on bursts
+  TRA_SHAPE_ARG=""
+  if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
+    -o "$WORK_DIR/tra-shape.json" \
+    "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/Shape?%24format=JSON"; then
+    TRA_SHAPE_ARG="$WORK_DIR/tra-shape.json"
+  else
+    log "WARN: TRA Shape download failed — injecting TRA without track geometry"
+  fi
   python3 "$SCRIPT_DIR/inject-tra-gtfs.py" \
-    "$WORK_DIR/feed-1.gtfs.zip" "$WORK_DIR/tra-timetable.json" \
+    "$WORK_DIR/feed-1.gtfs.zip" "$WORK_DIR/tra-timetable.json" $TRA_SHAPE_ARG \
     || log "WARN: TRA injection failed — continuing without TRA legs"
 else
   log "WARN: TRA timetable download failed — continuing without TRA legs"
