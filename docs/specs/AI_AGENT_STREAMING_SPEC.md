@@ -2,7 +2,7 @@
 ## Functional Specification — OpenAI-Compatible Streaming Agent (v1.1)
 
 **版本**：v1.1  
-**狀態**：Active — 已實作並上線（`POST /api/v1/ai/chat`，見 `src/modules/ai/ai.chat.controller.ts`）  
+**狀態**：Superseded（原始設計記錄）— 工具目錄與 result 格式之**現行**規格見 [`AI_AGENT_TOOLS_REFERENCE.md`](./AI_AGENT_TOOLS_REFERENCE.md)。本文件為 v1.1 的 6-tool 原始設計，且 SDK / SSE 細節已與現況漂移（現況改用原生 `@google/genai`，工具增至 17 個），**請勿據此實作**。  
 **日期**：2026-06-11  
 **作者**：Antigravity AI  
 
