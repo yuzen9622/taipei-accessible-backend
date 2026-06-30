@@ -293,7 +293,7 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
   const records = await fetchEtaRecords(url);
   if (!records.length) return;
 
-  const candidates: { est: number; dir: number }[] = [];
+  const candidates: { est: number; dir: number; live: boolean }[] = [];
   const boards: TdxEtaRecord[] = [];
   for (const dir of [0, 1]) {
     const board = recordForStop(records, leg.departureStop, dir);
@@ -301,8 +301,10 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
     boards.push(board);
 
     let estSeconds: number | null = null;
+    let live = false;
     if (board.EstimateTime != null && board.EstimateTime >= 0) {
       estSeconds = board.EstimateTime;
+      live = (board.StopStatus ?? 0) === 0;
     } else if (board.NextBusTime) {
       const parsedMs = Date.parse(board.NextBusTime);
       if (!isNaN(parsedMs)) {
@@ -327,7 +329,7 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
         continue;
       }
     }
-    candidates.push({ est: estSeconds, dir });
+    candidates.push({ est: estSeconds, dir, live });
   }
 
   if (candidates.length) {
@@ -335,7 +337,9 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
       candidates.find((c) => c.dir === leg.direction) ?? candidates[0];
     const prevWait = leg.estimatedWaitMinutes;
     const minutes = Math.round(pick.est / 60);
-    leg.waitInfo = { time: minutes, source: "realtime" };
+    leg.waitInfo = pick.live
+      ? { time: minutes, source: "realtime" }
+      : { time: secondsToHHmm(taipeiSecondsOfDay() + pick.est), source: "schedule" };
     leg.estimatedWaitMinutes = minutes;
     shiftLegToLiveEta(leg, pick.est);
     if (route.transferCount === 0) {

@@ -167,6 +167,19 @@ async function fetchScheduledWait(
   }
 }
 
+/**
+ * Resolve the wait at a bus stop. Only a vehicle that is actually en route
+ * (StopStatus 0) yields a realtime ETA in minutes; 尚未發車 (StopStatus 1) means
+ * the EstimateTime is a countdown to the next scheduled departure, so it is
+ * reported as a schedule clock time, not realtime. Falls back to the timetable,
+ * then to unavailable when the last bus has passed / service is not running.
+ *
+ * @param subRouteId TDX sub-route id (route name in Zh_tw).
+ * @param city TDX city slug for the bus API.
+ * @param direction Travel direction (0 or 1).
+ * @param stopName Boarding stop name, matched against the ETA board.
+ * @returns The wait estimate tagged with its source.
+ */
 export async function fetchWaitInfo(
   subRouteId: string,
   city: string,
@@ -186,7 +199,11 @@ export async function fetchWaitInfo(
         const stopStatus: number = record.StopStatus ?? 0;
 
         if (estimateTime != null && estimateTime >= 0) {
-          return { time: Math.round(estimateTime / 60), source: "realtime" };
+          if (stopStatus === 0) {
+            return { time: Math.round(estimateTime / 60), source: "realtime" };
+          }
+          const dep = new Date(Date.now() + estimateTime * 1000);
+          return { time: taipeiHHmm(dep), source: "schedule" };
         }
         if (stopStatus === 3 || stopStatus === 4) {
           return { time: null, source: "unavailable" };
