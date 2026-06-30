@@ -1,12 +1,41 @@
 import type OpenAI from "openai";
-import type { Content, Part, Tool, FunctionDeclaration } from "@google/genai";
+import type {
+  Content,
+  Part,
+  Tool,
+  FunctionDeclaration,
+  GenerateContentConfig,
+  GenerateContentResponse,
+} from "@google/genai";
 import { FunctionCallingConfigMode } from "@google/genai";
-import { googleGenAi } from "../../config/ai";
+import { googleGenAi, model } from "../../config/ai";
 import { openAiChatTools, memoryTools } from "../../config/ai/tool";
 import { executeLocalTool } from "./agent-tools";
 import type { OAIMessage } from "./ai.types";
 
 export type { OAIMessage };
+
+/**
+ * The routing-round generate config, shared by `runToolLoop` and `routeOnce`
+ * so the offline eval can never drift from the production routing decision.
+ *
+ * @param systemInstruction System prompt for this round
+ * @param tools The Gemini tool catalogue
+ * @returns The GenerateContentConfig used for every tool-selection round
+ */
+function buildRoutingConfig(
+  systemInstruction: string | undefined,
+  tools: Tool[],
+): GenerateContentConfig {
+  return {
+    systemInstruction,
+    tools,
+    toolConfig: {
+      functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
+    },
+    temperature: 0,
+  };
+}
 
 function stableCacheKey(name: string, args: Record<string, unknown>): string {
   const sorted = Object.keys(args)
@@ -136,14 +165,7 @@ export async function runToolLoop(
     const response = await googleGenAi.models.generateContent({
       model: useModel,
       contents,
-      config: {
-        systemInstruction,
-        tools,
-        toolConfig: {
-          functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
-        },
-        temperature: 0,
-      },
+      config: buildRoutingConfig(systemInstruction, tools),
     });
 
     const calls = response.functionCalls;
@@ -188,4 +210,53 @@ export async function runToolLoop(
 
     contents.push({ role: "user", parts: responseParts });
   }
+}
+
+export interface RouteOnceResult {
+  calledTools: string[];
+  text: string;
+  raw: GenerateContentResponse;
+}
+
+/**
+ * Run EXACTLY ONE routing round against the real tool catalogue and routing
+ * config, reporting which tools the model chose. Does NOT execute any tool and
+ * never touches MongoDB or external APIs — for the offline tool-selection eval
+ * only. Mirrors the first round of `runToolLoop` via the shared
+ * `buildRoutingConfig`.
+ *
+ * @param userMessage The single user query to route
+ * @param systemInstruction System prompt (assemble via withUserLocation upstream)
+ * @param opts userLocation is unused here (location belongs in systemInstruction);
+ *   userId only toggles the memory tools into the catalogue; model overrides the default
+ * @returns The called tool names (in order), any emitted text, and the raw response
+ */
+export async function routeOnce(
+  userMessage: string,
+  systemInstruction: string | undefined,
+  opts: {
+    userLocation?: { latitude: number; longitude: number };
+    userId?: string;
+    model?: string;
+  } = {},
+): Promise<RouteOnceResult> {
+  const useModel = opts.model ?? model;
+  const tools = buildGeminiTools(opts.userId);
+  const contents: Content[] = [{ role: "user", parts: [{ text: userMessage }] }];
+
+  const response = await googleGenAi.models.generateContent({
+    model: useModel,
+    contents,
+    config: buildRoutingConfig(systemInstruction, tools),
+  });
+
+  const calledTools = (response.functionCalls ?? [])
+    .map((c) => c.name ?? "")
+    .filter(Boolean);
+
+  // Only read `.text` when no tool fired — the SDK warns when `.text` is
+  // accessed on a response that also has functionCall parts.
+  const text = calledTools.length ? "" : response.text ?? "";
+
+  return { calledTools, text, raw: response };
 }

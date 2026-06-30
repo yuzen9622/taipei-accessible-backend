@@ -126,6 +126,9 @@ otp-data/*
 
 
 /reports
+# AI eval reports (real-API output, not source)
+src/scripts/eval-reports/
+
 # Python bytecode cache (build scripts)
 __pycache__/
 *.pyc
