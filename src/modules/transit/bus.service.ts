@@ -242,6 +242,7 @@ export async function getBusArrivalAtStop(params: {
           directionLabel: dirLabel(r.Direction),
           estimateMinutes: est,
           statusLabel: STOP_STATUS_LABEL[r.StopStatus] ?? "正常",
+          plateNumb: r.PlateNumb && r.PlateNumb !== "-1" ? r.PlateNumb : undefined,
         };
       })
       .sort((a, b) => {

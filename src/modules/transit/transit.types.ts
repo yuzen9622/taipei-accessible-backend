@@ -74,6 +74,7 @@ export type BusArrival = {
   directionLabel: string;
   estimateMinutes: number | null;
   statusLabel: string;
+  plateNumb?: string;
 };
 
 export type BusArrivalResult =
