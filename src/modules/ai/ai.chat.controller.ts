@@ -81,30 +81,28 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   const authUser = resolveAuthUser(req);
   const userId = authUser ? String(authUser._id) : undefined;
 
-  const messages: OAIMessage[] = [];
-  if (!rawMessages.length || rawMessages[0].role !== "system") {
-    let systemPrompt = SYSTEM_PROMPT;
-    if (userLocation) {
-      systemPrompt += `\n\n【使用者目前位置】緯度 ${userLocation.latitude}，經度 ${userLocation.longitude}`;
-    }
-    if (userId) {
-      try {
-        const memories = await loadMemories(userId);
-        if (memories.length) {
-          systemPrompt += `\n\n【使用者記憶】以下是你對這位使用者的了解，請自然地運用：`;
-          for (const m of memories) {
-            const label = CATEGORY_LABELS[m.category] ?? m.category;
-            systemPrompt += `\n- [${label}] ${m.content} (id:${m._id})`;
-          }
-          systemPrompt += `\n\n當使用者說「回家」「去上班」「老地方」等，根據記憶推斷地點。路線規劃自動套用記憶中的無障礙模式。`;
-        }
-      } catch (err) {
-        console.error("[ai/chat] loadMemories failed:", err);
-      }
-    }
-    messages.push({ role: "system", content: systemPrompt });
+  let systemPrompt = SYSTEM_PROMPT;
+  if (userLocation) {
+    systemPrompt += `\n\n【使用者目前位置】緯度 ${userLocation.latitude}，經度 ${userLocation.longitude}`;
   }
-  messages.push(...rawMessages);
+  if (userId) {
+    try {
+      const memories = await loadMemories(userId);
+      if (memories.length) {
+        systemPrompt += `\n\n【使用者記憶】以下是你對這位使用者的了解，請自然地運用：`;
+        for (const m of memories) {
+          const label = CATEGORY_LABELS[m.category] ?? m.category;
+          systemPrompt += `\n- [${label}] ${m.content} (id:${m._id})`;
+        }
+        systemPrompt += `\n\n當使用者說「回家」「去上班」「老地方」等，根據記憶推斷地點。路線規劃自動套用記憶中的無障礙模式。`;
+      }
+    } catch (err) {
+      console.error("[ai/chat] loadMemories failed:", err);
+    }
+  }
+
+  const messages: OAIMessage[] = [{ role: "system", content: systemPrompt }];
+  messages.push(...rawMessages.filter((m) => m.role !== "system"));
 
   const { systemInstruction, contents } = toGeminiHistory(messages);
 
