@@ -49,6 +49,8 @@ export const agentCases: AgentCase[] = [
   { id: "bus-track", query: "307 來的這班是低底盤嗎", expectTool: "trackBuses", mustNotCall: ["getBusArrival"] },
   { id: "bus-track-2", query: "下一班紅2是無障礙公車嗎，不要跟我要車牌", expectTool: "trackBuses" },
   { id: "bus-track-3", query: "307 現在在哪", expectTool: "trackBuses", mustNotCall: ["getBusArrival"] },
+  { id: "bus-nearby-1", query: "離我最近的公車啥時候來", userLocation: { latitude: 24.130608, longitude: 120.637112 }, expectTool: "findNearbyBusStops", mustNotCall: ["findGooglePlaces", "findA11yPlaces"], notes: "real failure: model was hallucinating route numbers (290/75)" },
+  { id: "bus-nearby-2", query: "附近有哪些公車站", userLocation: { latitude: 25.0478, longitude: 121.517 }, expectTool: "findNearbyBusStops" },
 
   // E. searchAccessibilityGuide vs findGooglePlaces / findA11yPlaces
   { id: "guide-1", query: "輪椅怎麼搭公車", expectTool: "searchAccessibilityGuide", mustNotCall: ["getBusRoute", "findGooglePlaces"] },

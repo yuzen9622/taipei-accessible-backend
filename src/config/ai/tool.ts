@@ -244,6 +244,24 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "findNearbyBusStops",
+      description:
+        "查詢使用者附近的公車站牌，回傳每個站牌的名稱、距離、以及『經過該站的公車路線清單』。當使用者問「附近有什麼公車／站牌」「離我最近的公車站」「最近的公車什麼時候來」「附近的車有哪些路線」時，先用這個拿到站牌與真實路線，再用 getBusArrival 查特定路線的到站時間。**不要自己猜路線號碼**。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "地點名稱（選填）；不填則用使用者目前位置" },
+          latitude: { type: "number", description: "搜尋中心緯度（選填）" },
+          longitude: { type: "number", description: "搜尋中心經度（選填）" },
+          radius: { type: "number", description: "搜尋半徑（公尺），預設 500" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "getAirQuality",
       description: "僅查詢 PM2.5 數值與分級。若使用者同時問天氣、出門建議或 CCTV，請改用 getEnvironmentInfo（含天氣+空品+CCTV 三合一）。",
       parameters: {

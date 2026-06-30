@@ -350,6 +350,47 @@ export async function trackBuses(args: {
   }
 }
 
+export async function findNearbyBusStops(args: {
+  latitude?: number;
+  longitude?: number;
+  query?: string;
+  radius?: number;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    let { latitude, longitude } = args;
+    if (args.query && (!latitude || !longitude)) {
+      const coords = await getCoordinates(
+        args.query,
+        args.userLocation?.latitude,
+        args.userLocation?.longitude,
+      );
+      if (!coords) {
+        return JSON.stringify({ ok: false, error: `找不到地點「${args.query}」的座標` });
+      }
+      latitude = coords.latitude;
+      longitude = coords.longitude;
+    }
+    if ((!latitude || !longitude) && args.userLocation) {
+      latitude = args.userLocation.latitude;
+      longitude = args.userLocation.longitude;
+    }
+    if (!latitude || !longitude) {
+      return JSON.stringify({ ok: false, error: "缺少位置資訊（query 或 lat/lng，或使用者目前位置）" });
+    }
+    const result = await busService.getNearbyStops({
+      lat: latitude,
+      lng: longitude,
+      radius: args.radius ?? 500,
+      limit: 10,
+    });
+    return JSON.stringify(result);
+  } catch (error: any) {
+    console.error("[agent-tool:findNearbyBusStops]", error);
+    return JSON.stringify({ ok: false, error: "附近公車站牌查詢失敗" });
+  }
+}
+
 export async function getAirQuality(args: {
   latitude: number;
   longitude: number;
@@ -714,6 +755,15 @@ export async function executeLocalTool(
         routeName: args.routeName,
         city: args.city,
         direction: args.direction,
+        userLocation,
+      });
+
+    case "findNearbyBusStops":
+      return findNearbyBusStops({
+        latitude: args.latitude,
+        longitude: args.longitude,
+        query: args.query,
+        radius: args.radius,
         userLocation,
       });
 
