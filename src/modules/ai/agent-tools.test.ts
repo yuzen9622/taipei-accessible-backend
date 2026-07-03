@@ -42,6 +42,12 @@ vi.mock("./memory.service", () => ({
 vi.mock("./knowledge.service", () => ({
   searchKnowledge: vi.fn(),
 }));
+vi.mock("../../config/ai", () => ({
+  googleGenAi: {
+    models: { generateContent: vi.fn() },
+  },
+  model: "test-model",
+}));
 
 import * as a11yService from "../a11y/a11y.service";
 import * as hazardService from "../hazard-report/hazard-report.service";
@@ -49,6 +55,7 @@ import { getEnvironmentInfo as fetchEnvironment } from "../environment/environme
 import { getCoordinates } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
+import { googleGenAi } from "../../config/ai";
 import * as memoryServiceMod from "./memory.service";
 import { searchKnowledge } from "./knowledge.service";
 import {
@@ -59,6 +66,7 @@ import {
   saveMemory,
   deleteMemory,
   searchAccessibilityGuide,
+  webSearch,
   executeLocalTool,
 } from "./agent-tools";
 
@@ -68,6 +76,7 @@ const mockHazardFindNearby = hazardService.findNearby as unknown as ReturnType<t
 const mockA11yParking = a11yService.findNearbyParking as unknown as ReturnType<typeof vi.fn>;
 const mockPlanRoute = planAccessibleRouteFromRequest as unknown as ReturnType<typeof vi.fn>;
 const mockGenNav = generateNavInstructions as unknown as ReturnType<typeof vi.fn>;
+const mockGenerateContent = googleGenAi.models.generateContent as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -575,6 +584,15 @@ describe("executeLocalTool dispatches new tools", () => {
     );
     expect(JSON.parse(raw).ok).toBe(true);
   });
+
+  it("webSearch 走到正確函式", async () => {
+    mockGenerateContent.mockResolvedValue({
+      text: "搜尋摘要",
+      candidates: [{ groundingMetadata: { groundingChunks: [] } }],
+    });
+    const raw = await executeLocalTool("webSearch", { query: "最新無障礙政策" }, undefined);
+    expect(JSON.parse(raw).ok).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -673,5 +691,76 @@ describe("searchAccessibilityGuide", () => {
     mockSearch.mockResolvedValue([]);
     const raw = await executeLocalTool("searchAccessibilityGuide", { query: "test" }, undefined);
     expect(JSON.parse(raw).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// webSearch
+// ---------------------------------------------------------------------------
+describe("webSearch", () => {
+  it("使用 Gemini Google Search 並整理來源", async () => {
+    mockGenerateContent.mockResolvedValue({
+      text: "台北市近期更新了無障礙交通資訊。",
+      candidates: [
+        {
+          groundingMetadata: {
+            webSearchQueries: ["台北市 無障礙交通 最新"],
+            groundingChunks: [
+              {
+                web: {
+                  uri: "https://example.gov.tw/news",
+                  title: "官方新聞",
+                  domain: "example.gov.tw",
+                },
+              },
+              {
+                web: {
+                  uri: "https://example.gov.tw/news",
+                  title: "重複來源",
+                  domain: "example.gov.tw",
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const raw = await webSearch({ query: "台北市無障礙交通最新政策" });
+    const result = JSON.parse(raw);
+
+    expect(result.ok).toBe(true);
+    expect(result.answer).toContain("台北市");
+    expect(result.webSearchQueries).toEqual(["台北市 無障礙交通 最新"]);
+    expect(result.sources).toEqual([
+      {
+        title: "官方新聞",
+        url: "https://example.gov.tw/news",
+        domain: "example.gov.tw",
+      },
+    ]);
+    expect(mockGenerateContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "test-model",
+        contents: "台北市無障礙交通最新政策",
+        config: expect.objectContaining({
+          tools: [{ googleSearch: {} }],
+        }),
+      }),
+    );
+  });
+
+  it("空 query 回錯誤", async () => {
+    const raw = await webSearch({ query: "   " });
+    expect(JSON.parse(raw).ok).toBe(false);
+    expect(mockGenerateContent).not.toHaveBeenCalled();
+  });
+
+  it("Gemini 搜尋失敗時回 fallback", async () => {
+    mockGenerateContent.mockRejectedValue(new Error("quota"));
+    const raw = await webSearch({ query: "最新消息" });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("網路搜尋失敗");
   });
 });

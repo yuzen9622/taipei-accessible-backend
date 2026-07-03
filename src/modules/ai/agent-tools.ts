@@ -3,6 +3,8 @@ import * as busService from "../transit/bus.service";
 import * as airService from "../air/air.service";
 import * as hazardService from "../hazard-report/hazard-report.service";
 import { getEnvironmentInfo as fetchEnvironment } from "../environment/environment.service";
+import type { GroundingChunk } from "@google/genai";
+import { googleGenAi, model } from "../../config/ai";
 import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
@@ -638,6 +640,60 @@ export async function searchAccessibilityGuide(args: {
   }
 }
 
+function collectGroundingSources(chunks?: GroundingChunk[]): Array<{
+  title: string | null;
+  url: string;
+  domain: string | null;
+}> {
+  const seen = new Set<string>();
+  const sources: Array<{ title: string | null; url: string; domain: string | null }> = [];
+
+  for (const chunk of chunks ?? []) {
+    const web = chunk.web;
+    if (!web?.uri || seen.has(web.uri)) continue;
+    seen.add(web.uri);
+    sources.push({
+      title: web.title ?? null,
+      url: web.uri,
+      domain: web.domain ?? null,
+    });
+  }
+
+  return sources;
+}
+
+export async function webSearch(args: {
+  query: string;
+}): Promise<string> {
+  const query = args.query?.trim();
+  if (!query) {
+    return JSON.stringify({ ok: false, error: "搜尋關鍵字不能為空" });
+  }
+
+  try {
+    const response = await googleGenAi.models.generateContent({
+      model,
+      contents: query,
+      config: {
+        tools: [{ googleSearch: {} }],
+        temperature: 0,
+      },
+    });
+    const grounding = response.candidates?.[0]?.groundingMetadata;
+
+    return JSON.stringify({
+      ok: true,
+      query,
+      answer: response.text ?? "",
+      webSearchQueries: grounding?.webSearchQueries ?? grounding?.retrievalQueries ?? [],
+      sources: collectGroundingSources(grounding?.groundingChunks),
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:webSearch]", error);
+    return JSON.stringify({ ok: false, error: "網路搜尋失敗" });
+  }
+}
+
 const VALID_MEMORY_CATEGORIES = new Set(["preference", "place", "habit", "context"]);
 
 export async function saveMemory(args: {
@@ -830,6 +886,11 @@ export async function executeLocalTool(
 
     case "searchAccessibilityGuide":
       return searchAccessibilityGuide({
+        query: args.query as string,
+      });
+
+    case "webSearch":
+      return webSearch({
         query: args.query as string,
       });
 

@@ -389,6 +389,24 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "webSearch",
+      description:
+        "搜尋公開網路取得最新資訊與來源。當使用者問最新消息、近期政策、今天/本週資訊、或本地工具與無障礙知識庫都無法回答的一般網路問題時使用。回答時必須根據此工具的 answer 與 sources，並附上來源。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "要搜尋的完整問題或關鍵字，保留使用者原本語言與重要地名/日期。",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
 ];
 
 export const memoryTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
