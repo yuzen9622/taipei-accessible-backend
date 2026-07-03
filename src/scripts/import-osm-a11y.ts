@@ -48,8 +48,11 @@ out body;`,
     label: "wheelchair ramps",
     query: `[out:json][timeout:60];
 area["ISO3166-1"="TW"][admin_level=2]->.tw;
-node["ramp:wheelchair"="yes"](area.tw);
-out body;`,
+(
+  node["ramp:wheelchair"="yes"](area.tw);
+  way["ramp:wheelchair"="yes"](area.tw);
+);
+out center;`,
   },
 ];
 
@@ -72,21 +75,25 @@ function deriveCategory(
 async function fetchOverpass(query: string): Promise<any[]> {
   let lastError: Error | null = null;
   for (const url of OVERPASS_ENDPOINTS) {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "User-Agent": "taipei-accessible-backend/1.0 (accessibility data import)",
-      },
-      body: `data=${encodeURIComponent(query)}`,
-    });
-    if (!resp.ok) {
-      lastError = new Error(`Overpass HTTP ${resp.status} from ${url}: ${await resp.text()}`);
-      continue;
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Accept": "application/json",
+          "User-Agent": "taipei-accessible-backend/1.0 (accessibility data import)",
+        },
+        body: `data=${encodeURIComponent(query)}`,
+      });
+      if (!resp.ok) {
+        lastError = new Error(`Overpass HTTP ${resp.status} from ${url}: ${await resp.text()}`);
+        continue;
+      }
+      const json = (await resp.json()) as { elements?: any[] };
+      return json.elements ?? [];
+    } catch (err) {
+      lastError = err as Error;
     }
-    const json = (await resp.json()) as { elements?: any[] };
-    return json.elements ?? [];
   }
   throw lastError!;
 }
@@ -117,20 +124,29 @@ async function main() {
       continue;
     }
 
-    const nodes = elements.filter(
-      (el) => el.type === "node" && el.lat != null && el.lon != null
-    );
-    console.log(`  Received ${nodes.length} nodes`);
+    const points = elements
+      .map((el) =>
+        el.type === "way" && el.center != null
+          ? { ...el, lat: el.center.lat, lon: el.center.lon }
+          : el
+      )
+      .filter(
+        (el) =>
+          (el.type === "node" || el.type === "way") &&
+          el.lat != null &&
+          el.lon != null
+      );
+    console.log(`  Received ${points.length} elements`);
 
-    if (nodes.length === 0) {
+    if (points.length === 0) {
       await sleep(DELAY_MS);
       continue;
     }
 
-    const ops = nodes.map((el) => {
+    const ops = points.map((el) => {
       const tags: Record<string, string> = el.tags ?? {};
       const doc: Omit<IOsmA11y, "_id"> = {
-        osmId: String(el.id),
+        osmId: el.type === "way" ? `way/${el.id}` : String(el.id),
         name: tags["name"] ?? tags["name:zh"] ?? tags["name:en"],
         category: deriveCategory(tags),
         wheelchair: tags["wheelchair"] as IOsmA11y["wheelchair"],
