@@ -4,10 +4,11 @@
     "description": "Backend server for Taipei Accessible project",
     "main": "dist/server.js",
     "scripts": {
-        "build": "tsc",
+        "build": "npm run lint:arch && tsc",
         "start": "node dist/server.js",
         "dev": " dotenvx run -- nodemon",
         "clean": "rimraf dist",
+        "lint:arch": "node scripts/check-architecture.mjs",
         "test": "vitest run",
         "test:watch": "vitest",
         "prebuild": "npm run clean",

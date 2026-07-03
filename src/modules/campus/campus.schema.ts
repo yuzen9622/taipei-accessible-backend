@@ -49,7 +49,7 @@ export const CampusParamsSchema = z.object({
     .number()
     .int()
     .openapi({ example: -2147483633, description: "校區 branchId（整數，可為負數）" }),
-});
+}).strict();
 
 const GeoPointSchema = z.object({
   type: z.literal("Point"),

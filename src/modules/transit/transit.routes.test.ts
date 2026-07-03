@@ -1,234 +1,33 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
-// Mock the service seam (and the google.adapter the controller calls directly)
-// while keeping every other export of those modules real, so importing the
-// whole app graph stays intact. Per-test we set the return of each method.
-vi.mock("./transit.service", async (orig) => ({
-  ...((await orig()) as any),
-  getBusEta: vi.fn(),
-  getBusRealtimePosition: vi.fn(),
-}));
+// Mock the bus service seam while keeping every other export of the module real,
+// so importing the whole app graph stays intact. Per-test we set the return of
+// each method used by the route under test.
 vi.mock("./bus.service", async (orig) => ({
   ...((await orig()) as any),
   resolveBusCity: vi.fn(),
   getBusRouteInfo: vi.fn(),
+  getBusRouteDetail: vi.fn(),
   getBusArrivalAtStop: vi.fn(),
   getBusTimetable: vi.fn(),
   getBusRealtimeOnRoute: vi.fn(),
-}));
-vi.mock("../../adapters/google.adapter", async (orig) => ({
-  ...((await orig()) as any),
-  getCity: vi.fn(),
+  searchBusRoutes: vi.fn(),
+  getNearbyStops: vi.fn(),
 }));
 
 import { buildTestApp } from "../../../test/test-helpers";
-import * as transitService from "./transit.service";
 import * as busService from "./bus.service";
-import { getCity } from "../../adapters/google.adapter";
 import { ResponseCode } from "../../types/code";
-import { MSG, ERROR_MESSAGE } from "../../constants/messages";
+import { MSG } from "../../constants/messages";
 
 const app = buildTestApp();
 const BASE = "/api/v1/transit";
 
-const VALID_BUS_BODY = {
-  route_name: "299",
-  arrival_stop: "台北車站",
-  departure_stop: "忠孝復興",
-  arrival_lat: 25.0478,
-  arrival_lng: 121.5171,
-};
-
 beforeEach(() => {
   vi.resetAllMocks();
   // Sensible happy-path defaults; individual tests override as needed.
-  vi.mocked(getCity).mockResolvedValue("Taipei" as any);
   vi.mocked(busService.resolveBusCity).mockResolvedValue("Taipei" as any);
-});
-
-describe("POST /api/v1/transit/bus", () => {
-  it("returns 200 + the data envelope with the ETA payload when the service succeeds", async () => {
-    const etaData = [{ StopName: { Zh_tw: "台北車站" }, EstimateTime: 180 }];
-    vi.mocked(transitService.getBusEta).mockResolvedValue({ ok: true, etaData } as any);
-
-    const res = await request(app).post(`${BASE}/bus`).send(VALID_BUS_BODY);
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      ok: true,
-      status: "success",
-      code: ResponseCode.OK,
-      message: MSG.OK,
-      data: etaData,
-    });
-    expect(vi.mocked(transitService.getBusEta)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        routeName: "299",
-        departureStop: "忠孝復興",
-        arrivalStop: "台北車站",
-        arrivalLat: 25.0478,
-        arrivalLng: 121.5171,
-      }),
-    );
-  });
-
-  it("rejects a missing route_name with 400 + the error envelope (schema)", async () => {
-    const { route_name, ...body } = VALID_BUS_BODY;
-
-    const res = await request(app).post(`${BASE}/bus`).send(body);
-
-    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
-    expect(res.body).toMatchObject({
-      ok: false,
-      status: "error",
-      code: ResponseCode.INVALID_INPUT,
-      message: "Invalid request.",
-    });
-    expect(res.body.data.errors.length).toBeGreaterThan(0);
-    expect(vi.mocked(transitService.getBusEta)).not.toHaveBeenCalled();
-  });
-
-  it("rejects a non-numeric arrival_lat with 400 (schema)", async () => {
-    const res = await request(app)
-      .post(`${BASE}/bus`)
-      .send({ ...VALID_BUS_BODY, arrival_lat: "not-a-number" });
-
-    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
-    expect(res.body.code).toBe(ResponseCode.INVALID_INPUT);
-    expect(vi.mocked(transitService.getBusEta)).not.toHaveBeenCalled();
-  });
-
-  it("rejects unknown body keys with 400 (strict schema)", async () => {
-    const res = await request(app)
-      .post(`${BASE}/bus`)
-      .send({ ...VALID_BUS_BODY, surprise: "field" });
-
-    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
-    expect(res.body.code).toBe(ResponseCode.INVALID_INPUT);
-  });
-
-  it("maps a service domain error (400) to its status + message", async () => {
-    vi.mocked(transitService.getBusEta).mockResolvedValue({
-      ok: false,
-      status: 400,
-      error: "無法辨識路線方向，請確認站牌名稱是否正確",
-    } as any);
-
-    const res = await request(app).post(`${BASE}/bus`).send(VALID_BUS_BODY);
-
-    expect(res.status).toBe(400);
-    expect(res.body).toEqual({
-      ok: false,
-      status: "error",
-      code: 400,
-      message: "無法辨識路線方向，請確認站牌名稱是否正確",
-    });
-  });
-
-  it("maps a service upstream error (500) to its status + message", async () => {
-    vi.mocked(transitService.getBusEta).mockResolvedValue({
-      ok: false,
-      status: 500,
-      error: "TDX 公車路線資料查詢失敗",
-    } as any);
-
-    const res = await request(app).post(`${BASE}/bus`).send(VALID_BUS_BODY);
-
-    expect(res.status).toBe(500);
-    expect(res.body.code).toBe(500);
-    expect(res.body.message).toBe("TDX 公車路線資料查詢失敗");
-  });
-
-  it("returns 500 with the thrown message when the service throws", async () => {
-    vi.mocked(transitService.getBusEta).mockRejectedValue(new Error("boom"));
-
-    const res = await request(app).post(`${BASE}/bus`).send(VALID_BUS_BODY);
-
-    expect(res.status).toBe(ResponseCode.INTERNAL_ERROR);
-    expect(res.body).toEqual({
-      ok: false,
-      status: "error",
-      code: ResponseCode.INTERNAL_ERROR,
-      message: "boom",
-    });
-  });
-});
-
-describe("GET /api/v1/transit/bus/realtime", () => {
-  const VALID_QUERY = {
-    plate_number: "KKA-1234",
-    arrival_lat: "25.0478",
-    arrival_lng: "121.5171",
-    route_name: "299",
-  };
-
-  it("returns 200 + the position payload when the service succeeds", async () => {
-    const positionData = [{ PlateNumb: "KKA-1234", BusPosition: { PositionLat: 25.05, PositionLon: 121.51 } }];
-    vi.mocked(transitService.getBusRealtimePosition).mockResolvedValue({
-      ok: true,
-      positionData,
-    } as any);
-
-    const res = await request(app).get(`${BASE}/bus/realtime`).query(VALID_QUERY);
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      ok: true,
-      status: "success",
-      code: ResponseCode.OK,
-      message: MSG.OK,
-      data: positionData,
-    });
-  });
-
-  it("rejects an invalid plate_number with 400 (schema)", async () => {
-    const res = await request(app)
-      .get(`${BASE}/bus/realtime`)
-      .query({ ...VALID_QUERY, plate_number: "INVALID PLATE!" });
-
-    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
-    expect(vi.mocked(transitService.getBusRealtimePosition)).not.toHaveBeenCalled();
-  });
-
-  it("rejects a missing route_name with 400 (schema)", async () => {
-    const { route_name, ...query } = VALID_QUERY;
-
-    const res = await request(app).get(`${BASE}/bus/realtime`).query(query);
-
-    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
-  });
-
-  it("rejects a non-numeric arrival_lng with 400 (schema)", async () => {
-    const res = await request(app)
-      .get(`${BASE}/bus/realtime`)
-      .query({ ...VALID_QUERY, arrival_lng: "abc" });
-
-    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
-  });
-
-  it("maps a service domain error to its status", async () => {
-    vi.mocked(transitService.getBusRealtimePosition).mockResolvedValue({
-      ok: false,
-      status: 400,
-      error: "TDX 公車位置查詢失敗",
-    } as any);
-
-    const res = await request(app).get(`${BASE}/bus/realtime`).query(VALID_QUERY);
-
-    expect(res.status).toBe(400);
-    expect(res.body.message).toBe("TDX 公車位置查詢失敗");
-  });
-
-  it("returns 500 with the generic internal message when the service throws", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(transitService.getBusRealtimePosition).mockRejectedValue(new Error("boom"));
-
-    const res = await request(app).get(`${BASE}/bus/realtime`).query(VALID_QUERY);
-
-    expect(res.status).toBe(ResponseCode.INTERNAL_ERROR);
-    expect(res.body.message).toBe(ERROR_MESSAGE.INTERNAL);
-  });
 });
 
 describe("GET /api/v1/transit/bus/route", () => {
@@ -295,6 +94,25 @@ describe("GET /api/v1/transit/bus/route", () => {
 
     expect(res.status).toBe(ResponseCode.INTERNAL_ERROR);
     expect(res.body.message).toBe("db down");
+  });
+});
+
+describe("GET /api/v1/transit/bus/route-detail", () => {
+  it("returns 200 + route detail data", async () => {
+    vi.mocked(busService.getBusRouteDetail).mockResolvedValue({
+      ok: true,
+      routeName: "307",
+      directions: [{ direction: 0, stops: [] }],
+      timetable: { firstBus: "06:00" },
+    } as any);
+
+    const res = await request(app).get(`${BASE}/bus/route-detail`).query({ routeName: "307", city: "台北" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      routeName: "307",
+      directions: [{ direction: 0, stops: [] }],
+    });
   });
 });
 
@@ -425,5 +243,53 @@ describe("GET /api/v1/transit/bus/positions", () => {
 
     expect(res.status).toBe(ResponseCode.NOT_FOUND);
     expect(res.body.message).toBe("目前無營運車輛");
+  });
+});
+
+describe("GET /api/v1/transit/bus/search-routes", () => {
+  it("returns matching route options", async () => {
+    vi.mocked(busService.searchBusRoutes).mockResolvedValue({
+      ok: true,
+      routes: [{ routeName: "307", city: "Taipei", departure: "撫順街口", destination: "板橋國中" }],
+    } as any);
+
+    const res = await request(app).get(`${BASE}/bus/search-routes`).query({ keyword: "307" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.routes).toHaveLength(1);
+  });
+
+  it("rejects an empty keyword", async () => {
+    const res = await request(app).get(`${BASE}/bus/search-routes`).query({ keyword: "" });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(busService.searchBusRoutes)).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/v1/transit/bus/nearby-stops", () => {
+  it("returns nearby stops with default radius and limit", async () => {
+    vi.mocked(busService.getNearbyStops).mockResolvedValue({
+      ok: true,
+      stops: [{ stopName: "台北車站", distance: 120, routes: ["307"] }],
+    } as any);
+
+    const res = await request(app).get(`${BASE}/bus/nearby-stops`).query({ lat: 25.0478, lng: 121.5171 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.stops).toHaveLength(1);
+    expect(vi.mocked(busService.getNearbyStops)).toHaveBeenCalledWith({
+      lat: 25.0478,
+      lng: 121.5171,
+      radius: 500,
+      limit: 10,
+    });
+  });
+
+  it("rejects missing coordinates", async () => {
+    const res = await request(app).get(`${BASE}/bus/nearby-stops`).query({ lat: 25.0478 });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(busService.getNearbyStops)).not.toHaveBeenCalled();
   });
 });

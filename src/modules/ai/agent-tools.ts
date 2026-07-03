@@ -1,6 +1,7 @@
 import * as a11yService from "../a11y/a11y.service";
 import * as busService from "../transit/bus.service";
 import * as airService from "../air/air.service";
+import * as campusService from "../campus/campus.service";
 import * as hazardService from "../hazard-report/hazard-report.service";
 import { getEnvironmentInfo as fetchEnvironment } from "../environment/environment.service";
 import type { GroundingChunk } from "@google/genai";
@@ -20,6 +21,7 @@ import type {
   TraLeg,
 } from "../accessible-route/accessible-route.service";
 import type { TaiwanCityEn } from "../../types/transit";
+import type { ICampusA11y } from "../../types";
 
 export async function findGooglePlaces(args: {
   query: string;
@@ -90,6 +92,159 @@ export async function findA11yPlaces(args: {
   } catch (error) {
     console.error("[agent-tool:findA11yPlaces]", error);
     return JSON.stringify({ error: "資料庫查詢失敗" });
+  }
+}
+
+function asCoords(
+  latitude?: number,
+  longitude?: number,
+): { latitude: number; longitude: number } | null {
+  return typeof latitude === "number" && typeof longitude === "number"
+    ? { latitude, longitude }
+    : null;
+}
+
+function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === "number" ? Math.trunc(value) : fallback;
+  return Math.min(Math.max(Number.isFinite(n) ? n : fallback, min), max);
+}
+
+function campusFacTypeSummary(facilities: ICampusA11y["facilities"]): Record<string, number> {
+  const summary: Record<string, number> = {};
+  for (const facility of facilities ?? []) {
+    if (!facility.facType) continue;
+    summary[facility.facType] = (summary[facility.facType] ?? 0) + 1;
+  }
+  return summary;
+}
+
+export async function findCampusAccessibility(args: {
+  query?: string;
+  latitude?: number;
+  longitude?: number;
+  radiusM?: number;
+  city?: string;
+  facType?: string;
+  page?: number;
+  limit?: number;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    const page = clampInt(args.page, 1, 1, 1000);
+    const limit = clampInt(args.limit, 5, 1, 20);
+    let { latitude, longitude } = args;
+
+    if (!asCoords(latitude, longitude) && !args.query && args.userLocation) {
+      latitude = args.userLocation.latitude;
+      longitude = args.userLocation.longitude;
+    }
+
+    const coordsInput = asCoords(latitude, longitude);
+    if (coordsInput) {
+      const campuses = await campusService.findNearby(
+        coordsInput.latitude,
+        coordsInput.longitude,
+        args.radiusM ?? 1000,
+        args.facType,
+      );
+      return JSON.stringify({
+        ok: true,
+        mode: "nearby",
+        query: args.query ?? null,
+        searchLocation: { lat: coordsInput.latitude, lng: coordsInput.longitude },
+        total: campuses.length,
+        campuses: campuses.slice(0, limit),
+      });
+    }
+
+    const keywordResult = await campusService.findAll({
+      city: args.city,
+      facType: args.facType,
+      keyword: args.query,
+      page,
+      limit,
+    });
+    if (keywordResult.totalCount > 0 || !args.query) {
+      return JSON.stringify({
+        ok: true,
+        mode: "search",
+        query: args.query ?? null,
+        ...keywordResult,
+        campuses: keywordResult.items,
+        items: undefined,
+      });
+    }
+
+    const coords = await getCoordinates(
+      args.query,
+      args.userLocation?.latitude,
+      args.userLocation?.longitude,
+    );
+    if (!coords) {
+      return JSON.stringify({
+        ok: false,
+        error: `找不到校園或地點「${args.query}」`,
+      });
+    }
+
+    const campuses = await campusService.findNearby(
+      coords.latitude,
+      coords.longitude,
+      args.radiusM ?? 1000,
+      args.facType,
+    );
+    return JSON.stringify({
+      ok: true,
+      mode: "nearby",
+      query: args.query,
+      searchLocation: { lat: coords.latitude, lng: coords.longitude },
+      total: campuses.length,
+      campuses: campuses.slice(0, limit),
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:findCampusAccessibility]", error);
+    return JSON.stringify({ ok: false, error: "校園無障礙資料查詢失敗" });
+  }
+}
+
+export async function getCampusAccessibilityDetails(args: {
+  branchId: number;
+  facType?: string;
+  limit?: number;
+}): Promise<string> {
+  try {
+    const campus = await campusService.findByBranchId(args.branchId);
+    if (!campus) {
+      return JSON.stringify({ ok: false, error: "查無此校區" });
+    }
+
+    const limit = clampInt(args.limit, 30, 1, 80);
+    const facilities = args.facType
+      ? campus.facilities.filter((facility) => facility.facType === args.facType)
+      : campus.facilities;
+
+    return JSON.stringify({
+      ok: true,
+      campus: {
+        branchId: campus.branchId,
+        schoolName: campus.schoolName,
+        branchName: campus.branchName,
+        city: campus.city,
+        address: campus.address,
+        phone: campus.phone,
+        location: campus.location,
+        buildingCount: campus.buildingCount,
+        facilityCount: campus.facilityCount,
+        facTypeSummary: campusFacTypeSummary(campus.facilities),
+      },
+      filter: { facType: args.facType ?? null },
+      totalMatchedFacilities: facilities.length,
+      facilities: facilities.slice(0, limit),
+      truncated: facilities.length > limit,
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:getCampusAccessibilityDetails]", error);
+    return JSON.stringify({ ok: false, error: "校區無障礙設施詳情查詢失敗" });
   }
 }
 
@@ -765,6 +920,26 @@ export async function executeLocalTool(
         longitude: args.longitude,
         range: args.range,
         userLocation,
+      });
+
+    case "findCampusAccessibility":
+      return findCampusAccessibility({
+        query: args.query,
+        latitude: args.latitude,
+        longitude: args.longitude,
+        radiusM: args.radiusM,
+        city: args.city,
+        facType: args.facType,
+        page: args.page,
+        limit: args.limit,
+        userLocation,
+      });
+
+    case "getCampusAccessibilityDetails":
+      return getCampusAccessibilityDetails({
+        branchId: args.branchId,
+        facType: args.facType,
+        limit: args.limit,
       });
 
     case "planAccessibleRoute":

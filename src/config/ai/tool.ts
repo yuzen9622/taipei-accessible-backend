@@ -82,7 +82,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findGooglePlaces",
       description:
-        "使用 Google Maps 搜尋一般地點、商家或景點。這是 fallback 工具——若上述專用工具（無障礙設施 findA11yPlaces、停車位 findNearbyParking、路況 getNearbyHazards、天氣 getEnvironmentInfo）都不適用，才使用此工具。",
+        "使用 Google Maps 搜尋一般地點、商家或景點。這是 fallback 工具——若上述專用工具（無障礙設施 findA11yPlaces、校園無障礙 findCampusAccessibility、停車位 findNearbyParking、路況 getNearbyHazards、天氣 getEnvironmentInfo）都不適用，才使用此工具。",
       parameters: {
         type: "object",
         properties: {
@@ -109,6 +109,45 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           range: { type: "number", description: "搜尋範圍，預設 300，單位公尺" },
         },
         required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "findCampusAccessibility",
+      description:
+        "查詢教育部校園無障礙資料庫的校區摘要。當使用者問學校/大學/校園/校區內的無障礙電梯、廁所、坡道、輪椅通道時使用。可用校名/校區關鍵字、城市、設施類型搜尋；也可用座標或使用者目前位置找附近校區。回傳 branchId，可再用 getCampusAccessibilityDetails 查完整設施。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "校名、校區名或附近地點，例如：'國立臺灣大學'、'台大校總區'、'台北車站附近'" },
+          latitude: { type: "number", description: "搜尋中心緯度（選填）" },
+          longitude: { type: "number", description: "搜尋中心經度（選填）" },
+          radiusM: { type: "number", description: "附近搜尋半徑（公尺），預設 1000，上限由資料庫查詢決定" },
+          city: { type: "string", description: "縣市精確篩選，例如：'臺北市'" },
+          facType: { type: "string", description: "設施類型（中文），例如：'無障礙電梯'、'無障礙廁所'、'無障礙坡道'" },
+          page: { type: "number", description: "列表頁碼，預設 1" },
+          limit: { type: "number", description: "回傳筆數，預設 5，最大 20" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getCampusAccessibilityDetails",
+      description:
+        "依 findCampusAccessibility 回傳的 branchId 查詢單一校區完整無障礙設施摘要與設施清單。當使用者指定某個校區、要看完整設施、或要知道該校區有哪些無障礙電梯/廁所/坡道時使用。",
+      parameters: {
+        type: "object",
+        properties: {
+          branchId: { type: "number", description: "校區 branchId，來自 findCampusAccessibility 的結果" },
+          facType: { type: "string", description: "選填，僅列出特定設施類型，例如：'無障礙電梯'、'無障礙廁所'" },
+          limit: { type: "number", description: "設施清單最多回傳筆數，預設 30，最大 80" },
+        },
+        required: ["branchId"],
       },
     },
   },
