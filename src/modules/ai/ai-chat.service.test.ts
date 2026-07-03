@@ -42,6 +42,7 @@ function functionCallResponse(calls: Array<{ name: string; args: Record<string, 
 function stopResponse() {
   return {
     functionCalls: undefined,
+    text: "done",
     candidates: [{ content: { role: "model", parts: [{ text: "done" }] } }],
   };
 }
@@ -53,6 +54,16 @@ function functionResponseParts(contents: Content[]) {
 }
 
 describe("runToolLoop dedup", () => {
+  it("沒有工具呼叫但模型有文字時回傳文字", async () => {
+    mockCreate.mockResolvedValueOnce(stopResponse());
+
+    const contents: Content[] = [{ role: "user", parts: [{ text: "hello" }] }];
+    const result = await runToolLoop(contents, undefined, "test-model");
+
+    expect(result.text).toBe("done");
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
   it("相同 (name, args) 且成功 → 第二次不執行 executeLocalTool", async () => {
     const args = { routeName: "307", city: "台北" };
     mockCreate

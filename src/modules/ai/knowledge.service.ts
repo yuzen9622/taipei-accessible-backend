@@ -41,9 +41,9 @@ export async function searchKnowledge(
 
   return results.map((r: ChromaQueryResult) => ({
     content: r.content,
-    source: r.metadata.source ?? "",
-    category: r.metadata.category ?? "",
-    title: r.metadata.title ?? "",
+    source: String(r.metadata.source ?? ""),
+    category: String(r.metadata.category ?? ""),
+    title: String(r.metadata.title ?? ""),
     score: 1 - r.distance,
   }));
 }

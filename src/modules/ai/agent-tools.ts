@@ -855,6 +855,8 @@ export async function saveMemory(args: {
   content: string;
   category: string;
   userId?: string;
+  allowMemoryWrite?: boolean;
+  explicitMemoryRequest?: boolean;
 }): Promise<string> {
   if (!args.userId) {
     return JSON.stringify({ ok: false, error: "需要登入才能儲存記憶" });
@@ -866,16 +868,26 @@ export async function saveMemory(args: {
     return JSON.stringify({ ok: false, error: `無效的記憶類別：${args.category}` });
   }
   try {
+    if (!args.allowMemoryWrite) {
+      return JSON.stringify({ ok: false, error: "記憶功能尚未開啟" });
+    }
     const memory = await memoryService.saveMemory(
       args.userId,
       args.content.trim(),
       args.category as "preference" | "place" | "habit" | "context",
+      {
+        source: args.explicitMemoryRequest ? "explicit_user" : "agent_suggested",
+        requireMemoryEnabled: false,
+      },
     );
     return JSON.stringify({
       ok: true,
       memory: { id: memory._id, content: memory.content, category: memory.category },
     });
   } catch (error: any) {
+    if (error?.message === "MEMORY_DISABLED") {
+      return JSON.stringify({ ok: false, error: "記憶功能尚未開啟" });
+    }
     console.error("[agent-tool:saveMemory]", error);
     return JSON.stringify({ ok: false, error: "記憶儲存失敗" });
   }
@@ -908,6 +920,7 @@ export async function executeLocalTool(
   args: Record<string, any>,
   userLocation?: { latitude: number; longitude: number },
   userId?: string,
+  options: { allowMemoryWrite?: boolean; explicitMemoryRequest?: boolean } = {},
 ): Promise<string> {
   switch (name) {
     case "findGooglePlaces":
@@ -1051,6 +1064,8 @@ export async function executeLocalTool(
         content: args.content as string,
         category: args.category as string,
         userId,
+        allowMemoryWrite: options.allowMemoryWrite,
+        explicitMemoryRequest: options.explicitMemoryRequest,
       });
 
     case "deleteMemory":

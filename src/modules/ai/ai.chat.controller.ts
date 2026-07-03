@@ -5,7 +5,7 @@ import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import { verifyAccessToken } from "../../config/jwt";
 import { runToolLoop, toGeminiHistory, type OAIMessage } from "./ai-chat.service";
-import { loadMemories } from "./memory.service";
+import { getMemorySettings, searchMemoriesForPrompt } from "./memory.service";
 import { CHAT_SYSTEM_PROMPT, withUserLocation } from "../../config/ai/chat-prompt";
 import type { IUser } from "../../types";
 
@@ -28,6 +28,25 @@ const CATEGORY_LABELS: Record<string, string> = {
   context: "情境",
 };
 
+function latestUserText(messages: OAIMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role === "user" && typeof message.content === "string") {
+      return message.content;
+    }
+  }
+  return "";
+}
+
+function isExplicitMemoryRequest(text: string): boolean {
+  if (/(忘記|刪除|不要記|別記|不必記)/.test(text)) return false;
+  return /(記住|記得|幫我記|幫我記住|請記住|remember this|remember that)/i.test(text);
+}
+
+function isMemoryDeletionRequest(text: string): boolean {
+  return /(忘記|刪除|不要記|別記|不必記|forget|delete.*memory)/i.test(text);
+}
+
 export async function aiChat(req: Request, res: Response): Promise<void> {
   const {
     messages: rawMessages,
@@ -45,18 +64,28 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   const useTemp = temperature ?? 0.2;
   const authUser = resolveAuthUser(req);
   const userId = authUser ? String(authUser._id) : undefined;
+  const latestText = latestUserText(rawMessages);
 
   let systemPrompt = withUserLocation(CHAT_SYSTEM_PROMPT, userLocation);
+  let memoryEnabled = false;
+  let memoryToolsEnabled = false;
+  let allowMemoryWrite = false;
+  const explicitMemoryRequest = isExplicitMemoryRequest(latestText);
+  const memoryDeletionRequest = isMemoryDeletionRequest(latestText);
   if (userId) {
     try {
-      const memories = await loadMemories(userId);
+      memoryEnabled = (await getMemorySettings(userId)).memoryEnabled;
+      allowMemoryWrite = memoryEnabled || explicitMemoryRequest;
+      memoryToolsEnabled = allowMemoryWrite || memoryDeletionRequest;
+
+      const memories = await searchMemoriesForPrompt(userId, latestText);
       if (memories.length) {
-        systemPrompt += `\n\n【使用者記憶】以下是你對這位使用者的了解，請自然地運用：`;
+        systemPrompt += `\n\n【使用者記憶】以下是與本次問題相關、使用者可管理的記憶，請只在確實相關時自然運用：`;
         for (const m of memories) {
           const label = CATEGORY_LABELS[m.category] ?? m.category;
-          systemPrompt += `\n- [${label}] ${m.content} (id:${m._id})`;
+          systemPrompt += `\n- [${label}] ${m.promptText ?? m.content} (id:${m._id})`;
         }
-        systemPrompt += `\n\n當使用者說「回家」「去上班」「老地方」等，根據記憶推斷地點。路線規劃自動套用記憶中的無障礙模式。`;
+        systemPrompt += `\n\n不要暴露完整記憶資料；若使用者要求忘記，使用上方 id 呼叫 deleteMemory。`;
       }
     } catch (err) {
       console.error("[ai/chat] loadMemories failed:", err);
@@ -76,7 +105,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     res.flushHeaders();
 
     try {
-      await runToolLoop(
+      const loopResult = await runToolLoop(
         contents,
         systemInstruction,
         model,
@@ -84,7 +113,17 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
         (name, args) => sendSse(res, "tool_call", { name, args }),
         (name, result) => sendSse(res, "tool_result", { name, result }),
         userId,
+        memoryToolsEnabled,
+        allowMemoryWrite,
+        explicitMemoryRequest,
       );
+
+      if (loopResult.text) {
+        sendSse(res, "token", { text: loopResult.text });
+        res.write("event: done\ndata: done\n\n");
+        res.end();
+        return;
+      }
 
       const finalStream = await googleGenAi.models.generateContentStream({
         model,
@@ -112,13 +151,26 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   }
 
   try {
-    await runToolLoop(contents, systemInstruction, model, userLocation, undefined, undefined, userId);
-
-    const response = await googleGenAi.models.generateContent({
-      model,
+    const loopResult = await runToolLoop(
       contents,
-      config: { systemInstruction, temperature: useTemp },
-    });
+      systemInstruction,
+      model,
+      userLocation,
+      undefined,
+      undefined,
+      userId,
+      memoryToolsEnabled,
+      allowMemoryWrite,
+      explicitMemoryRequest,
+    );
+
+    const response = loopResult.text
+      ? { text: loopResult.text, usageMetadata: undefined }
+      : await googleGenAi.models.generateContent({
+          model,
+          contents,
+          config: { systemInstruction, temperature: useTemp },
+        });
 
     const text = response.text ?? "";
     const usage = response.usageMetadata;

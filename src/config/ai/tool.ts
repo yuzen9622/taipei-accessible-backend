@@ -454,13 +454,13 @@ export const memoryTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "saveMemory",
       description:
-        "儲存一筆關於使用者的記憶。當你觀察到使用者透露個人資訊時主動呼叫：行動模式（輪椅/長者/視障）、常去地點、住家/工作地點、交通偏好、出行習慣。不需要使用者明確要求「記住」。",
+        "儲存一筆關於使用者的記憶。只有在使用者明確要求「記住」或使用者已開啟記憶功能且該資訊對未來無障礙導航有穩定幫助時使用。只存最小化摘要，不要存完整原話、精準住址、精準座標或不必要的個資。",
       parameters: {
         type: "object",
         properties: {
           content: {
             type: "string",
-            description: "用自然語言描述要記住的事實，例如：「使用者坐輪椅」「家住板橋車站附近（25.0143, 121.4623）」「常搭307公車通勤」",
+            description: "用自然語言描述要記住的最小化事實，例如：「使用者偏好輪椅友善路線」「常從板橋車站附近出發」「常搭307公車通勤」",
           },
           category: {
             type: "string",

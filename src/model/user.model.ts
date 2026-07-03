@@ -6,6 +6,9 @@ const userSchema = new Schema<IUser>(
     avatar: { type: String },
     email: { type: String, required: true, unique: true },
     client_id: { type: String, required: true, unique: true },
+    settings: {
+      memoryEnabled: { type: Boolean, default: false },
+    },
   },
   { timestamps: true }
 );

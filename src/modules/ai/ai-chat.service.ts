@@ -15,6 +15,10 @@ import type { OAIMessage } from "./ai.types";
 
 export type { OAIMessage };
 
+export interface RunToolLoopResult {
+  text?: string;
+}
+
 /**
  * The routing-round generate config, shared by `runToolLoop` and `routeOnce`
  * so the offline eval can never drift from the production routing decision.
@@ -60,11 +64,13 @@ function isSuccessResult(json: string): boolean {
  * passing their JSON Schema straight through (`parametersJsonSchema`), so the
  * tool catalogue stays defined in one place.
  *
- * @param userId When present, memory tools are appended to the catalogue
+ * @param userId Authenticated user id.
+ * @param memoryEnabled When true, memory tools are appended to the catalogue.
  * @returns A single-entry Tool list holding every function declaration
  */
-export function buildGeminiTools(userId?: string): Tool[] {
-  const specs = userId ? [...openAiChatTools, ...memoryTools] : openAiChatTools;
+export function buildGeminiTools(userId?: string, memoryEnabled = false): Tool[] {
+  const specs =
+    userId && memoryEnabled ? [...openAiChatTools, ...memoryTools] : openAiChatTools;
   const functionDeclarations: FunctionDeclaration[] = specs
     .filter(
       (t): t is Extract<OpenAI.Chat.Completions.ChatCompletionTool, { type: "function" }> =>
@@ -146,7 +152,8 @@ export function toGeminiHistory(
  * @param userLocation Optional user coordinates passed to tools
  * @param onToolCall Hook invoked when a tool call starts
  * @param onToolResult Hook invoked with a tool's parsed result
- * @param userId Authenticated user id, enabling memory tools
+ * @param userId Authenticated user id.
+ * @param memoryEnabled Enables memory tools when userId is present.
  */
 export async function runToolLoop(
   contents: Content[],
@@ -156,10 +163,13 @@ export async function runToolLoop(
   onToolCall?: (name: string, args: Record<string, unknown>) => void,
   onToolResult?: (name: string, result: unknown) => void,
   userId?: string,
-): Promise<void> {
+  memoryToolsEnabled = false,
+  allowMemoryWrite = false,
+  explicitMemoryRequest = false,
+): Promise<RunToolLoopResult> {
   const MAX_ROUNDS = 5;
   const toolCache = new Map<string, string>();
-  const tools = buildGeminiTools(userId);
+  const tools = buildGeminiTools(userId, memoryToolsEnabled);
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const response = await googleGenAi.models.generateContent({
@@ -169,7 +179,9 @@ export async function runToolLoop(
     });
 
     const calls = response.functionCalls;
-    if (!calls?.length) break;
+    if (!calls?.length) {
+      return { text: response.text ?? "" };
+    }
 
     const modelContent = response.candidates?.[0]?.content;
     if (modelContent) contents.push(modelContent);
@@ -186,7 +198,10 @@ export async function runToolLoop(
       if (toolCache.has(cacheKey)) {
         resultStr = toolCache.get(cacheKey)!;
       } else {
-        resultStr = await executeLocalTool(name, args, userLocation, userId);
+        resultStr = await executeLocalTool(name, args, userLocation, userId, {
+          allowMemoryWrite,
+          explicitMemoryRequest,
+        });
         if (isSuccessResult(resultStr)) {
           toolCache.set(cacheKey, resultStr);
         }
@@ -210,6 +225,8 @@ export async function runToolLoop(
 
     contents.push({ role: "user", parts: responseParts });
   }
+
+  return {};
 }
 
 export interface RouteOnceResult {
@@ -228,7 +245,8 @@ export interface RouteOnceResult {
  * @param userMessage The single user query to route
  * @param systemInstruction System prompt (assemble via withUserLocation upstream)
  * @param opts userLocation is unused here (location belongs in systemInstruction);
- *   userId only toggles the memory tools into the catalogue; model overrides the default
+ *   memoryEnabled toggles memory tools into the catalogue when userId is present;
+ *   model overrides the default
  * @returns The called tool names (in order), any emitted text, and the raw response
  */
 export async function routeOnce(
@@ -237,11 +255,12 @@ export async function routeOnce(
   opts: {
     userLocation?: { latitude: number; longitude: number };
     userId?: string;
+    memoryEnabled?: boolean;
     model?: string;
   } = {},
 ): Promise<RouteOnceResult> {
   const useModel = opts.model ?? model;
-  const tools = buildGeminiTools(opts.userId);
+  const tools = buildGeminiTools(opts.userId, opts.memoryEnabled ?? Boolean(opts.userId));
   const contents: Content[] = [{ role: "user", parts: [{ text: userMessage }] }];
 
   const response = await googleGenAi.models.generateContent({

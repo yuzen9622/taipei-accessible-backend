@@ -191,6 +191,192 @@ export const AgentChatRequestSchema = z
   })
   .openapi("AgentChatRequest");
 
+export const MemoryCategorySchema = z
+  .enum(["preference", "place", "habit", "context"])
+  .openapi("MemoryCategory");
+
+export const MemorySensitivitySchema = z
+  .enum(["low", "medium", "high"])
+  .openapi("MemorySensitivity");
+
+export const MemoryIdParamsSchema = z
+  .object({
+    id: z.string().regex(/^[a-f\d]{24}$/i).openapi({
+      description: "MongoDB ObjectId",
+      example: "665f1c2b9a0b4d0012a34567",
+    }),
+  })
+  .strict()
+  .openapi("MemoryIdParams");
+
+export const MemoryListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).optional().default(100),
+  })
+  .strict()
+  .openapi("MemoryListQuery");
+
+export const CreateMemoryBodySchema = z
+  .object({
+    content: z.string().min(1).max(240).openapi({
+      example: "使用者偏好少走樓梯，路線規劃時優先找電梯。",
+    }),
+    category: MemoryCategorySchema,
+    sensitivity: MemorySensitivitySchema.optional(),
+    expiresAt: z.string().datetime().optional(),
+  })
+  .strict()
+  .openapi("CreateMemoryBody");
+
+export const UpdateMemoryBodySchema = z
+  .object({
+    content: z.string().min(1).max(240).optional(),
+    category: MemoryCategorySchema.optional(),
+    sensitivity: MemorySensitivitySchema.optional(),
+    expiresAt: z.string().datetime().nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "至少提供一個要更新的欄位",
+  })
+  .openapi("UpdateMemoryBody");
+
+export const MemorySettingsBodySchema = z
+  .object({
+    memoryEnabled: z.boolean(),
+  })
+  .strict()
+  .openapi("MemorySettingsBody");
+
+const MemorySchema = z
+  .object({
+    id: z.string(),
+    content: z.string(),
+    category: MemoryCategorySchema,
+    sensitivity: MemorySensitivitySchema,
+    source: z.enum(["explicit_user", "agent_suggested", "distilled"]),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    expiresAt: z.string().nullable(),
+  })
+  .openapi("UserMemory");
+
+const MemoryListResponseSchema = z
+  .object({
+    ok: z.boolean().openapi({ example: true }),
+    status: z.enum(["success", "error"]).openapi({ example: "success" }),
+    code: z.number().openapi({ example: 200 }),
+    message: z.string().openapi({ example: "取得記憶列表成功" }),
+    data: z.object({ memories: z.array(MemorySchema) }),
+  })
+  .openapi("MemoryListResponse");
+
+const MemoryResponseSchema = z
+  .object({
+    ok: z.boolean().openapi({ example: true }),
+    status: z.enum(["success", "error"]).openapi({ example: "success" }),
+    code: z.number().openapi({ example: 200 }),
+    message: z.string().openapi({ example: "記憶已更新" }),
+    data: z.object({ memory: MemorySchema }),
+  })
+  .openapi("MemoryResponse");
+
+const MemorySettingsResponseSchema = z
+  .object({
+    ok: z.boolean().openapi({ example: true }),
+    status: z.enum(["success", "error"]).openapi({ example: "success" }),
+    code: z.number().openapi({ example: 200 }),
+    message: z.string().openapi({ example: "取得記憶設定成功" }),
+    data: z.object({ memoryEnabled: z.boolean() }),
+  })
+  .openapi("MemorySettingsResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/ai/memories",
+  tags: ["AI"],
+  summary: "列出目前使用者的 AI 記憶",
+  request: { query: MemoryListQuerySchema },
+  responses: {
+    200: {
+      description: "使用者記憶列表",
+      content: { "application/json": { schema: MemoryListResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/ai/memories",
+  tags: ["AI"],
+  summary: "手動新增一筆 AI 記憶",
+  request: {
+    body: {
+      content: { "application/json": { schema: CreateMemoryBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    201: {
+      description: "已建立的記憶",
+      content: { "application/json": { schema: MemoryResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/ai/memories/{id}",
+  tags: ["AI"],
+  summary: "修改指定 AI 記憶",
+  request: {
+    params: MemoryIdParamsSchema,
+    body: {
+      content: { "application/json": { schema: UpdateMemoryBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "已更新的記憶",
+      content: { "application/json": { schema: MemoryResponseSchema } },
+    },
+    404: { description: "找不到記憶或無權存取" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/ai/memories/settings",
+  tags: ["AI"],
+  summary: "取得 AI 記憶設定",
+  responses: {
+    200: {
+      description: "記憶設定",
+      content: { "application/json": { schema: MemorySettingsResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/ai/memories/settings",
+  tags: ["AI"],
+  summary: "更新 AI 記憶設定",
+  request: {
+    body: {
+      content: { "application/json": { schema: MemorySettingsBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "已更新的記憶設定",
+      content: { "application/json": { schema: MemorySettingsResponseSchema } },
+    },
+  },
+});
+
 const AgentChatResponseSchema = z
   .object({
     ok: z.boolean().openapi({ example: true }),

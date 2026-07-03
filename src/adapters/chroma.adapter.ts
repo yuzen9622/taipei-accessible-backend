@@ -1,4 +1,4 @@
-import { ChromaClient, type Collection } from "chromadb";
+import { ChromaClient, type Collection, type Metadata, type Where } from "chromadb";
 
 let client: ChromaClient | null = null;
 
@@ -38,7 +38,7 @@ export async function upsertDocuments(
     id: string;
     content: string;
     embedding: number[];
-    metadata: Record<string, string>;
+    metadata: Metadata;
   }>,
 ): Promise<void> {
   await collection.upsert({
@@ -52,7 +52,7 @@ export async function upsertDocuments(
 export interface ChromaQueryResult {
   id: string;
   content: string;
-  metadata: Record<string, string>;
+  metadata: Metadata;
   distance: number;
 }
 
@@ -66,10 +66,12 @@ export async function queryDocuments(
   collection: Collection,
   queryEmbedding: number[],
   topK: number,
+  where?: Where,
 ): Promise<ChromaQueryResult[]> {
   const results = await collection.query({
     queryEmbeddings: [queryEmbedding],
     nResults: topK,
+    where,
     include: ["documents", "metadatas", "distances"],
   });
 
@@ -81,7 +83,19 @@ export async function queryDocuments(
   return ids.map((id, i) => ({
     id: id ?? "",
     content: (documents[i] as string) ?? "",
-    metadata: (metadatas[i] as Record<string, string>) ?? {},
+    metadata: (metadatas[i] as Metadata) ?? {},
     distance: (distances[i] as number) ?? 0,
   }));
+}
+
+/**
+ * @param collection The collection.
+ * @param ids Document ids to delete.
+ */
+export async function deleteDocuments(
+  collection: Collection,
+  ids: string[],
+): Promise<void> {
+  if (!ids.length) return;
+  await collection.delete({ ids });
 }

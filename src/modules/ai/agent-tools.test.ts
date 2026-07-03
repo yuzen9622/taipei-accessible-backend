@@ -696,6 +696,7 @@ describe("executeLocalTool dispatches new tools", () => {
       { content: "坐輪椅", category: "preference" },
       undefined,
       "user123",
+      { allowMemoryWrite: true },
     );
     expect(JSON.parse(raw).ok).toBe(true);
     expect(JSON.parse(raw).memory.content).toBe("坐輪椅");
@@ -731,10 +732,32 @@ describe("saveMemory agent tool", () => {
 
   it("有 userId + 有效 category 成功儲存", async () => {
     mockSave.mockResolvedValue({ _id: "m1", content: "家住板橋", category: "place" });
-    const raw = await saveMemory({ content: "家住板橋", category: "place", userId: "u1" });
+    const raw = await saveMemory({
+      content: "家住板橋",
+      category: "place",
+      userId: "u1",
+      allowMemoryWrite: true,
+    });
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
     expect(result.memory.content).toBe("家住板橋");
+  });
+
+  it("明確要求記住時以 explicit_user 來源儲存", async () => {
+    mockSave.mockResolvedValue({ _id: "m1", content: "學校是台大", category: "place" });
+    await saveMemory({
+      content: "學校是台大",
+      category: "place",
+      userId: "u1",
+      allowMemoryWrite: true,
+      explicitMemoryRequest: true,
+    });
+    expect(mockSave).toHaveBeenCalledWith(
+      "u1",
+      "學校是台大",
+      "place",
+      expect.objectContaining({ source: "explicit_user" }),
+    );
   });
 
   it("無 userId 回錯誤", async () => {
@@ -745,14 +768,30 @@ describe("saveMemory agent tool", () => {
   });
 
   it("空 content 回錯誤", async () => {
-    const raw = await saveMemory({ content: "", category: "place", userId: "u1" });
+    const raw = await saveMemory({
+      content: "",
+      category: "place",
+      userId: "u1",
+      allowMemoryWrite: true,
+    });
     expect(JSON.parse(raw).ok).toBe(false);
   });
 
   it("無效 category 回錯誤", async () => {
-    const raw = await saveMemory({ content: "test", category: "invalid", userId: "u1" });
+    const raw = await saveMemory({
+      content: "test",
+      category: "invalid",
+      userId: "u1",
+      allowMemoryWrite: true,
+    });
     expect(JSON.parse(raw).ok).toBe(false);
     expect(JSON.parse(raw).error).toContain("無效");
+  });
+
+  it("未允許記憶寫入時回錯誤", async () => {
+    const raw = await saveMemory({ content: "家住板橋", category: "place", userId: "u1" });
+    expect(JSON.parse(raw).ok).toBe(false);
+    expect(JSON.parse(raw).error).toContain("尚未開啟");
   });
 });
 

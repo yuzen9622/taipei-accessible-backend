@@ -30,6 +30,18 @@ export const ERROR_MESSAGE = {
     "無法解析您的查詢，請改用『從 A 到 B』的描述或直接提供 origin/destination",
 } as const;
 
+export const MEMORY_MSG = {
+  CREATED: "記憶已建立",
+  UPDATED: "記憶已更新",
+  DELETED: "記憶已刪除",
+  CLEARED: "記憶已清空",
+  LIST_OK: "取得記憶列表成功",
+  SETTINGS_OK: "取得記憶設定成功",
+  SETTINGS_UPDATED: "記憶設定已更新",
+  NOT_FOUND: "找不到該筆記憶或無權存取",
+  DISABLED: "記憶功能尚未開啟",
+} as const;
+
 /**
  * User-facing messages for the pre-trip environment aggregation endpoint. The
  * partial message is built from the number of sources that came back unavailable.
