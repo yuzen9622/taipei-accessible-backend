@@ -135,3 +135,6 @@ __pycache__/
 
 
 .obsidian
+.codex/
+.agents/
+.claude/
