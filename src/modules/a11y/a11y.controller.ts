@@ -1,12 +1,12 @@
 import type { Request, Response } from "express";
-import { IA11y } from "../../types";
 import { sendResponse } from "../../config/lib";
 import { ApiResponse } from "../../types/response";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import * as a11yService from "./a11y.service";
+import type { A11yPlace } from "./a11y.service";
 
-async function getA11yData(req: Request, res: Response<ApiResponse<IA11y[]>>) {
+async function getA11yData(req: Request, res: Response<ApiResponse<A11yPlace[]>>) {
   const a11y = await a11yService.findAll();
   return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, a11y);
 }

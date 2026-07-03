@@ -59,7 +59,7 @@ const GeoPointSchema = z
 
 export const A11ySchema = z
   .object({
-    _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0a1" }),
+    _id: z.string().optional().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0a1" }),
     項次: z.string().openapi({ example: "1" }),
     "出入口電梯/無障礙坡道名稱": z
       .string()
@@ -67,6 +67,21 @@ export const A11ySchema = z
     經度: z.number().openapi({ example: 121.5170 }),
     緯度: z.number().openapi({ example: 25.0478 }),
     location: GeoPointSchema,
+    source: z
+      .enum(["metro", "osm"])
+      .openapi({ example: "metro", description: "資料來源：北捷官方資料或 OSM" }),
+    osmId: z
+      .string()
+      .optional()
+      .openapi({ example: "12342946149", description: "source 為 osm 時的 OSM 節點 id，可用於 /a11y/place 查詳情" }),
+    wheelchair: z
+      .enum(["yes", "limited", "no"])
+      .optional()
+      .openapi({ example: "yes", description: "source 為 osm 時的輪椅可用性標記" }),
+    category: z
+      .enum(["elevator", "ramp"])
+      .optional()
+      .openapi({ example: "elevator", description: "source 為 osm 時的設施類別" }),
   })
   .openapi("A11y");
 
@@ -173,7 +188,8 @@ registry.registerPath({
   path: "/a11y/all-places",
   tags: ["Accessibility"],
   summary: "所有無障礙地點",
-  description: "回傳資料庫中所有捷運電梯與坡道資料，不分頁。",
+  description:
+    "回傳資料庫中所有無障礙電梯與坡道資料（北捷官方＋OSM，統一形狀，source 欄位區分來源），不分頁。",
   responses: {
     200: {
       description: "無障礙地點清單",
@@ -204,7 +220,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "鄰近無障礙設施",
   description:
-    "回傳指定座標 150 公尺內的捷運無障礙出口、廁所、OSM 節點與身障停車格。",
+    "回傳指定座標 150 公尺內的無障礙電梯/坡道（nearbyMetroA11y，北捷官方＋OSM 合併）、廁所、OSM 節點與身障停車格。",
   request: {
     query: NearbyA11yQuerySchema,
   },
