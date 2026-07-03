@@ -4,6 +4,9 @@ export interface IUser {
   avatar?: string;
   email: string;
   client_id: string;
+  settings?: {
+    memoryEnabled?: boolean;
+  };
   createdAt: string;
   updatedAt: string;
 }
