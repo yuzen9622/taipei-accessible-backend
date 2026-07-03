@@ -60,6 +60,10 @@ export const HAZARD_REASON = {
   REPORT_EXPIRED: "REPORT_EXPIRED",
 } as const;
 
+export const CAMPUS_MSG = {
+  NOT_FOUND: "查無此校區",
+} as const;
+
 export const REVIEW_MSG = {
   CREATED: "評價已建立",
   UPDATED: "評價已更新",
