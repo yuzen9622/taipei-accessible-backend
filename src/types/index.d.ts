@@ -78,6 +78,33 @@ export interface IWelfare {
   importedAt: Date;
 }
 
+export interface ICampusFacility {
+  facUid: string;
+  facTypeId?: number;
+  facType?: string;
+  name?: string;
+  building?: string;
+  buildingUid?: string;
+  floors: string[];
+  floorIds: string[];
+}
+
+export interface ICampusA11y {
+  _id: string;
+  schoolId: number;
+  schoolName: string;
+  branchId: number;
+  branchName: string;
+  city?: string;
+  address?: string;
+  phone?: string;
+  buildingCount: number;
+  facilityCount: number;
+  facilities: ICampusFacility[];
+  location?: { type: "Point"; coordinates: [number, number] };
+  importedAt: Date;
+}
+
 export interface RankRequest {
   start: google.maps.LatLngLiteral;
   end: google.maps.LatLngLiteral;
