@@ -68,8 +68,8 @@ for url in $OTP_GTFS_URLS; do
   unzip -l "$out" >/dev/null 2>&1 || die "GTFS feed $i is not a valid zip"
   # TDX feed quality fixes (duplicate ids, broken refs, self-loop pathways —
   # the latter build a graph that NPEs on load). See clean-gtfs-feed.py.
-  log "patching feed $i with daily timetables"
-  python3 "$SCRIPT_DIR/patch_gtfs.py" "$out" || log "WARN: Daily timetable patching failed — continuing with static schedule"
+  log "patching feed $i with general (weekly) timetables"
+  python3 "$SCRIPT_DIR/patch_gtfs.py" "$out" || log "WARN: General timetable patching failed — continuing with static schedule"
   log "cleaning feed $i"
   python3 "$SCRIPT_DIR/clean-gtfs-feed.py" "$out" || die "feed cleaning failed: $out"
 done
