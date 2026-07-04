@@ -27,13 +27,10 @@
  *
  * Honest limits: TDX exposes no per-train realtime ETA/delay for metro or THSR
  * — metro headways (2–6 min) are already approximated by headway/2 and THSR is
- * near-punctual; disruptions there surface via the Alert overlay. Legacy-path
- * BUS legs already carry a live ETA
- * (fetchWaitInfo) — legs whose waitInfo.source is "realtime" are skipped.
- * MaaS rail legs (TRA + THSR) have no realtime delay API, but their train
- * number, type and real schedule are recovered from the OD daily timetable by
- * recoverRailTrainNos — a separate schedule-based pass that runs even outside
- * the realtime window (it also snaps MaaS schedule drift to the real train).
+ * near-punctual; disruptions there surface via the Alert overlay. OTP rail legs
+ * can have their train number, type and real schedule recovered from the OD
+ * daily timetable by recoverRailTrainNos — a separate schedule-based pass that
+ * runs even outside the realtime window.
  *
  * Realtime only makes sense for "departing now": the overlay is skipped when
  * the requested departureTime is more than 15 minutes from now, and for

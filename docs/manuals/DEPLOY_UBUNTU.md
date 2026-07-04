@@ -19,9 +19,8 @@
 | ----------------------- | -------------------------- | ---------------------------------------- |
 | Node API                | systemd service            | ✅                                       |
 | MongoDB 8.0             | apt 安裝、systemd          | ✅（存 a11y/公車站/捷運站等）            |
-| OTP 2.9.0               | Docker（`docker compose`） | ✅（`USE_OTP_ROUTER=true` 時）           |
+| OTP 2.9.0               | Docker（`docker compose`） | ✅（路徑規劃唯一引擎）                  |
 | Redis                   | —                          | ❌ 選用（`REDIS_URL` 沒設就全程 no-op）  |
-| ORS（OpenRouteService） | —                          | ❌ 選用（沒 `ORS_API_KEY` 退回直線距離） |
 
 > ⚠️ 重點：`src/server.ts` **不會自己讀 `.env`**（只有 `dev` 腳本用 dotenvx）。生產環境靠 systemd 用 `node -r dotenv/config` 載入 `.env`（`dotenv` 已是正式依賴）。
 
@@ -125,9 +124,7 @@ JWT_REFRESH_SECRET=<openssl rand -hex 32>
 TDX_CLIENT_ID=...
 TDX_CLIENT_SECRET=...
 
-# 路由開關（這次部署的重點）
-USE_OTP_ROUTER=true
-USE_TDX_ROUTING=true
+# OTP 路徑規劃引擎
 OTP_BASE_URL=http://localhost:8080
 
 # 給 docker compose 用（OTP 資料目錄）
@@ -314,7 +311,7 @@ crontab -e
 | 症狀                           | 多半原因 / 處置                                                                                |
 | ------------------------------ | ---------------------------------------------------------------------------------------------- |
 | API 啟動即崩、env 都 undefined | systemd 沒載到 `.env` → 確認 `WorkingDirectory` 正確、`.env` 在該目錄、用了 `-r dotenv/config` |
-| 路由都沒捷運/台鐵              | OTP 沒起來或 graph 沒含注入 → `docker logs otp`、確認 `USE_OTP_ROUTER=true`                    |
+| 路由都沒捷運/台鐵              | OTP 沒起來或 graph 沒含注入 → `docker logs otp`、確認 `OTP_BASE_URL` 可連                       |
 | API 每次卡 ~30 秒才回          | MongoDB 連不上 → `systemctl status mongod`、檢查 `DATABASE_URL` 帳密/authSource                |
 | 建圖 `exit 137`                | OOM（這台不會發生；若在小機器則先 `docker stop otp` 釋放記憶體）                               |
 | graph 換壞                     | 回滾：`mv otp-data/graph.obj.prev otp-data/graph.obj && docker compose up -d otp`              |

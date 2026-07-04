@@ -1,6 +1,6 @@
 /**
  * accessible-route module type declarations — the shapes used across the
- * module's own files (the orchestrator service, scoring engine, transfer finder
+ * module's own files (the orchestrator service, scoring engine, OTP planner
  * and response slimming). Planner-specific types live beside each planner in
  * planners/<planner>.types.ts; cross-module contracts live in src/types.
  */
@@ -17,8 +17,6 @@ import type {
 } from "../../types/route";
 import type { RouteIntent } from "../../types/ai";
 import type { TaiwanCityEn } from "../../types/transit";
-import type { ITdxBusStop, ITdxMetroStation } from "../../types";
-import type { ReachableStop } from "./planners/reachable-stops.types";
 
 export type TagWeightMap = Record<string, Record<string, number>>;
 
@@ -85,46 +83,5 @@ export type PlanRouteResult =
       };
     }
   | { ok: false; status: ResponseCode; error: string };
-
-export interface IntermediateStop {
-  name: string;
-  coords: [number, number];
-  stopIdx: number;
-  direction: number;
-}
-
-export interface BoardableRoute {
-  kind: "BUS" | "METRO";
-  routeId: string;
-  railSystem?: string;
-  city: string;
-  originStop: ReachableStop;
-  boardName: string;
-  boardCoords: [number, number];
-  stopSequence: IntermediateStop[];
-}
-
-export interface ServiceableRoute {
-  kind: "BUS" | "METRO";
-  routeId: string;
-  railSystem?: string;
-  city: string;
-  destStop: ReachableStop;
-  boardName: string;
-  boardCoords: [number, number];
-  stopDoc: ITdxBusStop | null;
-  stationDoc: ITdxMetroStation | null;
-}
-
-export interface TransferCombo {
-  originStop: ReachableStop;
-  firstLeg: BoardableRoute;
-  midCoords: [number, number];
-  midName: string;
-  midStop: IntermediateStop;
-  destStop: ReachableStop;
-  lastLeg: ServiceableRoute;
-  transferWalkSec: number;
-}
 
 export type AnyLeg = WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg;

@@ -18,7 +18,7 @@ import { GtfsTrip } from "../../../model/gtfs-trip.model";
 import MetroStationModel from "../../../model/metro-station.model";
 import TrainStationModel from "../../../model/train-station.model";
 import BusStopModel from "../../../model/bus-stop.model";
-import { haversineCoords } from "./ors";
+import { haversineCoords } from "../../../utils/geo";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
 import { walkSpeedMps } from "../scoring";

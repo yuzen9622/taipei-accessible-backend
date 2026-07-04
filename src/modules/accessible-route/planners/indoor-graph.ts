@@ -29,7 +29,7 @@ import { GtfsLevel } from "../../../model/gtfs-level.model";
 import type { IGtfsStop, IGtfsPathway } from "../../../types";
 import type { AccessibilityMode } from "../../../types/route";
 import { equalStopName } from "../../../utils/transit-text";
-import { haversineCoords } from "./ors";
+import { haversineCoords } from "../../../utils/geo";
 import type {
   IndoorStation,
   Edge,
