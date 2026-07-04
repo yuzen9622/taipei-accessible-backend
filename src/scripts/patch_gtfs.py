@@ -209,7 +209,7 @@ def synthesize_stop_rows(trip_id, timetable, key_uids, direction, daily_profiles
         })
     return rows
 
-def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles):
+def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles, route_shape_by_route):
     for route in records:
         route_uid = route.get("RouteUID")
         sub_route_uid = route.get("SubRouteUID")
@@ -303,10 +303,14 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_tr
 
             seen_trips.add(trip_id)
             service_patterns.add(pattern)
+            shape_id = route_shape_by_route.get(matched_id, "")
+            if not shape_id:
+                stats["missing_shape"] += 1
             new_trips.append({
                 "route_id": matched_id,
                 "service_id": service_id_for_pattern(pattern),
                 "trip_id": trip_id,
+                "shape_id": shape_id,
                 "direction_id": str(direction)
             })
             new_stop_times.extend(stop_rows)
@@ -339,6 +343,7 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, start_date):
         # 2. Extract and preserve all non-bus (TRA, THSR, Metro) trips
         kept_trips = []
         kept_trip_ids = set()
+        route_shape_by_route = {}
         if "trips.txt" in zin.namelist():
             with zin.open("trips.txt") as f:
                 text = io.TextIOWrapper(f, encoding="utf-8-sig")
@@ -350,6 +355,8 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, start_date):
                     if route_types.get(route_id) != "3":
                         kept_trips.append(row)
                         kept_trip_ids.add(row["trip_id"])
+                    elif row.get("shape_id") and route_id not in route_shape_by_route:
+                        route_shape_by_route[route_id] = row["shape_id"]
 
         # 3. Extract and preserve all non-bus stop times
         kept_stop_times = []
@@ -396,12 +403,13 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, start_date):
     new_stop_times = []
     seen_trips = set()
     service_patterns = set()
-    stats = {"freq_only": 0, "no_service_day": 0, "dup_trip": 0, "short_trip": 0, "synthesized": 0}
+    stats = {"freq_only": 0, "no_service_day": 0, "dup_trip": 0, "short_trip": 0, "synthesized": 0, "missing_shape": 0}
     daily_profiles = build_daily_profiles(daily_records)
-    process_schedule_records_to_gtfs(schedule_records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles)
+    process_schedule_records_to_gtfs(schedule_records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles, route_shape_by_route)
     print(f"Generated {len(new_trips)} new bus trips and {len(new_stop_times)} new stop times "
           f"({len(service_patterns)} weekly service patterns, valid {cal_start}–{cal_end}; "
-          f"{stats['synthesized']} trips synthesized from daily travel-time profiles).")
+          f"{stats['synthesized']} trips synthesized from daily travel-time profiles; "
+          f"{stats['missing_shape']} trips without original shape_id).")
     print(f"Skipped: {stats['freq_only']} frequency-only subroutes (no StopTimes), "
           f"{stats['no_service_day']} timetables with no service day, "
           f"{stats['dup_trip']} duplicate trips, {stats['short_trip']} trips with < 2 stops and no daily profile.")
