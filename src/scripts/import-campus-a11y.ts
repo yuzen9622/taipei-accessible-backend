@@ -17,6 +17,7 @@ import mongoose from "mongoose";
 import CampusA11yModel from "../model/campus-a11y.model";
 import { ICampusA11y } from "../types";
 import { parseFacilityResultHtml } from "./campus-a11y-parse";
+import { buildAliasNames, buildSearchName } from "../modules/campus/campus.util";
 
 const BASE_URL = "https://cam.moe.gov.tw";
 const USER_AGENT =
@@ -185,6 +186,8 @@ async function main() {
                 coordinates: [parsed.campusGeo.lng, parsed.campusGeo.lat],
               }
             : undefined,
+          searchName: buildSearchName(inst.NAME, branch.NAME),
+          aliasNames: buildAliasNames(inst.NAME),
           importedAt: new Date(),
         });
         facilityTotal += parsed.facilities.length;

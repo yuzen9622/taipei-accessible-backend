@@ -1,22 +1,31 @@
 import { Router } from "express";
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
+  listFacilityTypes,
   nearbyCampus,
+  listSchools,
   listCampus,
-  getCampusByBranchId,
+  getCampusByCampusId,
 } from "./campus.controller";
 import {
   CampusNearbyQuerySchema,
   CampusListQuerySchema,
+  CampusSchoolsQuerySchema,
   CampusParamsSchema,
 } from "./campus.schema";
 
 export function createCampusRouter(): Router {
   const router = Router();
+  router.get("/campus/facility-types", listFacilityTypes);
   router.get(
     "/campus/nearby",
     validateRequest({ query: CampusNearbyQuerySchema }),
     nearbyCampus
+  );
+  router.get(
+    "/campus/schools",
+    validateRequest({ query: CampusSchoolsQuerySchema }),
+    listSchools
   );
   router.get(
     "/campus",
@@ -24,9 +33,9 @@ export function createCampusRouter(): Router {
     listCampus
   );
   router.get(
-    "/campus/:branchId",
+    "/campus/:campusId",
     validateRequest({ params: CampusParamsSchema }),
-    getCampusByBranchId
+    getCampusByCampusId
   );
   return router;
 }

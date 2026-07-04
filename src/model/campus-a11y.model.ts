@@ -27,10 +27,15 @@ const campusA11ySchema = new Schema<ICampusA11y>({
     type: { type: String, enum: ["Point"] },
     coordinates: { type: [Number] },
   },
+  searchName: { type: String },
+  aliasNames: { type: [String], default: [] },
   importedAt: { type: Date, default: Date.now },
 });
 campusA11ySchema.index({ location: "2dsphere" });
-campusA11ySchema.index({ "facilities.facType": 1 });
+campusA11ySchema.index({ "facilities.facTypeId": 1 });
+campusA11ySchema.index({ schoolId: 1 });
+campusA11ySchema.index({ searchName: 1 });
+campusA11ySchema.index({ aliasNames: 1 });
 const CampusA11yModel = model<ICampusA11y>("CampusA11y", campusA11ySchema);
 
 export default CampusA11yModel;

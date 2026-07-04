@@ -21,7 +21,6 @@ import type {
   TraLeg,
 } from "../accessible-route/accessible-route.service";
 import type { TaiwanCityEn } from "../../types/transit";
-import type { ICampusA11y } from "../../types";
 
 export async function findGooglePlaces(args: {
   query: string;
@@ -109,22 +108,13 @@ function clampInt(value: unknown, fallback: number, min: number, max: number): n
   return Math.min(Math.max(Number.isFinite(n) ? n : fallback, min), max);
 }
 
-function campusFacTypeSummary(facilities: ICampusA11y["facilities"]): Record<string, number> {
-  const summary: Record<string, number> = {};
-  for (const facility of facilities ?? []) {
-    if (!facility.facType) continue;
-    summary[facility.facType] = (summary[facility.facType] ?? 0) + 1;
-  }
-  return summary;
-}
-
 export async function findCampusAccessibility(args: {
   query?: string;
   latitude?: number;
   longitude?: number;
   radiusM?: number;
   city?: string;
-  facType?: string;
+  type?: string;
   page?: number;
   limit?: number;
   userLocation?: { latitude: number; longitude: number };
@@ -145,7 +135,7 @@ export async function findCampusAccessibility(args: {
         coordsInput.latitude,
         coordsInput.longitude,
         args.radiusM ?? 1000,
-        args.facType,
+        args.type,
       );
       return JSON.stringify({
         ok: true,
@@ -159,7 +149,7 @@ export async function findCampusAccessibility(args: {
 
     const keywordResult = await campusService.findAll({
       city: args.city,
-      facType: args.facType,
+      type: args.type,
       keyword: args.query,
       page,
       limit,
@@ -191,7 +181,7 @@ export async function findCampusAccessibility(args: {
       coords.latitude,
       coords.longitude,
       args.radiusM ?? 1000,
-      args.facType,
+      args.type,
     );
     return JSON.stringify({
       ok: true,
@@ -208,25 +198,26 @@ export async function findCampusAccessibility(args: {
 }
 
 export async function getCampusAccessibilityDetails(args: {
-  branchId: number;
-  facType?: string;
+  campusId: number;
+  type?: string;
   limit?: number;
 }): Promise<string> {
   try {
-    const campus = await campusService.findByBranchId(args.branchId);
+    const campus = await campusService.findByCampusId(args.campusId);
     if (!campus) {
       return JSON.stringify({ ok: false, error: "查無此校區" });
     }
 
     const limit = clampInt(args.limit, 30, 1, 80);
-    const facilities = args.facType
-      ? campus.facilities.filter((facility) => facility.facType === args.facType)
+    const facilities = args.type
+      ? campus.facilities.filter((facility) => facility.type === args.type)
       : campus.facilities;
 
     return JSON.stringify({
       ok: true,
       campus: {
-        branchId: campus.branchId,
+        campusId: campus.campusId,
+        schoolId: campus.schoolId,
         schoolName: campus.schoolName,
         branchName: campus.branchName,
         city: campus.city,
@@ -235,9 +226,9 @@ export async function getCampusAccessibilityDetails(args: {
         location: campus.location,
         buildingCount: campus.buildingCount,
         facilityCount: campus.facilityCount,
-        facTypeSummary: campusFacTypeSummary(campus.facilities),
+        facTypeSummary: campus.facTypeSummary,
       },
-      filter: { facType: args.facType ?? null },
+      filter: { type: args.type ?? null },
       totalMatchedFacilities: facilities.length,
       facilities: facilities.slice(0, limit),
       truncated: facilities.length > limit,
@@ -942,7 +933,7 @@ export async function executeLocalTool(
         longitude: args.longitude,
         radiusM: args.radiusM,
         city: args.city,
-        facType: args.facType,
+        type: args.type,
         page: args.page,
         limit: args.limit,
         userLocation,
@@ -950,8 +941,8 @@ export async function executeLocalTool(
 
     case "getCampusAccessibilityDetails":
       return getCampusAccessibilityDetails({
-        branchId: args.branchId,
-        facType: args.facType,
+        campusId: args.campusId,
+        type: args.type,
         limit: args.limit,
       });
 

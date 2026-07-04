@@ -105,6 +105,8 @@ export interface ICampusA11y {
   facilityCount: number;
   facilities: ICampusFacility[];
   location?: { type: "Point"; coordinates: [number, number] };
+  searchName?: string;
+  aliasNames?: string[];
   importedAt: Date;
 }
 

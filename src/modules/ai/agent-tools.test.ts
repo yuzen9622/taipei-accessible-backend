@@ -19,7 +19,8 @@ vi.mock("../air/air.service", () => ({
 vi.mock("../campus/campus.service", () => ({
   findNearby: vi.fn(),
   findAll: vi.fn(),
-  findByBranchId: vi.fn(),
+  findByCampusId: vi.fn(),
+  listSchools: vi.fn(),
 }));
 vi.mock("../hazard-report/hazard-report.service", () => ({
   findNearby: vi.fn(),
@@ -82,7 +83,7 @@ const mockGetCoordinates = getCoordinates as unknown as ReturnType<typeof vi.fn>
 const mockFetchEnvironment = fetchEnvironment as unknown as ReturnType<typeof vi.fn>;
 const mockCampusFindNearby = campusService.findNearby as unknown as ReturnType<typeof vi.fn>;
 const mockCampusFindAll = campusService.findAll as unknown as ReturnType<typeof vi.fn>;
-const mockCampusFindByBranchId = campusService.findByBranchId as unknown as ReturnType<typeof vi.fn>;
+const mockCampusFindByCampusId = campusService.findByCampusId as unknown as ReturnType<typeof vi.fn>;
 const mockHazardFindNearby = hazardService.findNearby as unknown as ReturnType<typeof vi.fn>;
 const mockA11yParking = a11yService.findNearbyParking as unknown as ReturnType<typeof vi.fn>;
 const mockPlanRoute = planAccessibleRouteFromRequest as unknown as ReturnType<typeof vi.fn>;
@@ -168,23 +169,23 @@ describe("getEnvironmentInfo", () => {
 // ---------------------------------------------------------------------------
 describe("campus accessibility agent tools", () => {
   const campusSummary = {
-    branchId: -2147483633,
+    campusId: 29,
+    schoolId: 33,
     schoolName: "國立臺灣大學",
     branchName: "校總區",
     city: "臺北市",
     address: "臺北市大安區羅斯福路四段1號",
     buildingCount: 120,
     facilityCount: 680,
-    facTypeSummary: { 無障礙電梯: 24 },
+    facTypeSummary: [{ code: "elevator", label: "無障礙電梯", count: 24 }],
   };
 
   const campusDetail = {
     ...campusSummary,
-    schoolId: 1001,
     phone: "02-33663366",
     facilities: [
-      { facUid: "F1", facType: "無障礙電梯", name: "行政大樓電梯", floors: ["1"], floorIds: ["L1"] },
-      { facUid: "F2", facType: "無障礙廁所", name: "圖書館廁所", floors: ["2"], floorIds: ["L2"] },
+      { facUid: "F1", facTypeId: 8, type: "elevator", facType: "無障礙電梯", name: "行政大樓電梯", floors: ["1"], floorIds: ["L1"] },
+      { facUid: "F2", facTypeId: 6, type: "accessible_toilet", facType: "無障礙廁所", name: "圖書館廁所", floors: ["2"], floorIds: ["L2"] },
     ],
     importedAt: new Date("2026-06-24T00:00:00.000Z"),
   };
@@ -196,14 +197,14 @@ describe("campus accessibility agent tools", () => {
       page: 1,
       totalPages: 1,
     });
-    const raw = await findCampusAccessibility({ query: "臺灣大學", facType: "無障礙電梯" });
+    const raw = await findCampusAccessibility({ query: "臺灣大學", type: "elevator" });
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
     expect(result.mode).toBe("search");
     expect(result.campuses).toHaveLength(1);
     expect(mockCampusFindAll).toHaveBeenCalledWith({
       city: undefined,
-      facType: "無障礙電梯",
+      type: "elevator",
       keyword: "臺灣大學",
       page: 1,
       limit: 5,
@@ -213,13 +214,13 @@ describe("campus accessibility agent tools", () => {
   it("用使用者目前位置查附近校區", async () => {
     mockCampusFindNearby.mockResolvedValue([campusSummary]);
     const raw = await findCampusAccessibility({
-      facType: "無障礙廁所",
+      type: "accessible_toilet",
       userLocation: { latitude: 25.05, longitude: 121.51 },
     });
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
     expect(result.mode).toBe("nearby");
-    expect(mockCampusFindNearby).toHaveBeenCalledWith(25.05, 121.51, 1000, "無障礙廁所");
+    expect(mockCampusFindNearby).toHaveBeenCalledWith(25.05, 121.51, 1000, "accessible_toilet");
   });
 
   it("校名查不到時 geocode 地點後改查附近校區", async () => {
@@ -233,22 +234,24 @@ describe("campus accessibility agent tools", () => {
     expect(mockCampusFindNearby).toHaveBeenCalledWith(25.0478, 121.5171, 1500, undefined);
   });
 
-  it("依 branchId 查校區詳情並可篩選設施類型", async () => {
-    mockCampusFindByBranchId.mockResolvedValue(campusDetail);
+  it("依 campusId 查校區詳情並可篩選設施類型", async () => {
+    mockCampusFindByCampusId.mockResolvedValue(campusDetail);
     const raw = await getCampusAccessibilityDetails({
-      branchId: -2147483633,
-      facType: "無障礙電梯",
+      campusId: 29,
+      type: "elevator",
     });
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
     expect(result.campus.schoolName).toBe("國立臺灣大學");
+    expect(result.campus.campusId).toBe(29);
     expect(result.totalMatchedFacilities).toBe(1);
-    expect(result.facilities[0].facType).toBe("無障礙電梯");
+    expect(result.facilities[0].type).toBe("elevator");
+    expect(mockCampusFindByCampusId).toHaveBeenCalledWith(29);
   });
 
-  it("查無 branchId 時回錯誤", async () => {
-    mockCampusFindByBranchId.mockResolvedValue(null);
-    const raw = await getCampusAccessibilityDetails({ branchId: 123 });
+  it("查無 campusId 時回錯誤", async () => {
+    mockCampusFindByCampusId.mockResolvedValue(null);
+    const raw = await getCampusAccessibilityDetails({ campusId: 123 });
     expect(JSON.parse(raw).ok).toBe(false);
   });
 });
@@ -645,17 +648,19 @@ describe("executeLocalTool dispatches new tools", () => {
   });
 
   it("getCampusAccessibilityDetails 走到正確函式", async () => {
-    mockCampusFindByBranchId.mockResolvedValue({
-      branchId: 1,
+    mockCampusFindByCampusId.mockResolvedValue({
+      campusId: 1,
+      schoolId: 33,
       schoolName: "測試大學",
       branchName: "主校區",
       buildingCount: 1,
       facilityCount: 0,
       facilities: [],
+      facTypeSummary: [],
     });
     const raw = await executeLocalTool(
       "getCampusAccessibilityDetails",
-      { branchId: 1 },
+      { campusId: 1 },
       undefined,
     );
     expect(JSON.parse(raw).ok).toBe(true);
