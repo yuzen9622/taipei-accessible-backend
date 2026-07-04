@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decodeHtmlEntities,
   mercatorToWgs84,
+  parseFacilityDetailHtml,
   parseFacilityResultHtml,
   parseGeoPoint,
 } from "./campus-a11y-parse";
@@ -126,5 +127,48 @@ describe("parseFacilityResultHtml", () => {
     );
     const r = parseFacilityResultHtml(bloated);
     expect(r.facilities).toHaveLength(2);
+  });
+});
+
+const DETAIL_HTML = `
+<div class="fac-detail"
+     data-facility-geo="POINT (13434370.47 2771637.896)"
+     data-building-geo="POLYGON ((13434364 2771689, 13434420 2771667))">
+  <img src="data:image/JPG;base64,${"A".repeat(4000)}">
+  <h2>中正大樓 B2 無障礙電梯</h2>
+  <ul>
+    <li>●機門寬度:90公分</li>
+    <li>●機廂深度:150公分</li>
+    <li>●樓層觸覺裝置:是</li>
+    <li>●按鈕旁點字:是</li>
+  </ul>
+  <button>帶我前往</button><button>關閉</button>
+</div>`;
+
+describe("parseFacilityDetailHtml", () => {
+  it("extracts the facility's own WGS84 coordinate", () => {
+    const { geo } = parseFacilityDetailHtml(DETAIL_HTML);
+    expect(geo).not.toBeNull();
+    expect(geo!.lat).toBeCloseTo(24.149516, 4);
+    expect(geo!.lng).toBeCloseTo(120.683003, 4);
+  });
+
+  it("parses spec bullets into label/value pairs without swallowing button text", () => {
+    const { specs } = parseFacilityDetailHtml(DETAIL_HTML);
+    expect(specs).toEqual([
+      { label: "機門寬度", value: "90公分" },
+      { label: "機廂深度", value: "150公分" },
+      { label: "樓層觸覺裝置", value: "是" },
+      { label: "按鈕旁點字", value: "是" },
+    ]);
+    // the last bullet's value stops at the tag boundary, not "是 帶我前往"
+    expect(specs.at(-1)!.value).toBe("是");
+  });
+
+  it("returns null geo and empty specs when absent, after stripping base64", () => {
+    const html = `<div><img src="data:image/png;base64,${"B".repeat(3000)}"><p>無資料</p></div>`;
+    const r = parseFacilityDetailHtml(html);
+    expect(r.geo).toBeNull();
+    expect(r.specs).toEqual([]);
   });
 });

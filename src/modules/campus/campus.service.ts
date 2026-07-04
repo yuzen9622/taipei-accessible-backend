@@ -43,6 +43,8 @@ export interface CampusFacilityOut {
   buildingUid?: string;
   floors: string[];
   floorIds: string[];
+  location?: { type: "Point"; coordinates: [number, number] };
+  specs?: { label: string; value: string }[];
 }
 
 export interface CampusDetail {
@@ -218,6 +220,8 @@ function toDetail(doc: ICampusA11y): CampusDetail {
       buildingUid: f.buildingUid,
       floors: f.floors,
       floorIds: f.floorIds,
+      location: f.location,
+      specs: f.specs,
     })),
     facTypeSummary: facTypeSummaryOf(doc.facilities ?? []),
     location: doc.location,

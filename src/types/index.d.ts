@@ -90,6 +90,9 @@ export interface ICampusFacility {
   buildingUid?: string;
   floors: string[];
   floorIds: string[];
+  location?: { type: "Point"; coordinates: [number, number] };
+  specs?: { label: string; value: string }[];
+  detailFetchedAt?: Date;
 }
 
 export interface ICampusA11y {

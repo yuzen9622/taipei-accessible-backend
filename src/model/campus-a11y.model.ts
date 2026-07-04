@@ -10,6 +10,15 @@ const facilitySchema = {
   buildingUid: { type: String },
   floors: { type: [String], default: [] },
   floorIds: { type: [String], default: [] },
+  location: {
+    type: { type: String, enum: ["Point"] },
+    coordinates: { type: [Number] },
+  },
+  specs: {
+    type: [{ label: { type: String }, value: { type: String } }],
+    default: [],
+  },
+  detailFetchedAt: { type: Date },
 };
 
 const campusA11ySchema = new Schema<ICampusA11y>({

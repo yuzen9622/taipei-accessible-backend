@@ -32,6 +32,7 @@
         "import:welfare": "npx dotenvx run -- ts-node src/scripts/import-welfare.ts",
         "import:campus-a11y": "npx dotenvx run -- ts-node src/scripts/import-campus-a11y.ts",
         "backfill:campus-search": "npx dotenvx run -- ts-node src/scripts/backfill-campus-search.ts",
+        "import:campus-facility-detail": "npx dotenvx run -- ts-node src/scripts/import-campus-facility-detail.ts",
         "hazard:expire": "npx dotenvx run -- ts-node src/scripts/expire-hazard-reports.ts",
         "import:knowledge": "npx dotenvx run -- ts-node src/scripts/import-knowledge.ts",
         "import:visual-a11y": "npx dotenvx run -- ts-node src/scripts/import-visual-a11y.ts",

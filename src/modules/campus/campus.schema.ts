@@ -123,6 +123,19 @@ const CampusFacilitySchema = z.object({
   buildingUid: z.string().optional().openapi({ example: "B01" }),
   floors: z.array(z.string()).openapi({ example: ["1", "2", "3"] }),
   floorIds: z.array(z.string()).openapi({ example: ["L1", "L2", "L3"] }),
+  location: GeoPointSchema.optional().openapi({
+    description: "設施自身座標（GeoJSON Point，coordinates 為 [lng, lat]）",
+  }),
+  specs: z
+    .array(z.object({ label: z.string(), value: z.string() }))
+    .optional()
+    .openapi({
+      example: [
+        { label: "機門寬度", value: "90公分" },
+        { label: "按鈕旁點字", value: "是" },
+      ],
+      description: "無障礙規格明細（label/value，依設施類型而異）",
+    }),
 });
 
 export const CampusSummarySchema = z

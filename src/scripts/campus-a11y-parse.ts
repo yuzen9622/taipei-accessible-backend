@@ -192,3 +192,41 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
   result.facilities = [...byUid.values()];
   return result;
 }
+
+export interface ParsedFacilityDetail {
+  geo: { lat: number; lng: number } | null;
+  specs: { label: string; value: string }[];
+}
+
+/**
+ * Parses the single-facility detail HTML (POST /Facility/FacilityResult) for
+ * the facility's own coordinate and its accessibility spec bullets. Photos are
+ * base64-inlined (~2 MB) and stripped first.
+ *
+ * Specs render as `●label:value` bullets whose value ends at the next tag or
+ * bullet, so the value class excludes `<` and `●` to avoid swallowing adjacent
+ * button text. Labels are deduplicated, keeping the first occurrence.
+ * @param rawHtml response body of POST /Facility/FacilityResult
+ * @returns facility WGS84 geo (or null) + ordered label/value spec pairs
+ */
+export function parseFacilityDetailHtml(rawHtml: string): ParsedFacilityDetail {
+  const raw = decodeHtmlEntities(
+    rawHtml.replace(/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g, "")
+  );
+
+  const geoMatch = /data-facility-geo="([^"]+)"/.exec(raw);
+  const geo = geoMatch ? parseGeoPoint(geoMatch[1]) : null;
+
+  const specs: { label: string; value: string }[] = [];
+  const seen = new Set<string>();
+  const bulletRe = /●\s*([^：:<●]{1,20}?)\s*[:：]\s*([^<●\n]{1,40})/g;
+  for (let m = bulletRe.exec(raw); m; m = bulletRe.exec(raw)) {
+    const label = m[1].trim();
+    const value = m[2].trim();
+    if (!label || !value || seen.has(label)) continue;
+    seen.add(label);
+    specs.push({ label, value });
+  }
+
+  return { geo, specs };
+}
