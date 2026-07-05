@@ -20,6 +20,7 @@ import type {
   ThsrLeg,
   TraLeg,
 } from "../accessible-route/accessible-route.service";
+import type { DriveLeg } from "../../types/route";
 import type { TaiwanCityEn } from "../../types/transit";
 
 export async function findGooglePlaces(args: {
@@ -240,8 +241,18 @@ export async function getCampusAccessibilityDetails(args: {
 }
 
 function summarizeLeg(
-  leg: WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg,
+  leg: WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg,
 ): Record<string, unknown> {
+  if (leg.type === "DRIVE" || leg.type === "MOTORCYCLE") {
+    return {
+      type: leg.type,
+      distanceM: leg.distanceM,
+      durationMin: leg.durationMin,
+      durationInTrafficMin: leg.durationInTrafficMin ?? null,
+      trafficLevel: leg.trafficLevel ?? null,
+      summary: leg.summary ?? null,
+    };
+  }
   if (leg.type === "WALK") {
     return {
       type: "WALK",

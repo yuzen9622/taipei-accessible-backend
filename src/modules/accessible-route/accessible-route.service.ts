@@ -6,8 +6,11 @@ import { ResponseCode } from "../../types/code";
 import { ERROR_MESSAGE } from "../../constants/messages";
 import type {
   FindAccessibleRoutesOptions,
+  FindDrivingRoutesOptions,
+  LatLng,
   PlanRouteRequest,
   PlanRouteResult,
+  RoadTravelMode,
 } from "./accessible-route.types";
 export type { FindAccessibleRoutesOptions, PlanRouteRequest, PlanRouteResult };
 
@@ -94,11 +97,16 @@ function legDataCoverageRatio(r: AccessibleRoute): number {
       if (leg.departureStopA11y.length || leg.arrivalStopA11y.length)
         withData++;
     } else if (
-      leg.departureStationA11y.length ||
-      leg.arrivalStationA11y.length ||
-      leg.facilityHighlights.length
+      leg.type === "METRO" ||
+      leg.type === "THSR" ||
+      leg.type === "TRA"
     ) {
-      withData++;
+      if (
+        leg.departureStationA11y.length ||
+        leg.arrivalStationA11y.length ||
+        leg.facilityHighlights.length
+      )
+        withData++;
     }
   }
   return withData / r.legs.length;
@@ -222,11 +230,12 @@ function isRouteExcluded(
       if (walkLegHasStairsBarrier(leg)) return true;
       continue;
     }
-    if (leg.type === "BUS") continue;
-    if (leg.facilityHighlights.length > 0) {
-      const text = leg.facilityHighlights.join("|");
-      if (!text.includes("電梯")) return true;
-      if (/電梯[^|]*(維修|故障|暫停)/.test(text)) return true;
+    if (leg.type === "METRO" || leg.type === "THSR" || leg.type === "TRA") {
+      if (leg.facilityHighlights.length > 0) {
+        const text = leg.facilityHighlights.join("|");
+        if (!text.includes("電梯")) return true;
+        if (/電梯[^|]*(維修|故障|暫停)/.test(text)) return true;
+      }
     }
   }
   return false;
@@ -503,6 +512,8 @@ export async function planAccessibleRouteFromRequest(
 ): Promise<PlanRouteResult> {
   let { origin, destination } = body;
   const { query, userLocation, maxTransfers, departureTime, format } = body;
+  const travelMode = body.travelMode ?? "transit";
+  const rawWaypoints = body.waypoints ?? [];
   let mode = body.mode;
 
   let intent: RouteIntent | null = null;
@@ -549,13 +560,20 @@ export async function planAccessibleRouteFromRequest(
   }
 
   const tGeo = Date.now();
-  const [originCoords, destCoords] = await Promise.all([
+  const [originCoords, destCoords, waypointCoords] = await Promise.all([
     typeof origin === "string"
       ? getCoordinates(origin)
       : Promise.resolve(origin as { latitude: number; longitude: number }),
     typeof destination === "string"
       ? getCoordinates(destination)
       : Promise.resolve(destination as { latitude: number; longitude: number }),
+    Promise.all(
+      rawWaypoints.map((w) =>
+        typeof w === "string"
+          ? getCoordinates(w)
+          : Promise.resolve(w as { latitude: number; longitude: number }),
+      ),
+    ),
   ]);
   const geocodeMs = Date.now() - tGeo;
   if (!originCoords || !destCoords) {
@@ -565,6 +583,17 @@ export async function planAccessibleRouteFromRequest(
       error: "無法解析出發地或目的地座標",
     };
   }
+  if (waypointCoords.some((w) => !w)) {
+    return {
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      error: "無法解析中途點座標",
+    };
+  }
+  const waypoints: LatLng[] = waypointCoords.map((w) => ({
+    lat: w!.latitude,
+    lng: w!.longitude,
+  }));
 
   const lat = originCoords.latitude;
   const lng = originCoords.longitude;
@@ -582,83 +611,344 @@ export async function planAccessibleRouteFromRequest(
       ? parsedDeparture
       : undefined;
 
+  const originLatLng: LatLng = { lat, lng };
+  const dest: LatLng = { lat: destCoords.latitude, lng: destCoords.longitude };
+  const waypointsOpt = waypoints.length ? waypoints : undefined;
+
   const tPlan = Date.now();
-  const routes = await findAccessibleRoutes(
-    { lat, lng },
-    { lat: destCoords.latitude, lng: destCoords.longitude },
-    city,
-    {
+  let routes: AccessibleRoute[];
+
+  if (travelMode === "transit") {
+    routes = await findAccessibleRoutes(originLatLng, dest, city, {
       mode: mode ?? "normal",
       maxTransfers: (maxTransfers ?? 2) as 0 | 1 | 2,
       departureTime: futureDeparture,
       format: format === "compact" ? "compact" : "standard",
-    },
-  );
-  console.log(
-    "[route-timing] request",
-    JSON.stringify({
-      geocode: geocodeMs,
-      city: cityMs,
-      plan: Date.now() - tPlan,
-    }),
-  );
-
-  if (!routes.length) {
-    const { isOtpCircuitOpen } = await import("./planners/otp-routing");
-    if (isOtpCircuitOpen()) {
+      waypoints: waypointsOpt,
+    });
+    console.log(
+      "[route-timing] request",
+      JSON.stringify({ geocode: geocodeMs, city: cityMs, plan: Date.now() - tPlan }),
+    );
+    if (!routes.length) {
+      const { isOtpCircuitOpen } = await import("./planners/otp-routing");
+      if (isOtpCircuitOpen()) {
+        return {
+          ok: false,
+          status: ResponseCode.SERVICE_UNAVAILABLE,
+          error: "路線規劃服務暫時忙線，請稍後再試",
+        };
+      }
+      return {
+        ok: false,
+        status: ResponseCode.NOT_FOUND,
+        error:
+          "找不到連通的公車或捷運路線，請嘗試擴大搜尋範圍或確認出發地/目的地",
+      };
+    }
+  } else {
+    const outcome = await findDrivingRoutes(originLatLng, dest, {
+      travelMode,
+      waypoints: waypointsOpt,
+      departureTime: futureDeparture,
+    });
+    console.log(
+      "[route-timing] request",
+      JSON.stringify({ geocode: geocodeMs, city: cityMs, plan: Date.now() - tPlan }),
+    );
+    if (outcome.kind === "unavailable") {
       return {
         ok: false,
         status: ResponseCode.SERVICE_UNAVAILABLE,
         error: "路線規劃服務暫時忙線，請稍後再試",
       };
     }
-    return {
-      ok: false,
-      status: ResponseCode.NOT_FOUND,
-      error:
-        "找不到連通的公車或捷運路線，請嘗試擴大搜尋範圍或確認出發地/目的地",
-    };
+    if (outcome.kind === "error") {
+      return {
+        ok: false,
+        status: ResponseCode.INTERNAL_ERROR,
+        error: "路線規劃失敗，請稍後再試",
+      };
+    }
+    if (outcome.kind === "empty") {
+      return {
+        ok: false,
+        status: ResponseCode.NOT_FOUND,
+        error: "找不到可行的行車或步行路線，請確認出發地與目的地",
+      };
+    }
+    routes = outcome.routes;
   }
 
   return {
     ok: true,
     data: {
-      origin: { lat, lng },
-      destination: { lat: destCoords.latitude, lng: destCoords.longitude },
+      origin: originLatLng,
+      destination: dest,
       city,
+      travelMode,
+      ...(waypoints.length ? { waypoints } : {}),
       routes,
       ...(intent ? { intent } : {}),
     },
   };
 }
 
+/** Sum of road/walk leg distances (metres) — driving routes only. */
+function driveTotalDistanceM(r: AccessibleRoute): number {
+  return r.legs.reduce((sum, leg) => {
+    if (leg.type === "WALK" || leg.type === "DRIVE" || leg.type === "MOTORCYCLE")
+      return sum + leg.distanceM;
+    return sum;
+  }, 0);
+}
+
+/** Drop near-identical Google alternatives (same rounded time + distance). */
+function dedupeDrivingRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
+  const seen = new Set<string>();
+  const out: AccessibleRoute[] = [];
+  for (const r of routes) {
+    const key = `${Math.round(r.totalMinutes)}|${Math.round(
+      driveTotalDistanceM(r) / 50,
+    )}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+
+/**
+ * Lightweight a11y hook for non-transit routes (best-effort): attach a nearby
+ * disabled-parking count at the destination for drive/motorcycle, or nearby
+ * elevator/ramp count for walk. Never throws.
+ *
+ * @param routes Ranked routes to annotate in place.
+ * @param travelMode Road travel mode driving which hook runs.
+ * @param destination Journey destination.
+ */
+async function attachDrivingA11yHighlights(
+  routes: AccessibleRoute[],
+  travelMode: RoadTravelMode,
+  destination: LatLng,
+): Promise<void> {
+  if (!routes.length) return;
+  if (travelMode === "walk") {
+    const { findNearby } = await import("../a11y/a11y.service");
+    const near = await findNearby(destination.lat, destination.lng, 200);
+    const structures = (near.nearbyOsm ?? []).filter(
+      (p) => p.category === "elevator" || p.category === "ramp",
+    );
+    if (structures.length) {
+      const hl = `目的地附近有 ${structures.length} 處電梯／坡道`;
+      for (const r of routes) r.accessibilityHighlights = [hl];
+    }
+    return;
+  }
+  const { findNearbyParking } = await import("../a11y/a11y.service");
+  const parking = await findNearbyParking(destination.lat, destination.lng, 300);
+  if (parking.length) {
+    const hl = `目的地 300m 內有 ${parking.length} 處身障停車格`;
+    for (const r of routes) r.accessibilityHighlights = [hl];
+  }
+}
+
+/**
+ * Finalize Google-planned (non-transit) routes: dedupe near-identical
+ * alternatives, rank by time then distance, keep top 3, attach the lightweight
+ * a11y highlight. The transit scoring/overlay pipeline does not apply here.
+ *
+ * @param routes Mapped Google routes.
+ * @param travelMode Road travel mode.
+ * @param destination Journey destination (for the a11y hook).
+ * @returns The top-3 finalized routes.
+ */
+async function finalizeDrivingRoutes(
+  routes: AccessibleRoute[],
+  travelMode: RoadTravelMode,
+  destination: LatLng,
+): Promise<AccessibleRoute[]> {
+  const ranked = dedupeDrivingRoutes(routes)
+    .sort(
+      (a, b) =>
+        a.totalMinutes - b.totalMinutes ||
+        driveTotalDistanceM(a) - driveTotalDistanceM(b),
+    )
+    .slice(0, 3);
+  try {
+    await attachDrivingA11yHighlights(ranked, travelMode, destination);
+  } catch (err) {
+    console.warn("[accessible-route] driving a11y hook failed", err);
+  }
+  return ranked;
+}
+
+type DrivingOutcome =
+  | { kind: "ok"; routes: AccessibleRoute[] }
+  | { kind: "unavailable" }
+  | { kind: "empty" }
+  | { kind: "error" };
+
+/**
+ * Plan + finalize a drive/motorcycle/walk route via the Google Routes API.
+ *
+ * @param origin Journey origin.
+ * @param destination Journey destination.
+ * @param opts Road travel mode, optional waypoints, optional departure time.
+ * @returns An outcome distinguishing ok / no-route / upstream-down / error.
+ */
+async function findDrivingRoutes(
+  origin: LatLng,
+  destination: LatLng,
+  opts: FindDrivingRoutesOptions,
+): Promise<DrivingOutcome> {
+  const { planGoogleRoute, GoogleRoutingError } = await import(
+    "./planners/google-routing"
+  );
+  let raw: AccessibleRoute[];
+  try {
+    raw = await planGoogleRoute(origin, destination, {
+      travelMode: opts.travelMode,
+      waypoints: opts.waypoints,
+      departureTime: opts.departureTime,
+    });
+  } catch (err) {
+    if (err instanceof GoogleRoutingError) return { kind: "unavailable" };
+    console.error("[accessible-route] google routing failed", err);
+    return { kind: "error" };
+  }
+  if (!raw.length) return { kind: "empty" };
+  const routes = await finalizeDrivingRoutes(raw, opts.travelMode, destination);
+  return routes.length ? { kind: "ok", routes } : { kind: "empty" };
+}
+
+/**
+ * Concatenate per-segment transit routes into one combined route (legs joined
+ * in order; minutes and transfers summed).
+ *
+ * @param segments The best route for each origin→wp→…→dest segment.
+ * @returns The combined route.
+ */
+/**
+ * Collapse consecutive WALK legs into one — removes the double-walk seam left
+ * at each waypoint (arrive-at-waypoint walk + depart-waypoint walk). Distances
+ * and times sum; polylines concatenate (prev's end == waypoint == next's start,
+ * so the merged line still passes through the waypoint). Waypoint positions are
+ * surfaced separately on the response `data.waypoints`, so no marker is lost.
+ *
+ * @param legs Concatenated legs.
+ * @returns Legs with adjacent WALK legs merged.
+ */
+function mergeAdjacentWalkLegs(
+  legs: AccessibleRoute["legs"],
+): AccessibleRoute["legs"] {
+  const out: AccessibleRoute["legs"] = [];
+  for (const leg of legs) {
+    const prev = out[out.length - 1];
+    if (prev && prev.type === "WALK" && leg.type === "WALK") {
+      out[out.length - 1] = {
+        type: "WALK",
+        from: prev.from,
+        to: leg.to,
+        distanceM: prev.distanceM + leg.distanceM,
+        minutesEst: prev.minutesEst + leg.minutesEst,
+        polyline: [...prev.polyline, ...leg.polyline],
+        a11yFacilities: [...prev.a11yFacilities, ...leg.a11yFacilities],
+        ...(prev.exitInfo || leg.exitInfo
+          ? { exitInfo: prev.exitInfo ?? leg.exitInfo }
+          : {}),
+        ...(prev.steps || leg.steps
+          ? { steps: [...(prev.steps ?? []), ...(leg.steps ?? [])] }
+          : {}),
+        ...(prev.a11yRefs || leg.a11yRefs
+          ? { a11yRefs: [...(prev.a11yRefs ?? []), ...(leg.a11yRefs ?? [])] }
+          : {}),
+      };
+    } else {
+      out.push(leg);
+    }
+  }
+  return out;
+}
+
+function combineSegments(segments: AccessibleRoute[]): AccessibleRoute {
+  return {
+    routeId: `combined-${segments.map((s) => s.routeId).join("-")}`,
+    routeName: segments.map((s) => s.routeName).join(" → "),
+    totalMinutes: segments.reduce((sum, s) => sum + s.totalMinutes, 0),
+    transferCount: segments.reduce((sum, s) => sum + s.transferCount, 0),
+    legs: mergeAdjacentWalkLegs(segments.flatMap((s) => s.legs)),
+    accessibilityHighlights: segments.flatMap((s) => s.accessibilityHighlights),
+  };
+}
+
 export async function findAccessibleRoutes(
-  origin: { lat: number; lng: number },
-  destination: { lat: number; lng: number },
+  origin: LatLng,
+  destination: LatLng,
   _city: TaiwanCityEn,
   opts: FindAccessibleRoutesOptions = {},
 ): Promise<AccessibleRoute[]> {
   const mode = opts.mode ?? "normal";
   const maxTransfers = opts.maxTransfers ?? 1;
-  const planT: Record<string, number> = {};
+  const waypoints = opts.waypoints ?? [];
+  const { planOtpRoute } = await import("./planners/otp-routing");
   const t0 = Date.now();
 
-  const otpRoutes = await import("./planners/otp-routing")
-    .then((m) =>
-      m.planOtpRoute(origin, destination, {
-        maxTransfers,
-        mode,
-        departureTime: opts.departureTime,
-      }),
-    )
-    .catch((): AccessibleRoute[] => []);
+  if (!waypoints.length) {
+    const otpRoutes = await planOtpRoute(origin, destination, {
+      maxTransfers,
+      mode,
+      departureTime: opts.departureTime,
+    }).catch((): AccessibleRoute[] => []);
+    console.log(
+      "[route-timing] planners",
+      JSON.stringify({ otp: Date.now() - t0 }),
+    );
+    if (!otpRoutes.length) return [];
+    return finalizeRoutes(
+      otpRoutes,
+      origin,
+      destination,
+      mode,
+      opts.format,
+      opts.departureTime,
+    );
+  }
 
-  planT.otp = Date.now() - t0;
-  console.log("[route-timing] planners", JSON.stringify(planT));
-  if (!otpRoutes.length) return [];
-
+  // Multi-waypoint transit: plan each origin→wp→…→dest segment sequentially,
+  // propagating time — each segment departs when the previous one arrives, so
+  // later-segment transit schedules line up with the traveller's real arrival.
+  // Remaining accepted limitations: double WALK seams at each waypoint, and no
+  // cross-segment global optimization (each segment takes its own best).
+  const points: LatLng[] = [origin, ...waypoints, destination];
+  const segmentPairs: [LatLng, LatLng][] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    segmentPairs.push([points[i], points[i + 1]]);
+  }
+  let cursor = opts.departureTime ?? new Date();
+  const segments: AccessibleRoute[] = [];
+  for (const [from, to] of segmentPairs) {
+    const res = await planOtpRoute(from, to, {
+      maxTransfers,
+      mode,
+      departureTime: cursor,
+      limit: 1,
+    }).catch((): AccessibleRoute[] => []);
+    if (!res.length) return [];
+    const best = res[0];
+    segments.push(best);
+    cursor = new Date(cursor.getTime() + best.totalMinutes * 60_000);
+  }
+  console.log(
+    "[route-timing] planners",
+    JSON.stringify({
+      otpSegments: Date.now() - t0,
+      segments: segmentPairs.length,
+    }),
+  );
+  const combined = combineSegments(segments);
   return finalizeRoutes(
-    otpRoutes,
+    [combined],
     origin,
     destination,
     mode,

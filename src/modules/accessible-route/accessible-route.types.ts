@@ -9,11 +9,13 @@ import type { ResponseCode } from "../../types/code";
 import type {
   AccessibilityMode,
   AccessibleRoute,
+  TravelMode,
   WalkLeg,
   BusLeg,
   MetroLeg,
   ThsrLeg,
   TraLeg,
+  DriveLeg,
 } from "../../types/route";
 import type { RouteIntent } from "../../types/ai";
 import type { TaiwanCityEn } from "../../types/transit";
@@ -53,11 +55,29 @@ export interface RouteAccessibilityScore {
   };
 }
 
+export type LatLng = { lat: number; lng: number };
+
+/** Transport modes served by the Google Routes API path (not OTP transit). */
+export type RoadTravelMode = Exclude<TravelMode, "transit">;
+
 export interface FindAccessibleRoutesOptions {
   mode?: AccessibilityMode;
   maxTransfers?: 0 | 1 | 2;
   departureTime?: Date;
   format?: "standard" | "compact";
+  waypoints?: LatLng[];
+}
+
+export interface PlanGoogleRouteOptions {
+  travelMode: RoadTravelMode;
+  waypoints?: LatLng[];
+  departureTime?: Date;
+}
+
+export interface FindDrivingRoutesOptions {
+  travelMode: RoadTravelMode;
+  waypoints?: LatLng[];
+  departureTime?: Date;
 }
 
 export interface PlanRouteRequest {
@@ -69,6 +89,8 @@ export interface PlanRouteRequest {
   departureTime?: string;
   format?: string;
   mode?: RouteIntent["mode"];
+  travelMode?: TravelMode;
+  waypoints?: (string | { latitude: number; longitude: number })[];
 }
 
 export type PlanRouteResult =
@@ -78,10 +100,12 @@ export type PlanRouteResult =
         origin: { lat: number; lng: number };
         destination: { lat: number; lng: number };
         city: TaiwanCityEn;
+        travelMode: TravelMode;
+        waypoints?: LatLng[];
         routes: AccessibleRoute[];
         intent?: RouteIntent;
       };
     }
   | { ok: false; status: ResponseCode; error: string };
 
-export type AnyLeg = WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg;
+export type AnyLeg = WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg;

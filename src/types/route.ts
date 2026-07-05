@@ -15,6 +15,12 @@ export type AccessibilityMode =
   | "visual_impaired"
   | "normal";
 
+/**
+ * Transport mode requested by the client — orthogonal to AccessibilityMode.
+ * "transit" plans via OTP (bus/metro/rail); the rest plan via Google Routes API.
+ */
+export type TravelMode = "transit" | "drive" | "motorcycle" | "walk";
+
 export interface SlimA11y {
   osmId: string;
   category: IOsmA11y["category"];
@@ -150,12 +156,39 @@ export interface TraLeg {
   intermediateStops?: IntermediateStop[];
 }
 
+export interface DriveStep {
+  instruction: string;
+  distanceM: number;
+  durationMin: number;
+  polyline: [number, number][];
+  maneuver?: string;
+}
+
+/**
+ * A road-driving leg (car or motorcycle) produced by the Google Routes API.
+ * `durationMin` is free-flow (staticDuration); `durationInTrafficMin` is the
+ * traffic-aware estimate when a future departure time was supplied.
+ */
+export interface DriveLeg {
+  type: "DRIVE" | "MOTORCYCLE";
+  from: { lat: number; lng: number };
+  to: { lat: number; lng: number };
+  distanceM: number;
+  durationMin: number;
+  durationInTrafficMin?: number;
+  trafficLevel?: "light" | "moderate" | "heavy";
+  summary?: string;
+  polyline: [number, number][];
+  steps?: DriveStep[];
+  modeFallback?: "DRIVE";
+}
+
 export interface AccessibleRoute {
   routeId: string;
   routeName: string;
   totalMinutes: number;
   transferCount: number;
-  legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[];
+  legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg)[];
   accessibilityHighlights: string[];
   departureDate?: string;
   facilities?: Record<string, SlimA11y>;

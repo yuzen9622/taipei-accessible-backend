@@ -80,6 +80,23 @@ export const AccessibleRouteBodySchema = z
           "回應格式。standard（預設）每段內嵌精簡設施物件；compact 另將設施去重為路線層級 facilities 字典，各段改帶 a11yRefs（osmId 參照）且設施陣列為空。",
         example: "standard",
       }),
+    travelMode: z
+      .enum(["transit", "drive", "motorcycle", "walk"])
+      .default("transit")
+      .openapi({
+        description:
+          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸，走 OTP 規劃）、drive（開車）、motorcycle（騎車）、walk（步行）；開車／騎車／步行走 Google Routes API，可依 departureTime 推算塞車。",
+        example: "drive",
+      }),
+    waypoints: z
+      .array(PointSchema)
+      .max(5)
+      .optional()
+      .openapi({
+        description:
+          "依序經過的中途點（新增目的地），最多 5 個；字串會被地理編碼。適用所有交通工具（大眾運輸以分段串接規劃）。",
+        example: ["中正紀念堂"],
+      }),
   })
   .strict()
   .refine((b) => (b.origin && b.destination) || b.query, {
@@ -342,6 +359,65 @@ const TraLegSchema = z
   })
   .openapi("TraLeg");
 
+const DriveStepSchema = z
+  .object({
+    instruction: z.string().openapi({ example: "沿信義路四段向西行駛" }),
+    distanceM: z.number().openapi({ example: 240 }),
+    durationMin: z.number().openapi({ example: 1 }),
+    polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
+      example: [
+        [121.567, 25.041],
+        [121.564, 25.04],
+      ],
+    }),
+    maneuver: z.string().optional().openapi({ example: "TURN_LEFT" }),
+  })
+  .openapi("DriveStep");
+
+const DriveLegSchema = z
+  .object({
+    type: z.literal("DRIVE").openapi({ example: "DRIVE" }),
+    from: CoordSchema.openapi({ example: { lat: 25.041, lng: 121.567 } }),
+    to: CoordSchema.openapi({ example: { lat: 25.034, lng: 121.564 } }),
+    distanceM: z.number().openapi({ example: 5200 }),
+    durationMin: z.number().openapi({
+      example: 14,
+      description: "自由流行駛時間（Routes API staticDuration）",
+    }),
+    durationInTrafficMin: z.number().optional().openapi({
+      example: 21,
+      description:
+        "交通感知行駛時間（Routes API duration，帶未來 departureTime 時的塞車預測）",
+    }),
+    trafficLevel: z
+      .enum(["light", "moderate", "heavy"])
+      .optional()
+      .openapi({ example: "heavy", description: "由塞車/自由流時間比值推導" }),
+    summary: z
+      .string()
+      .optional()
+      .openapi({ example: "建國高架道路", description: "主要行經道路" }),
+    polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
+      example: [
+        [121.567, 25.041],
+        [121.564, 25.034],
+      ],
+    }),
+    steps: z.array(DriveStepSchema).optional(),
+    modeFallback: z
+      .literal("DRIVE")
+      .optional()
+      .openapi({
+        description:
+          "僅騎車模式：該地區不支援 TWO_WHEELER 時，改用開車路線的標記",
+      }),
+  })
+  .openapi("DriveLeg");
+
+const MotorcycleLegSchema = DriveLegSchema.extend({
+  type: z.literal("MOTORCYCLE").openapi({ example: "MOTORCYCLE" }),
+}).openapi("MotorcycleLeg");
+
 const ScoreComponentsSchema = z
   .object({
     facilityScore: z.number().openapi({
@@ -382,9 +458,11 @@ const AccessibleRouteSchema = z
           MetroLegSchema,
           ThsrLegSchema,
           TraLegSchema,
+          DriveLegSchema,
+          MotorcycleLegSchema,
         ]),
       )
-      .openapi({ description: "依序的路段：步行 → 大眾運輸 → 步行；運輸段類型為 BUS、METRO、THSR 或 TRA。" }),
+      .openapi({ description: "依序的路段：步行 → 大眾運輸 → 步行；運輸段類型為 BUS、METRO、THSR、TRA；開車／騎車路線為 DRIVE／MOTORCYCLE。" }),
     accessibilityHighlights: z
       .array(z.string())
       .openapi({ example: ["全程低地板公車", "出入口設有電梯"] }),
@@ -445,6 +523,14 @@ const AccessibleRouteDataSchema = z
       example: { lat: 25.034, lng: 121.564 },
     }),
     city: z.string().openapi({ example: "Taipei" }),
+    travelMode: z
+      .enum(["transit", "drive", "motorcycle", "walk"])
+      .optional()
+      .openapi({ example: "drive", description: "本次規劃使用的交通工具" }),
+    waypoints: z
+      .array(CoordSchema)
+      .optional()
+      .openapi({ description: "解析後的中途點座標（依序）" }),
     routes: z.array(AccessibleRouteSchema),
     intent: RouteIntentSchema.optional().openapi({
       description:
@@ -483,7 +569,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間無障礙路線，並行搜尋公車、捷運、高鐵與台鐵，回傳最多 3 筆。",
+    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵；drive／motorcycle／walk 走 Google Routes API（開車／騎車可依 departureTime 推算塞車）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。",
   request: {
     body: {
       content: { "application/json": { schema: AccessibleRouteBodySchema } },
@@ -503,11 +589,16 @@ registry.registerPath({
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
-      description: "查無相連的公車、捷運、高鐵或台鐵路線",
+      description: "查無相連的路線（大眾運輸各段無解或行車路線無法規劃）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
       description: "伺服器錯誤",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    503: {
+      description:
+        "路線規劃服務暫時忙線（OTP 斷路器開啟或 Google Routes API 上游錯誤）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
