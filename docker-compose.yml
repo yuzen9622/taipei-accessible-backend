@@ -18,6 +18,9 @@ services:
     environment:
       OTP_BASE_URL: http://otp:8080
       DATABASE_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin
+      # .env's CHROMA_URL is host-centric (localhost:8100); inside the container
+      # localhost is the container itself, so reach the chroma service by name.
+      CHROMA_URL: http://chroma:8000
       # .env's GCS_KEY_FILE is a host path; mount it (below) and point the
       # container at the in-container path so GCS auth works inside Docker.
       GCS_KEY_FILE: /secrets/gcs-key.json
