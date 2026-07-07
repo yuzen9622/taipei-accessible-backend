@@ -35,7 +35,7 @@ export async function searchKnowledge(
   query: string,
   topK = 3,
 ): Promise<KnowledgeResult[]> {
-  const queryEmbedding = await embedText(query);
+  const queryEmbedding = await embedText(query, "RETRIEVAL_QUERY");
   const collection = await getCollection();
   const results = await queryDocuments(collection, queryEmbedding, topK);
 
@@ -58,7 +58,7 @@ export async function ingestKnowledge(params: {
   category: string;
   title?: string;
 }): Promise<void> {
-  const embedding = await embedText(params.content);
+  const embedding = await embedText(params.content, "RETRIEVAL_DOCUMENT");
   const collection = await getCollection();
   await upsertDocuments(collection, [
     {
@@ -92,7 +92,11 @@ export async function ingestKnowledgeBatch(
     const batch = chunks.slice(i, i + BATCH_SIZE);
     // Sequential embedding (via embedBatch) avoids a concurrent request burst that
     // trips the embedding model's per-minute quota; each call self-throttles on 429.
-    const embeddings = await embedBatch(batch.map((c) => c.content));
+    // RETRIEVAL_DOCUMENT is the official task type for indexed RAG documents.
+    const embeddings = await embedBatch(
+      batch.map((c) => c.content),
+      "RETRIEVAL_DOCUMENT",
+    );
     await upsertDocuments(
       collection,
       batch.map((c, idx) => ({

@@ -1,6 +1,6 @@
 import { googleGenAi } from "../config/ai";
 
-const EMBEDDING_MODEL = "gemini-embedding-2";
+const EMBEDDING_MODEL = "gemini-embedding-001";
 const MAX_EMBED_ATTEMPTS = 6;
 const MAX_BACKOFF_MS = 60_000;
 
@@ -23,15 +23,22 @@ function retryHintMs(err: unknown): number | null {
 
 /**
  * @param text The text to embed.
+ * @param taskType Optional Gemini embedding task type (e.g. "RETRIEVAL_DOCUMENT"
+ *   for indexed documents, "RETRIEVAL_QUERY" for search queries). Only
+ *   gemini-embedding-001 applies it; omit for generic embeddings.
  * @returns A 3072-dimension embedding vector.
  */
-export async function embedText(text: string): Promise<number[]> {
+export async function embedText(
+  text: string,
+  taskType?: string,
+): Promise<number[]> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_EMBED_ATTEMPTS; attempt += 1) {
     try {
       const result = await googleGenAi.models.embedContent({
         model: EMBEDDING_MODEL,
         contents: text,
+        ...(taskType ? { config: { taskType } } : {}),
       });
       return result.embeddings![0].values!;
     } catch (err) {
@@ -50,12 +57,16 @@ export async function embedText(text: string): Promise<number[]> {
 
 /**
  * @param texts Array of texts to embed in batch.
+ * @param taskType Optional Gemini embedding task type applied to every text.
  * @returns Array of 3072-dimension embedding vectors, one per input text.
  */
-export async function embedBatch(texts: string[]): Promise<number[][]> {
+export async function embedBatch(
+  texts: string[],
+  taskType?: string,
+): Promise<number[][]> {
   const results: number[][] = [];
   for (const text of texts) {
-    results.push(await embedText(text));
+    results.push(await embedText(text, taskType));
   }
   return results;
 }
