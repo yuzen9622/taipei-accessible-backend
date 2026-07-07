@@ -1,4 +1,4 @@
-import { embedText } from "../../adapters/embedding.adapter";
+import { embedText, embedBatch } from "../../adapters/embedding.adapter";
 import {
   getOrCreateCollection,
   queryDocuments,
@@ -90,9 +90,9 @@ export async function ingestKnowledgeBatch(
   const BATCH_SIZE = 50;
   for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
     const batch = chunks.slice(i, i + BATCH_SIZE);
-    const embeddings = await Promise.all(
-      batch.map((c) => embedText(c.content)),
-    );
+    // Sequential embedding (via embedBatch) avoids a concurrent request burst that
+    // trips the embedding model's per-minute quota; each call self-throttles on 429.
+    const embeddings = await embedBatch(batch.map((c) => c.content));
     await upsertDocuments(
       collection,
       batch.map((c, idx) => ({
