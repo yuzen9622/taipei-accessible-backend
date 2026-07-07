@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { googleGenAi, model } from "../../config/ai";
+import { model } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
@@ -51,7 +51,6 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   const {
     messages: rawMessages,
     stream,
-    temperature,
     userLocation,
   } = req.body as {
     model?: string;
@@ -61,7 +60,6 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     userLocation?: { latitude: number; longitude: number };
   };
 
-  const useTemp = temperature ?? 0.2;
   const authUser = resolveAuthUser(req);
   const userId = authUser ? String(authUser._id) : undefined;
   const latestText = latestUserText(rawMessages);
@@ -118,24 +116,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
         explicitMemoryRequest,
       );
 
-      if (loopResult.text) {
-        sendSse(res, "token", { text: loopResult.text });
-        res.write("event: done\ndata: done\n\n");
-        res.end();
-        return;
-      }
-
-      const finalStream = await googleGenAi.models.generateContentStream({
-        model,
-        contents,
-        config: { systemInstruction, temperature: useTemp },
-      });
-
-      for await (const chunk of finalStream) {
-        const text = chunk.text;
-        if (text) sendSse(res, "token", { text });
-      }
-
+      sendSse(res, "token", { text: loopResult.text ?? "" });
       res.write("event: done\ndata: done\n\n");
       res.end();
     } catch (error: any) {
@@ -164,16 +145,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       explicitMemoryRequest,
     );
 
-    const response = loopResult.text
-      ? { text: loopResult.text, usageMetadata: undefined }
-      : await googleGenAi.models.generateContent({
-          model,
-          contents,
-          config: { systemInstruction, temperature: useTemp },
-        });
-
-    const text = response.text ?? "";
-    const usage = response.usageMetadata;
+    const text = loopResult.text ?? "";
     sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, {
       id: `chatcmpl-${Date.now().toString(36)}`,
       object: "chat.completion",
@@ -187,9 +159,9 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
         },
       ],
       usage: {
-        prompt_tokens: usage?.promptTokenCount ?? 0,
-        completion_tokens: usage?.candidatesTokenCount ?? 0,
-        total_tokens: usage?.totalTokenCount ?? 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
       },
     });
   } catch (error: any) {

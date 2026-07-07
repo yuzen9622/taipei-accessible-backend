@@ -41,6 +41,31 @@ function buildRoutingConfig(
   };
 }
 
+/**
+ * The final-answer generate config. Identical to `buildRoutingConfig` except
+ * function calling is disabled (`mode: NONE`), so the model must emit text. The
+ * tool catalogue is still declared so the model's thought signatures round-trip
+ * exactly as they did on the routing rounds — the same reason `runToolLoop`
+ * pushes the model's content back verbatim.
+ *
+ * @param systemInstruction System prompt for the final round
+ * @param tools The Gemini tool catalogue (declared but not callable)
+ * @returns The GenerateContentConfig used to force the final text answer
+ */
+function buildFinalConfig(
+  systemInstruction: string | undefined,
+  tools: Tool[],
+): GenerateContentConfig {
+  return {
+    systemInstruction,
+    tools,
+    toolConfig: {
+      functionCallingConfig: { mode: FunctionCallingConfigMode.NONE },
+    },
+    temperature: 0,
+  };
+}
+
 function stableCacheKey(name: string, args: Record<string, unknown>): string {
   const sorted = Object.keys(args)
     .sort()
@@ -154,6 +179,11 @@ export function toGeminiHistory(
  * @param onToolResult Hook invoked with a tool's parsed result
  * @param userId Authenticated user id.
  * @param memoryEnabled Enables memory tools when userId is present.
+ * @param execTool Tool executor, injectable for offline eval; defaults to the
+ *   real `executeLocalTool`.
+ * @returns The model's final text answer. Always resolves with a `text` field
+ *   (possibly empty); never returns without one, so callers never need a
+ *   divergent fallback generation.
  */
 export async function runToolLoop(
   contents: Content[],
@@ -166,6 +196,7 @@ export async function runToolLoop(
   memoryToolsEnabled = false,
   allowMemoryWrite = false,
   explicitMemoryRequest = false,
+  execTool: typeof executeLocalTool = executeLocalTool,
 ): Promise<RunToolLoopResult> {
   const MAX_ROUNDS = 5;
   const toolCache = new Map<string, string>();
@@ -180,7 +211,9 @@ export async function runToolLoop(
 
     const calls = response.functionCalls;
     if (!calls?.length) {
-      return { text: response.text ?? "" };
+      const text = response.text ?? "";
+      if (text) return { text };
+      break;
     }
 
     const modelContent = response.candidates?.[0]?.content;
@@ -198,7 +231,7 @@ export async function runToolLoop(
       if (toolCache.has(cacheKey)) {
         resultStr = toolCache.get(cacheKey)!;
       } else {
-        resultStr = await executeLocalTool(name, args, userLocation, userId, {
+        resultStr = await execTool(name, args, userLocation, userId, {
           allowMemoryWrite,
           explicitMemoryRequest,
         });
@@ -226,7 +259,12 @@ export async function runToolLoop(
     contents.push({ role: "user", parts: responseParts });
   }
 
-  return {};
+  const finalResp = await googleGenAi.models.generateContent({
+    model: useModel,
+    contents,
+    config: buildFinalConfig(systemInstruction, tools),
+  });
+  return { text: finalResp.text ?? "" };
 }
 
 export interface RouteOnceResult {

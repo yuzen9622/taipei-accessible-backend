@@ -9,9 +9,10 @@
  */
 import fs from "fs";
 import path from "path";
+import type { Content } from "@google/genai";
 import { model } from "../config/ai";
 import { CHAT_SYSTEM_PROMPT, withUserLocation } from "../config/ai/chat-prompt";
-import { routeOnce } from "../modules/ai/ai-chat.service";
+import { routeOnce, runToolLoop } from "../modules/ai/ai-chat.service";
 import { agentCases, type AgentCase } from "./agent-cases";
 
 const N = Number(process.env.EVAL_RUNS ?? 3);
@@ -70,6 +71,96 @@ function pad(s: string, n: number): string {
   return s.length >= n ? s : s + " ".repeat(n - s.length);
 }
 
+/**
+ * V1b — composite-bus full-loop acceptance. Runs the REAL model through the
+ * whole `runToolLoop` for「從中科大…哪班最快來」, but injects a canned tool
+ * executor (no DB / TDX / Google) so it stays deterministic and quota-free.
+ * Kills the reported symptom: the model must not stop at `planAccessibleRoute`
+ * — the full call sequence must reach a bus-ETA/timetable tool, must never call
+ * `getNavInstructions`, and the final text must be bus-oriented (mentions one
+ * of the canned candidate routes).
+ */
+const COMPOSITE_QUERY = "從中科大要去火車站可以搭哪些公車、哪班最快來";
+const NUTC = { latitude: 24.130608, longitude: 120.637112 };
+const CANNED_ROUTES = ["159", "48"];
+const BUS_ETA_TOOLS = ["getBusArrival", "getBusRouteDetail", "getBusTimetable"];
+
+async function cannedExec(name: string, args: Record<string, unknown>): Promise<string> {
+  switch (name) {
+    case "planAccessibleRoute":
+      return JSON.stringify({
+        ok: true,
+        routes: [
+          { summary: "搭 159 路直達", legs: [{ mode: "BUS", routeName: "159" }] },
+          { summary: "搭 48 路轉乘", legs: [{ mode: "BUS", routeName: "48" }] },
+        ],
+      });
+    case "findNearbyBusStops":
+      return JSON.stringify({ ok: true, stops: [{ name: "中科大站", routes: CANNED_ROUTES }] });
+    case "getBusArrival":
+      return JSON.stringify({ ok: true, routeName: args?.routeName ?? "159", etaMinutes: args?.routeName === "48" ? 9 : 4 });
+    case "getBusRouteDetail":
+      return JSON.stringify({ ok: true, routeName: args?.routeName ?? "159", stops: [], etaMinutes: 4 });
+    case "getBusTimetable":
+      return JSON.stringify({ ok: true, routeName: args?.routeName ?? "159", firstBus: "06:00", lastBus: "22:30" });
+    default:
+      return JSON.stringify({ ok: true });
+  }
+}
+
+interface CompositeRun {
+  seq: string[];
+  text: string;
+  hitBusEta: boolean;
+  noNav: boolean;
+  busOriented: boolean;
+  pass: boolean;
+}
+
+async function runCompositeOnce(): Promise<CompositeRun> {
+  const sys = withUserLocation(CHAT_SYSTEM_PROMPT, NUTC);
+  const contents: Content[] = [{ role: "user", parts: [{ text: COMPOSITE_QUERY }] }];
+  const seq: string[] = [];
+  const result = await runToolLoop(
+    contents,
+    sys,
+    model,
+    NUTC,
+    (n) => seq.push(n),
+    undefined,
+    undefined,
+    false,
+    false,
+    false,
+    cannedExec,
+  );
+  const text = result.text ?? "";
+  const hitBusEta = seq.some((n) => BUS_ETA_TOOLS.includes(n));
+  const noNav = !seq.includes("getNavInstructions");
+  const busOriented = text.length > 0 && CANNED_ROUTES.some((r) => text.includes(r));
+  return { seq, text, hitBusEta, noNav, busOriented, pass: hitBusEta && noNav && busOriented };
+}
+
+async function evalComposite(): Promise<{ verdict: Verdict; passes: number; runs: CompositeRun[] }> {
+  const runs: CompositeRun[] = [];
+  let errors = 0;
+  for (let i = 0; i < N; i++) {
+    try {
+      runs.push(await runCompositeOnce());
+    } catch (e: any) {
+      errors++;
+      runs.push({ seq: [`__error__:${e?.message ?? "unknown"}`], text: "", hitBusEta: false, noNav: false, busOriented: false, pass: false });
+    }
+  }
+  const passes = runs.filter((r) => r.pass).length;
+  let verdict: Verdict;
+  if (errors === N) verdict = "ERROR";
+  else if (passes === N) verdict = "PASS";
+  else if (passes === 0) verdict = "FAIL";
+  else verdict = "FLAKY";
+  return { verdict, passes, runs };
+}
+
 async function main(): Promise<void> {
   if (!process.env.GEMINI_API_KEY) {
     console.error(
@@ -107,6 +198,16 @@ async function main(): Promise<void> {
     }
   }
 
+  console.log("=".repeat(76));
+  console.log(`V1b composite-bus full-loop  (query: ${COMPOSITE_QUERY})`);
+  const composite = await evalComposite();
+  for (const r of composite.runs) {
+    const flags = `busEta=${r.hitBusEta} noNav=${r.noNav} busText=${r.busOriented}`;
+    console.log(`  ${pad(r.pass ? "PASS" : "FAIL", 5)} seq=${JSON.stringify(r.seq)}  ${flags}`);
+  }
+  console.log(`V1b verdict: ${composite.verdict}  ${composite.passes}/${N}`);
+  const compositeFail = composite.verdict === "FAIL" || composite.verdict === "ERROR" || composite.verdict === "FLAKY";
+
   const outDir = path.resolve(__dirname, "eval-reports");
   fs.mkdirSync(outDir, { recursive: true });
   const report = {
@@ -116,13 +217,14 @@ async function main(): Promise<void> {
     strict: { pass: strictPass, total, accuracy: strictPass / total },
     lenient: { pass: lenientPass, total: total * N, accuracy: lenientPass / (total * N) },
     cases: outcomes,
+    compositeBus: { verdict: composite.verdict, passes: composite.passes, runs: composite.runs },
   };
   const stamp = report.timestamp.replace(/[:.]/g, "-");
   fs.writeFileSync(path.join(outDir, `routing-${stamp}.json`), JSON.stringify(report, null, 2));
   fs.writeFileSync(path.join(outDir, "latest.json"), JSON.stringify(report, null, 2));
   console.log(`\nReport: src/scripts/eval-reports/routing-${stamp}.json (+ latest.json)`);
 
-  process.exit(fails.length + errs.length > 0 ? 1 : 0);
+  process.exit(fails.length + errs.length > 0 || compositeFail ? 1 : 0);
 }
 
 main().catch((err) => {

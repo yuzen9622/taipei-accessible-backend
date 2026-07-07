@@ -16,7 +16,7 @@ vi.mock("./agent-tools", () => ({
 import { googleGenAi } from "../../config/ai";
 import { executeLocalTool } from "./agent-tools";
 import { runToolLoop } from "./ai-chat.service";
-import type { Content } from "@google/genai";
+import { FunctionCallingConfigMode, type Content } from "@google/genai";
 
 const mockCreate = googleGenAi.models.generateContent as unknown as ReturnType<typeof vi.fn>;
 const mockExec = executeLocalTool as unknown as ReturnType<typeof vi.fn>;
@@ -54,7 +54,7 @@ function functionResponseParts(contents: Content[]) {
 }
 
 describe("runToolLoop dedup", () => {
-  it("沒有工具呼叫但模型有文字時回傳文字", async () => {
+  it("沒有工具呼叫但模型有文字時回傳文字（T3：不多打 final）", async () => {
     mockCreate.mockResolvedValueOnce(stopResponse());
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "hello" }] }];
@@ -62,6 +62,7 @@ describe("runToolLoop dedup", () => {
 
     expect(result.text).toBe("done");
     expect(mockExec).not.toHaveBeenCalled();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
   it("相同 (name, args) 且成功 → 第二次不執行 executeLocalTool", async () => {
@@ -152,5 +153,87 @@ describe("runToolLoop dedup", () => {
     await runToolLoop(contents, undefined, "test-model");
 
     expect(mockExec).toHaveBeenCalledTimes(2);
+  });
+});
+
+function emptyStopResponse() {
+  return {
+    functionCalls: undefined,
+    text: "",
+    candidates: [{ content: { role: "model", parts: [] } }],
+  };
+}
+
+function textResponse(text: string) {
+  return {
+    functionCalls: undefined,
+    text,
+    candidates: [{ content: { role: "model", parts: [{ text }] } }],
+  };
+}
+
+describe("runToolLoop 最終文字保證（修沒文字 bug）", () => {
+  it("T1：跑滿 MAX_ROUNDS 仍在呼叫工具 → 用 buildFinalConfig(mode NONE) 強制回文字", async () => {
+    for (let i = 0; i < 5; i++) {
+      mockCreate.mockResolvedValueOnce(
+        functionCallResponse([{ name: "getBusArrival", args: { round: i } }]),
+      );
+    }
+    mockCreate.mockResolvedValueOnce(textResponse("最終答案"));
+    mockExec.mockResolvedValue(JSON.stringify({ ok: true, etaMinutes: 4 }));
+
+    const contents: Content[] = [{ role: "user", parts: [{ text: "x" }] }];
+    const result = await runToolLoop(contents, undefined, "test-model");
+
+    expect(mockCreate).toHaveBeenCalledTimes(6);
+    const finalCfg = (mockCreate.mock.calls[5][0] as any).config;
+    expect(finalCfg.toolConfig.functionCallingConfig.mode).toBe(FunctionCallingConfigMode.NONE);
+    expect(finalCfg.temperature).toBe(0);
+    expect(result.text).toBe("最終答案");
+  });
+
+  it("T2：無工具呼叫但文字為空 → 觸發一次 final 生成回非空文字", async () => {
+    mockCreate
+      .mockResolvedValueOnce(emptyStopResponse())
+      .mockResolvedValueOnce(textResponse("補救答案"));
+
+    const contents: Content[] = [{ role: "user", parts: [{ text: "x" }] }];
+    const result = await runToolLoop(contents, undefined, "test-model");
+
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    const finalCfg = (mockCreate.mock.calls[1][0] as any).config;
+    expect(finalCfg.toolConfig.functionCallingConfig.mode).toBe(FunctionCallingConfigMode.NONE);
+    expect(result.text).toBe("補救答案");
+  });
+
+  it("T6：複合公車鏈 planAccessibleRoute→getBusArrival 串接並回公車導向文字", async () => {
+    mockCreate
+      .mockResolvedValueOnce(
+        functionCallResponse([
+          { name: "planAccessibleRoute", args: { origin: "中科大", destination: "火車站" } },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        functionCallResponse([
+          { name: "getBusArrival", args: { routeName: "159", stopName: "中科大" } },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("您可以搭 159 路，約 4 分鐘後到，是最快的一班。"));
+
+    mockExec.mockImplementation(async (name: string) =>
+      name === "planAccessibleRoute"
+        ? JSON.stringify({ ok: true, routes: [{ routeName: "159" }] })
+        : JSON.stringify({ ok: true, routeName: "159", etaMinutes: 4 }),
+    );
+
+    const contents: Content[] = [
+      { role: "user", parts: [{ text: "從中科大要去火車站可以搭哪些公車、哪班最快來" }] },
+    ];
+    const result = await runToolLoop(contents, undefined, "test-model");
+
+    const execNames = mockExec.mock.calls.map((c) => c[0]);
+    expect(execNames).toEqual(["planAccessibleRoute", "getBusArrival"]);
+    expect(result.text).toContain("159");
+    expect((result.text ?? "").length).toBeGreaterThan(0);
   });
 });

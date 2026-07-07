@@ -99,7 +99,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findA11yPlaces",
       description:
-        "查詢無障礙設施資料庫（捷運電梯出口、無障礙廁所、OSM 坡道/導盲磚等）。當使用者提到「無障礙、電梯、坡道、廁所、輪椅」時優先使用。注意：本工具不含停車位資料，停車位請用 findNearbyParking。",
+        "查詢無障礙設施資料庫，回傳捷運電梯出口、無障礙廁所、OSM 坡道/導盲磚等設施的位置。涵蓋一般公共空間的無障礙設施；不含身障停車位（停車位用 findNearbyParking），不含校園內設施（校園用 findCampusAccessibility）。",
       parameters: {
         type: "object",
         properties: {
@@ -117,7 +117,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findCampusAccessibility",
       description:
-        "查詢教育部校園無障礙資料庫的校區摘要。當使用者問學校/大學/校園/校區內的無障礙電梯、廁所、坡道、輪椅通道時使用。可用校名/校區關鍵字（支援簡稱如「中科大」與臺台通用）、城市、設施類型搜尋；也可用座標或使用者目前位置找附近校區。回傳 campusId，可再用 getCampusAccessibilityDetails 查完整設施。",
+        "查詢教育部校園無障礙資料庫，回傳學校/大學/校區內無障礙設施（電梯、廁所、坡道、輪椅通道）的校區摘要與 campusId。可用校名/校區關鍵字（支援簡稱如「中科大」與臺台通用）、城市、設施類型搜尋，或用座標/目前位置找附近校區。要看某校區完整設施清單再用 getCampusAccessibilityDetails。",
       parameters: {
         type: "object",
         properties: {
@@ -139,7 +139,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getCampusAccessibilityDetails",
       description:
-        "依 findCampusAccessibility 回傳的 campusId 查詢單一校區完整無障礙設施摘要與設施清單。當使用者指定某個校區、要看完整設施、或要知道該校區有哪些無障礙電梯/廁所/坡道時使用。",
+        "依 findCampusAccessibility 回傳的 campusId，回傳單一校區的完整無障礙設施摘要與設施清單（含各無障礙電梯/廁所/坡道）。",
       parameters: {
         type: "object",
         properties: {
@@ -156,7 +156,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "planAccessibleRoute",
       description:
-        "規劃無障礙混合式交通路線（公車/捷運/步行/高鐵/台鐵），回傳路線摘要（名稱、轉乘次數、預估時間、無障礙評分）。當使用者說「從 A 到 B」、「怎麼去」、「路線規劃」但**沒有要求逐步詳細指引**時使用。若使用者要求「每一步怎麼走」、「詳細步驟」、「帶我走」，請改用 getNavInstructions。",
+        "規劃無障礙混合式交通路線（公車/捷運/步行/高鐵/台鐵），回傳路線**摘要**：候選路線、包含哪些公車/捷運班次、轉乘次數、預估時間、無障礙評分。用於「怎麼去/有哪些走法」的整段路線建議；也可作為「兩地間有哪些公車」的候選路線來源（之後再用公車工具查各線到站時間）。要逐步指引（每一步怎麼走）用 getNavInstructions。",
       parameters: {
         type: "object",
         properties: {
@@ -181,7 +181,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getBusRoute",
       description:
-        "查詢公車路線的行駛方向與完整站序（去程/返程的起訖站與停靠站列表）。當使用者問「X 路經過哪些站」、「X 路怎麼走」、「X 路的路線」時使用。",
+        "回傳某條公車路線的行駛方向與完整站序（去程/返程的起訖站與停靠站列表）。",
       parameters: {
         type: "object",
         properties: {
@@ -200,7 +200,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getBusRouteDetail",
       description:
-        "查詢公車路線的所有站點列表、每個站點的預估到站時間（ETA）以及當前的班次時刻表。當使用者需要『像公車app一樣的完整路線動態（站點+幾分鐘來+時刻表）』時使用。",
+        "一次回傳某條公車路線的所有站點、各站預估到站時間（ETA）與當前班次時刻表（像公車 App 的完整路線動態：站點＋幾分鐘來＋時刻表）。",
       parameters: {
         type: "object",
         properties: {
@@ -219,7 +219,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getBusArrival",
       description:
-        "查詢某條公車路線在某個站牌的即時預估到站時間（還有幾分鐘到）。當使用者問「X 路在 Y 站還有多久」、「X 路到 Y 站的時間」時使用。若已知該班車車牌，會一併回報是否為低底盤車。",
+        "回傳某條公車路線在某個站牌的即時預估到站時間（還有幾分鐘到）。若已知該班車車牌，會一併回報是否為低底盤車。適合比較多條路線在同一站誰先到。",
       parameters: {
         type: "object",
         properties: {
@@ -243,7 +243,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getBusTimetable",
       description:
-        "查詢公車路線的時刻表：首班車/末班車時間與今日各班次發車時刻。當使用者問「X 路的時刻表」、「X 路首末班車幾點」時使用。",
+        "回傳某條公車路線的時刻表：首班車/末班車時間與今日各班次發車時刻。",
       parameters: {
         type: "object",
         properties: {
@@ -262,7 +262,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "trackBuses",
       description:
-        "查詢某條公車路線目前所有在線車輛的即時 GPS 位置、行駛狀態，以及『每台車是否為低底盤/有無升降斜坡板』。當使用者問「X 路現在在哪」、「X 路來的這班是低底盤嗎」、「下一班 X 路是無障礙車嗎」時使用。**不需要、也不要向使用者索取車牌號碼**，本工具會自動取得在線車輛。",
+        "回傳某條公車路線目前所有在線車輛的即時 GPS 位置、行駛狀態，以及每台車是否為低底盤/有無升降斜坡板。**不需要、也不要向使用者索取車牌號碼**，會自動取得在線車輛。",
       parameters: {
         type: "object",
         properties: {
@@ -285,7 +285,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findNearbyBusStops",
       description:
-        "查詢使用者附近的公車站牌，回傳每個站牌的名稱、距離、以及『經過該站的公車路線清單』。當使用者問「附近有什麼公車／站牌」「離我最近的公車站」「最近的公車什麼時候來」「附近的車有哪些路線」時，先用這個拿到站牌與真實路線，再用 getBusArrival 查特定路線的到站時間。**不要自己猜路線號碼**。",
+        "回傳使用者附近的公車站牌：每個站牌的名稱、距離、以及經過該站的真實公車路線清單。先用它拿到附近站牌與真實路線，再用 getBusArrival 查特定路線到站時間。**不要自己猜路線號碼**。",
       parameters: {
         type: "object",
         properties: {
@@ -335,7 +335,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getEnvironmentInfo",
       description:
-        "查詢指定地點的即時出行環境資訊，包括天氣（溫度、降雨、風速）、空氣品質（PM2.5 與健康建議）和附近路況監視器畫面。當使用者問「那邊天氣怎樣」、「現在適合出門嗎」、「空氣品質好嗎」、「附近有沒有監視器」時使用。支持地名或經緯度查詢。",
+        "回傳指定地點的即時出行環境資訊：天氣（溫度、降雨、風速）、空氣品質（PM2.5 與健康建議）與附近路況監視器畫面（三合一）。支援地名或經緯度查詢。只問 PM2.5 數值用 getAirQuality。",
       parameters: {
         type: "object",
         properties: {
@@ -353,7 +353,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getNearbyHazards",
       description:
-        "查詢指定地點附近的即時路況危險回報（施工 construction、路面障礙物 obstacle、資料錯誤 data_error）。當使用者問「前面有沒有施工」、「附近路況安全嗎」、「那邊有什麼危險」時使用。也可在規劃路線後主動查詢起終點附近的危險資訊。",
+        "回傳指定地點附近的即時路況危險回報（施工 construction、路面障礙物 obstacle、資料錯誤 data_error）。也可在規劃路線後查詢起終點附近的危險資訊。",
       parameters: {
         type: "object",
         properties: {
@@ -376,7 +376,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findNearbyParking",
       description:
-        "查詢指定地點附近的身障停車位（身心障礙者專用停車格）。當使用者問「附近有沒有身障停車位」、「殘障車位在哪」、「輪椅停車」、「無障礙停車格」時使用。",
+        "回傳指定地點附近的身障停車位（身心障礙者專用停車格）。",
       parameters: {
         type: "object",
         properties: {
@@ -394,7 +394,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getNavInstructions",
       description:
-        "產生從起點到終點的逐步導航指引（「沿中山路直行 120 公尺」、「請向右轉」、「請在台北車站搭乘板南線」）。當使用者在看過路線規劃後要求「詳細步驟」、「每一步怎麼走」、「導航指引」、「帶我走」時使用。也可在使用者一開始就要求詳細導航時直接使用（不需先呼叫 planAccessibleRoute）。",
+        "回傳從起點到終點的**逐步**導航指引（「沿中山路直行 120 公尺」「請向右轉」「請在台北車站搭乘板南線」）。用於要「詳細步驟/每一步怎麼走/帶我走」時；不需先呼叫 planAccessibleRoute。與 planAccessibleRoute 差別＝逐步 vs 摘要。",
       parameters: {
         type: "object",
         properties: {
@@ -418,7 +418,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "searchAccessibilityGuide",
       description:
-        "搜尋無障礙知識庫（車站無障礙指南、輪椅搭乘 SOP、身障福利法規、交通營運商政策）。當使用者問的是一般知識性問題（不需要即時位置或交通資料）時使用，例如「輪椅怎麼搭公車」「身障停車證怎麼申請」「捷運有哪些無障礙設施」。此工具從策展知識庫搜尋，比模型內建知識更準確。",
+        "從策展的無障礙知識庫搜尋並回傳一般知識（車站無障礙指南、輪椅搭乘 SOP、身障福利法規、交通營運商政策）。適合不需即時位置或交通資料的知識性問題；比模型內建知識更準確。",
       parameters: {
         type: "object",
         properties: {
@@ -433,7 +433,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "webSearch",
       description:
-        "搜尋公開網路取得最新資訊與來源。當使用者問最新消息、近期政策、今天/本週資訊、或本地工具與無障礙知識庫都無法回答的一般網路問題時使用。回答時必須根據此工具的 answer 與 sources，並附上來源。",
+        "搜尋公開網路並回傳最新資訊與來源（answer 與 sources）。適合最新消息、近期政策、當前狀態、或本地工具與知識庫都無法回答的一般網路問題。回答必須根據回傳的 answer 與 sources 並附上來源。",
       parameters: {
         type: "object",
         properties: {
@@ -477,7 +477,7 @@ export const memoryTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "deleteMemory",
       description:
-        "刪除一筆使用者記憶。當使用者要求「忘掉…」「不要記住…」「刪除那個記憶」時使用。memoryId 從【使用者記憶】區塊中取得。",
+        "刪除一筆使用者記憶（用於使用者要求忘記/移除某筆記憶時）。memoryId 從【使用者記憶】區塊中取得。",
       parameters: {
         type: "object",
         properties: {

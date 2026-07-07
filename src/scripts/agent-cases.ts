@@ -51,6 +51,7 @@ export const agentCases: AgentCase[] = [
   { id: "bus-track-3", query: "307 現在在哪", expectTool: "trackBuses", mustNotCall: ["getBusArrival"] },
   { id: "bus-nearby-1", query: "離我最近的公車啥時候來", userLocation: { latitude: 24.130608, longitude: 120.637112 }, expectTool: "findNearbyBusStops", mustNotCall: ["findGooglePlaces", "findA11yPlaces"], notes: "real failure: model was hallucinating route numbers (290/75)" },
   { id: "bus-nearby-2", query: "附近有哪些公車站", userLocation: { latitude: 25.0478, longitude: 121.517 }, expectTool: "findNearbyBusStops" },
+  { id: "bus-composite", query: "從中科大要去火車站可以搭哪些公車、哪班最快來", expectTool: "planAccessibleRoute", acceptAlso: ["findNearbyBusStops", "getBusRouteDetail"], mustNotCall: ["getNavInstructions"], notes: "composite bus intent; single-round only asserts the first step (candidate-route discovery). Full chain (must reach a bus-ETA tool, must not stop at planAccessibleRoute, bus-oriented final text) is enforced by the full-loop V1b phase and T6 in ai-chat.service.test.ts" },
 
   // E. searchAccessibilityGuide vs findGooglePlaces / findA11yPlaces
   { id: "guide-1", query: "輪椅怎麼搭公車", expectTool: "searchAccessibilityGuide", mustNotCall: ["getBusRoute", "findGooglePlaces"] },
