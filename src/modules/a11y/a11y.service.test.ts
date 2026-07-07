@@ -1,6 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { IA11y, IOsmA11y } from "../../types";
-import { mergeA11yPlaces, osmToA11yPlace } from "./a11y.service";
+import type { CampusFacilityPlace } from "../campus/campus.service";
+import {
+  campusToA11yPlace,
+  mergeA11yPlaces,
+  osmToA11yPlace,
+} from "./a11y.service";
+
+function makeCampusFacility(
+  overrides: Partial<CampusFacilityPlace> = {}
+): CampusFacilityPlace {
+  return {
+    campusId: 1234,
+    schoolId: 56,
+    schoolName: "國立臺中科技大學",
+    branchName: "三民校區",
+    facUid: "fac-001",
+    facTypeId: 8,
+    type: "elevator",
+    facType: "無障礙電梯",
+    name: "行政大樓電梯",
+    building: "行政大樓",
+    floors: ["1", "2"],
+    location: { type: "Point", coordinates: [120.684, 24.152] },
+    ...overrides,
+  };
+}
 
 function makeOsmDoc(overrides: Partial<IOsmA11y> = {}): IOsmA11y {
   return {
@@ -78,5 +103,49 @@ describe("mergeA11yPlaces", () => {
     );
     expect(merged).toHaveLength(1);
     expect(merged[0].osmId).toBe("42");
+  });
+
+  it("appends pre-normalized campus places when given a third argument", () => {
+    const merged = mergeA11yPlaces(
+      [makeMetroDoc()],
+      [makeOsmDoc()],
+      [campusToA11yPlace(makeCampusFacility())]
+    );
+    expect(merged).toHaveLength(3);
+    expect(merged[2]).toMatchObject({ source: "campus", facUid: "fac-001" });
+  });
+
+  it("behaves like the two-arg form when no campus places are given", () => {
+    const merged = mergeA11yPlaces([makeMetroDoc()], [makeOsmDoc()]);
+    expect(merged).toHaveLength(2);
+    expect(merged.every((p) => p.source !== "campus")).toBe(true);
+  });
+});
+
+describe("campusToA11yPlace", () => {
+  it("maps a campus facility into the A11y response shape", () => {
+    const place = campusToA11yPlace(makeCampusFacility());
+    expect(place).toMatchObject({
+      項次: "fac-001",
+      "出入口電梯/無障礙坡道名稱": "行政大樓電梯",
+      經度: 120.684,
+      緯度: 24.152,
+      source: "campus",
+      campusId: 1234,
+      schoolName: "國立臺中科技大學",
+      facUid: "fac-001",
+      facType: "elevator",
+      facTypeLabel: "無障礙電梯",
+    });
+  });
+
+  it("falls back to the Chinese facType label then a generic name when unnamed", () => {
+    const labelled = campusToA11yPlace(makeCampusFacility({ name: undefined }));
+    expect(labelled["出入口電梯/無障礙坡道名稱"]).toBe("無障礙電梯");
+
+    const generic = campusToA11yPlace(
+      makeCampusFacility({ name: undefined, facType: undefined })
+    );
+    expect(generic["出入口電梯/無障礙坡道名稱"]).toBe("校園無障礙設施");
   });
 });

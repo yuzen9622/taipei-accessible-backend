@@ -254,6 +254,131 @@ export async function findNearby(
 }
 
 /**
+ * A single campus accessibility facility flattened out of its parent campus
+ * document, carrying enough campus context to render standalone on a map. Only
+ * facilities that have their own coordinates are emitted.
+ */
+export interface CampusFacilityPlace {
+  campusId: number;
+  schoolId: number;
+  schoolName: string;
+  branchName: string;
+  facUid: string;
+  facTypeId?: number;
+  type?: string;
+  facType?: string;
+  name?: string;
+  building?: string;
+  floors: string[];
+  location: { type: "Point"; coordinates: [number, number] };
+}
+
+/** Extra radius (metres) added when pre-selecting campuses whose centroid is
+ * indexed, before filtering individual facilities to the real radius. */
+const CAMPUS_QUERY_BUFFER_M = 800;
+
+/** Great-circle distance in metres between two [lng, lat] points. */
+function haversineMeters(a: [number, number], b: [number, number]): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const [lng1, lat1] = a;
+  const [lng2, lat2] = b;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+/** True when a facility carries a usable [lng, lat] coordinate pair. */
+function hasCoordinates(f: ICampusFacility): boolean {
+  return (f.location?.coordinates?.length ?? 0) === 2;
+}
+
+/** Flattens one campus facility (known to have coordinates) into a standalone place. */
+function toFacilityPlace(
+  campus: Pick<
+    ICampusA11y,
+    "branchId" | "schoolId" | "schoolName" | "branchName"
+  >,
+  f: ICampusFacility
+): CampusFacilityPlace {
+  return {
+    campusId: toPublicId(campus.branchId),
+    schoolId: toPublicId(campus.schoolId),
+    schoolName: campus.schoolName,
+    branchName: campus.branchName,
+    facUid: f.facUid,
+    facTypeId: f.facTypeId,
+    type: resolveFacType(f.facTypeId, f.facType)?.code,
+    facType: f.facType,
+    name: f.name,
+    building: f.building,
+    floors: f.floors,
+    location: f.location as { type: "Point"; coordinates: [number, number] },
+  };
+}
+
+const FACILITY_PLACE_FIELDS =
+  "schoolId branchId schoolName branchName facilities";
+
+/**
+ * Every campus accessibility facility (across all campuses) that has its own
+ * coordinates, flattened into standalone places. Used to merge campus data into
+ * the unified "all accessible places" listing.
+ *
+ * @returns One place per located facility.
+ */
+export async function findAllFacilities(): Promise<CampusFacilityPlace[]> {
+  const docs = await CampusA11yModel.find({
+    "facilities.location": { $exists: true },
+  })
+    .select(FACILITY_PLACE_FIELDS)
+    .lean();
+  const out: CampusFacilityPlace[] = [];
+  for (const campus of docs) {
+    for (const f of campus.facilities ?? []) {
+      if (hasCoordinates(f)) out.push(toFacilityPlace(campus, f));
+    }
+  }
+  return out;
+}
+
+/**
+ * Campus accessibility facilities within `radiusM` of the point, flattened into
+ * standalone places and sorted nearest-first. Because only the campus centroid
+ * is 2dsphere-indexed, candidate campuses are pre-selected with a buffer and
+ * then each facility is distance-filtered to the true radius.
+ *
+ * @param lat Latitude of the search centre.
+ * @param lng Longitude of the search centre.
+ * @param radiusM Search radius in metres.
+ * @returns Located facilities within the radius, nearest first.
+ */
+export async function findFacilitiesNearby(
+  lat: number,
+  lng: number,
+  radiusM: number
+): Promise<CampusFacilityPlace[]> {
+  const docs = await CampusA11yModel.find({
+    location: makeGeoQuery(lng, lat, radiusM + CAMPUS_QUERY_BUFFER_M),
+  })
+    .select(FACILITY_PLACE_FIELDS)
+    .lean();
+  const out: { place: CampusFacilityPlace; dist: number }[] = [];
+  for (const campus of docs) {
+    for (const f of campus.facilities ?? []) {
+      if (!hasCoordinates(f)) continue;
+      const coords = f.location!.coordinates as [number, number];
+      const dist = haversineMeters([lng, lat], coords);
+      if (dist <= radiusM) out.push({ place: toFacilityPlace(campus, f), dist });
+    }
+  }
+  return out.sort((a, b) => a.dist - b.dist).map((x) => x.place);
+}
+
+/**
  * Paginated campus directory. `city` is matched 臺/台-insensitively, `type`
  * filters on the facility-type code, `keyword` matches the normalized
  * searchName / aliasNames, and `schoolId` (public) lists one school's campuses.
