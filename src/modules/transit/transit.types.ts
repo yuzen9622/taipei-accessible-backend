@@ -160,3 +160,18 @@ export type BusNearbyStopsResult =
       stops: BusNearbyStop[];
     }
   | BusServiceError;
+
+export type BusStopSearchResult = {
+  stopUid: string;
+  stopName: string;
+  city: string;
+  coordinates: [number, number];
+  routes: string[];
+};
+
+export type BusStopSearchRouteResult =
+  | {
+      ok: true;
+      stops: BusStopSearchResult[];
+    }
+  | BusServiceError;

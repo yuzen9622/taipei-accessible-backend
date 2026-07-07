@@ -50,6 +50,12 @@ export const BusSearchQuerySchema = z
   })
   .strict();
 
+export const BusStopSearchQuerySchema = z
+  .object({
+    keyword: z.string().min(1).openapi({ example: "台北車站", description: "站牌名稱搜尋關鍵字" }),
+  })
+  .strict();
+
 export const BusNearbyQuerySchema = z
   .object({
     lat: z.preprocess(
@@ -159,6 +165,22 @@ export const BusSearchResponseSchema = ApiResponseSchema(
   })
 ).openapi("BusSearchResponse");
 
+export const BusStopSearchResultSchema = z
+  .object({
+    stopUid: z.string().openapi({ example: "TPE16523", description: "站牌唯一識別碼" }),
+    stopName: z.string().openapi({ example: "台北車站", description: "站牌名稱" }),
+    city: z.string().openapi({ example: "Taipei", description: "站牌所屬縣市英文名" }),
+    coordinates: z.tuple([z.number(), z.number()]).openapi({ example: [121.5171, 25.0478], description: "站牌經緯度座標 [lng, lat]" }),
+    routes: z.array(z.string()).openapi({ example: ["307", "652"], description: "停靠該站牌的公車路線清單" }),
+  })
+  .openapi("BusStopSearchResult");
+
+export const BusStopSearchResponseSchema = ApiResponseSchema(
+  z.object({
+    stops: z.array(BusStopSearchResultSchema),
+  })
+).openapi("BusStopSearchResponse");
+
 export const BusNearbyStopSchema = z
   .object({
     stopUid: z.string().openapi({ example: "TPE16523", description: "站牌唯一識別碼" }),
@@ -260,6 +282,20 @@ registry.registerPath({
   request: { query: BusSearchQuerySchema },
   responses: {
     200: { description: "搜尋結果列表", content: { "application/json": { schema: BusSearchResponseSchema } } },
+    400: { description: "缺少必要參數" },
+    500: { description: "DB 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/search-stops",
+  tags: ["Transit"],
+  summary: "搜尋公車站牌",
+  description: "依關鍵字模糊搜尋所有縣市的公車站牌，回傳匹配的站牌、所屬縣市、座標及行經該站的路線清單，供前端做下拉選擇。同名站牌會依縣市區分；最多回傳 50 筆。",
+  request: { query: BusStopSearchQuerySchema },
+  responses: {
+    200: { description: "搜尋結果列表", content: { "application/json": { schema: BusStopSearchResponseSchema } } },
     400: { description: "缺少必要參數" },
     500: { description: "DB 錯誤" },
   },

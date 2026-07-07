@@ -40,6 +40,8 @@ import type {
   BusRealtimeOnRouteResult,
   BusOnRoad,
   BusSearchRouteResult,
+  BusStopSearchRouteResult,
+  BusStopSearchResult,
   BusNearbyStopsResult,
   BusNearbyStop,
   BusRouteDetailResult,
@@ -555,6 +557,80 @@ export async function searchBusRoutes(keyword: string): Promise<BusSearchRouteRe
     return {
       ok: false,
       error: (err as Error).message || "路線搜尋失敗",
+      status: 500,
+    };
+  }
+}
+
+/**
+ * Search bus stops by keyword across all cities in the DB.
+ *
+ * @param keyword Fuzzy match against the stop's Chinese name.
+ * @returns Matching stops (deduped by name + city), each with the routes passing through; capped at 50.
+ */
+export async function searchBusStops(keyword: string): Promise<BusStopSearchRouteResult> {
+  try {
+    const escaped = keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+    const stops = await BusStopModel.aggregate([
+      {
+        $match: {
+          "stopName.Zh_tw": { $regex: escaped, $options: "i" },
+        },
+      },
+      {
+        $limit: 250,
+      },
+    ]);
+
+    if (!stops.length) {
+      return { ok: true, stops: [] };
+    }
+
+    const allSubRouteIds = [...new Set(stops.flatMap((s) => s.subRouteIds || []))];
+    const routes = await BusRouteModel.find({
+      "subRouteName.Zh_tw": { $in: allSubRouteIds },
+    })
+      .select("subRouteName.Zh_tw routeName.Zh_tw")
+      .lean();
+
+    const routeMap = new Map<string, string>();
+    for (const r of routes) {
+      if (r.subRouteName?.Zh_tw && r.routeName?.Zh_tw) {
+        routeMap.set(r.subRouteName.Zh_tw, r.routeName.Zh_tw);
+      }
+    }
+
+    const mergedMap = new Map<string, BusStopSearchResult>();
+
+    for (const s of stops) {
+      const key = `${s.stopName.Zh_tw}|${s.city}`;
+      const routesForStop = (s.subRouteIds || [])
+        .map((id: string) => routeMap.get(id) || id)
+        .filter(Boolean) as string[];
+
+      const existing = mergedMap.get(key);
+      if (existing) {
+        existing.routes = [...new Set([...existing.routes, ...routesForStop])].sort();
+      } else {
+        mergedMap.set(key, {
+          stopUid: s.stopUid,
+          stopName: s.stopName.Zh_tw,
+          city: s.city,
+          coordinates: s.location.coordinates as [number, number],
+          routes: [...new Set(routesForStop)].sort(),
+        });
+      }
+    }
+
+    const finalStops = [...mergedMap.values()]
+      .sort((a, b) => a.stopName.localeCompare(b.stopName))
+      .slice(0, 50);
+
+    return { ok: true, stops: finalStops };
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error).message || "站牌搜尋失敗",
       status: 500,
     };
   }

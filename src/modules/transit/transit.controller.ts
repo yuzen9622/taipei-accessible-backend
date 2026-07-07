@@ -135,6 +135,20 @@ async function searchBusRoutesHandler(req: Request, res: Response<ApiResponse<an
   }
 }
 
+async function searchBusStopsHandler(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { keyword } = req.validated?.query as { keyword: string };
+    const result = await busService.searchBusStops(keyword);
+    if (!result.ok) {
+      return sendResponse(res, false, "error", result.status || ResponseCode.INTERNAL_ERROR, result.error);
+    }
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error: any) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, error.message);
+  }
+}
+
 async function getNearbyStopsHandler(req: Request, res: Response<ApiResponse<any>>) {
   try {
     const { lat, lng, radius, limit } = req.validated?.query as {
@@ -163,5 +177,6 @@ export {
   getBusTimetableHandler,
   getBusPositionsHandler,
   searchBusRoutesHandler,
+  searchBusStopsHandler,
   getNearbyStopsHandler,
 };
