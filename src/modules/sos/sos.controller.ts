@@ -55,8 +55,8 @@ async function resolveSession(req: Request, res: Response) {
 }
 
 async function getPublicSession(req: Request, res: Response) {
-  const params = req.validated?.params as { token: string };
-  const result = await service.getPublicByToken(params.token);
+  const params = req.validated?.params as { id: string };
+  const result = await service.getPublicById(params.id);
   return send(res, result);
 }
 

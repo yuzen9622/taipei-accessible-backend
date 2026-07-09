@@ -11,6 +11,18 @@ export const RoutePreviewQuerySchema = z
       description: "SOS session ID from the LINE route preview URL.",
       example: "6a4e797394fbb1b1721c8b81",
     }),
+    travelMode: z
+      .enum(["transit", "drive", "motorcycle", "walk"])
+      .optional()
+      .openapi({ example: "transit", description: "交通方式" }),
+    mode: z
+      .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
+      .optional()
+      .openapi({ example: "normal", description: "無障礙模式" }),
+    departureTime: z
+      .string()
+      .optional()
+      .openapi({ example: "2026-07-09T16:00:00+08:00", description: "出發時間" }),
   })
   .strict();
 

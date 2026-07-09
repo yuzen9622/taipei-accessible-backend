@@ -292,7 +292,9 @@ describe("line.service — route preview", () => {
       origin: { latitude: 25.03, longitude: 121.56 },
       destination: { latitude: 25.0478, longitude: 121.5171 },
       mode: "normal",
+      travelMode: "transit",
       maxTransfers: 2,
+      departureTime: undefined,
     });
     expect(result.data).toMatchObject({
       sessionId,
@@ -336,5 +338,44 @@ describe("line.service — route preview", () => {
     expect(result.ok).toBe(false);
     expect(result.httpCode).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(planAccessibleRouteFromRequest)).not.toHaveBeenCalled();
+  });
+
+  it("passes travelMode, mode, and departureTime to planAccessibleRouteFromRequest", async () => {
+    const sessionId = "68ef6e5b7f7f3a3b78f51291";
+    sosSessionModel.findById.mockReturnValue({
+      lean: () => Promise.resolve({
+        _id: sessionId,
+        userId: "u1",
+        status: "active",
+        lat: 25.0478,
+        lng: 121.5171,
+        address: "台北車站",
+      }),
+    });
+    contactModel.findOne.mockReturnValue({
+      sort: () => ({
+        select: () => ({
+          lean: () => Promise.resolve({
+            lastLineLat: 25.03,
+            lastLineLng: 121.56,
+          }),
+        }),
+      }),
+    });
+    userModel.findById.mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve({ name: "王小明" }) }),
+    });
+
+    const result = await getRoutePreview(sessionId, "drive", "wheelchair", "2026-07-09T16:00:00+08:00");
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(planAccessibleRouteFromRequest)).toHaveBeenCalledWith({
+      origin: { latitude: 25.03, longitude: 121.56 },
+      destination: { latitude: 25.0478, longitude: 121.5171 },
+      mode: "wheelchair",
+      travelMode: "drive",
+      maxTransfers: 2,
+      departureTime: "2026-07-09T16:00:00+08:00",
+    });
   });
 });

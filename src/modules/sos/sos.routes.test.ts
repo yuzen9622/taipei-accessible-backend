@@ -5,7 +5,7 @@ vi.mock("./sos.service", () => ({
   createSession: vi.fn(),
   updateLocation: vi.fn(),
   resolveSession: vi.fn(),
-  getPublicByToken: vi.fn(),
+  getPublicById: vi.fn(),
 }));
 
 import { buildTestApp, buildAuthorizationHeader } from "../../../test/test-helpers";
@@ -84,46 +84,40 @@ describe("PATCH /sos/sessions/:id/location", () => {
   });
 });
 
-describe("GET /sos/sessions/:token/public", () => {
-  it("returns 200 without an Authorization header for a valid token", async () => {
-    vi.mocked(service.getPublicByToken).mockResolvedValue({
+describe("GET /sos/sessions/:id/public", () => {
+  it("returns 200 without an Authorization header for a valid id", async () => {
+    vi.mocked(service.getPublicById).mockResolvedValue({
       ok: true,
       httpCode: ResponseCode.OK,
       message: SOS_MSG.PUBLIC_OK,
       data: { type: "trapped", status: "active", lat: 25, lng: 121, address: null, updatedAt: new Date().toISOString() },
     });
-    const res = await request(app).get(`${BASE}/${TOKEN_32}/public`);
+    const res = await request(app).get(`${BASE}/6a4e797394fbb1b1721c8b81/public`);
     expect(res.status).toBe(200);
     expect(res.body.data.type).toBe("trapped");
-    expect(vi.mocked(service.getPublicByToken)).toHaveBeenCalledWith(TOKEN_32);
+    expect(vi.mocked(service.getPublicById)).toHaveBeenCalledWith("6a4e797394fbb1b1721c8b81");
   });
 
-  it("returns 404 for an unknown token", async () => {
-    vi.mocked(service.getPublicByToken).mockResolvedValue({
+  it("returns 404 for an unknown id", async () => {
+    vi.mocked(service.getPublicById).mockResolvedValue({
       ok: false,
       httpCode: ResponseCode.NOT_FOUND,
       message: SOS_MSG.TRACKING_NOT_FOUND,
       data: { reason: SOS_REASON.SESSION_NOT_FOUND },
     });
-    const res = await request(app).get(`${BASE}/${TOKEN_32}/public`);
+    const res = await request(app).get(`${BASE}/6a4e797394fbb1b1721c8b81/public`);
     expect(res.status).toBe(404);
   });
 
   it("returns 410 GONE for a resolved session older than 24h", async () => {
-    vi.mocked(service.getPublicByToken).mockResolvedValue({
+    vi.mocked(service.getPublicById).mockResolvedValue({
       ok: false,
       httpCode: ResponseCode.GONE,
       message: SOS_MSG.TRACKING_EXPIRED,
       data: { reason: SOS_REASON.TRACKING_EXPIRED },
     });
-    const res = await request(app).get(`${BASE}/${TOKEN_32}/public`);
+    const res = await request(app).get(`${BASE}/6a4e797394fbb1b1721c8b81/public`);
     expect(res.status).toBe(410);
     expect(res.body.data.reason).toBe(SOS_REASON.TRACKING_EXPIRED);
-  });
-
-  it("rejects a token of the wrong length with 400 at the schema", async () => {
-    const res = await request(app).get(`${BASE}/short/public`);
-    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
-    expect(vi.mocked(service.getPublicByToken)).not.toHaveBeenCalled();
   });
 });

@@ -108,9 +108,9 @@ function googleMapsUrl(lat: number, lng: number): string {
   return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
 }
 
-function publicTrackingUrl(shareToken: string): string {
+function publicTrackingUrl(sessionId: string): string {
   const base = process.env.PUBLIC_TRACKING_BASE_URL ?? "";
-  return `${base}/sos/${shareToken}`;
+  return `${base}/zh-TW?sos=${sessionId}`;
 }
 
 async function getLineContacts(lineUserId: string): Promise<Array<{ userId: string; name: string; _id: unknown }>> {
@@ -1008,7 +1008,7 @@ export async function getActiveSosContext(args: {}, lineUserId?: string): Promis
         locationUpdatedAt: session.locationUpdatedAt,
         updatedAt: session.updatedAt,
         mapsUrl: googleMapsUrl(session.lat, session.lng),
-        trackingUrl: publicTrackingUrl(session.shareToken),
+        trackingUrl: publicTrackingUrl(String(session._id)),
       }));
 
     const latestSession = sessions[0]
@@ -1024,7 +1024,7 @@ export async function getActiveSosContext(args: {}, lineUserId?: string): Promis
           locationUpdatedAt: sessions[0].locationUpdatedAt,
           updatedAt: sessions[0].updatedAt,
           mapsUrl: googleMapsUrl(sessions[0].lat, sessions[0].lng),
-          trackingUrl: publicTrackingUrl(sessions[0].shareToken),
+          trackingUrl: publicTrackingUrl(String(sessions[0]._id)),
         }
       : null;
 
@@ -1070,7 +1070,7 @@ export async function getSosLiveLocation(args: {
       lng: session.lng,
       address: session.address ?? null,
       locationUpdatedAt: session.locationUpdatedAt,
-      trackingUrl: publicTrackingUrl(session.shareToken),
+      trackingUrl: publicTrackingUrl(String(session._id)),
       mapsUrl: googleMapsUrl(session.lat, session.lng),
     });
   } catch (error: any) {

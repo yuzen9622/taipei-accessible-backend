@@ -39,8 +39,8 @@ export function createSosRouter(): Router {
   );
 
   router.get(
-    "/sessions/:token/public",
-    validateRequest({ params: ShareTokenParamSchema }),
+    "/sessions/:id/public",
+    validateRequest({ params: SessionIdParamSchema }),
     getPublicSession,
   );
 

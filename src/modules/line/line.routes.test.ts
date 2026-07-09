@@ -84,7 +84,7 @@ describe("GET /line/route-preview", () => {
     const res = await request(app).get("/api/v1/line/route-preview?sessionId=s1");
 
     expect(res.status).toBe(ResponseCode.OK);
-    expect(vi.mocked(service.getRoutePreview)).toHaveBeenCalledWith("s1");
+    expect(vi.mocked(service.getRoutePreview)).toHaveBeenCalledWith("s1", undefined, undefined, undefined);
     expect(res.body).toMatchObject({
       ok: true,
       status: "success",

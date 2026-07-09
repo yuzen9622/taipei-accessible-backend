@@ -686,7 +686,7 @@ describe("LINE SOS tools", () => {
     const raw = await getActiveSosContext({}, "line-1");
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
-    expect(result.activeSessions[0].trackingUrl).toContain("/sos/token123");
+    expect(result.activeSessions[0].trackingUrl).toContain("/zh-TW?sos=s1");
   });
 
   it("getSosLiveLocation 回傳前端 trackingUrl", async () => {
@@ -719,7 +719,7 @@ describe("LINE SOS tools", () => {
     const raw = await getSosLiveLocation({ sessionId: "s1" }, "line-1");
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
-    expect(result.trackingUrl).toContain("/sos/token123");
+    expect(result.trackingUrl).toContain("/zh-TW?sos=s1");
   });
 
   it("planRouteToSosVictim 使用共享位置當起點", async () => {

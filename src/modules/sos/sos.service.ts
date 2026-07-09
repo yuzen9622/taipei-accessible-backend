@@ -25,9 +25,9 @@ function fail(httpCode: number, reason: keyof typeof SOS_REASON): ServiceResult 
  * @param shareToken The session's high-entropy share token.
  * @returns The full tracking URL for LINE notifications / browsers.
  */
-function trackingUrl(shareToken: string): string {
+function trackingUrl(sessionId: string): string {
   const base = process.env.PUBLIC_TRACKING_BASE_URL ?? "";
-  return `${base}/sos/${shareToken}`;
+  return `${base}/zh-TW?sos=${sessionId}`;
 }
 
 /**
@@ -83,7 +83,7 @@ export async function createSession(input: CreateSosInput): Promise<ServiceResul
     const notifiedCount = await sendSosNotification(lineUserIds, {
       userName,
       type: input.type,
-      trackingUrl: trackingUrl(session.shareToken),
+      trackingUrl: trackingUrl(String(session._id)),
       address: session.address,
     });
 
@@ -188,8 +188,11 @@ export async function resolveSession(input: ResolveSosInput): Promise<ServiceRes
  * @param token The 32-char share token.
  * @returns 200 with a minimal location view, 404 unknown, or 410 expired.
  */
-export async function getPublicByToken(token: string): Promise<ServiceResult> {
-  const session = await SosSession.findOne({ shareToken: token }).lean();
+export async function getPublicById(sessionId: string): Promise<ServiceResult> {
+  if (!Types.ObjectId.isValid(sessionId)) {
+    return { ok: false, httpCode: ResponseCode.NOT_FOUND, message: SOS_MSG.TRACKING_NOT_FOUND, data: { reason: SOS_REASON.SESSION_NOT_FOUND } };
+  }
+  const session = await SosSession.findById(sessionId).lean();
   if (!session) {
     return { ok: false, httpCode: ResponseCode.NOT_FOUND, message: SOS_MSG.TRACKING_NOT_FOUND, data: { reason: SOS_REASON.SESSION_NOT_FOUND } };
   }

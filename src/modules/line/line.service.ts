@@ -22,6 +22,7 @@ import type {
   LineServiceResult,
 } from "./line.types";
 import type { RunToolLoopResult } from "../ai/ai-chat.service";
+import type { AccessibilityMode, TravelMode } from "../../types/route";
 
 function getUserId(event: LineEvent): string | undefined {
   const source = event.source as webhook.UserSource | undefined;
@@ -40,7 +41,9 @@ function asString(value: unknown): string | undefined {
 function routePreviewUrl(sessionId?: string): string | undefined {
   const explicitBase = process.env.PUBLIC_LIFF_ROUTE_BASE_URL?.trim();
   const fallbackBase = process.env.PUBLIC_TRACKING_BASE_URL?.trim();
-  const base = explicitBase || (fallbackBase ? `${fallbackBase.replace(/\/$/, "")}/liff/route` : "");
+  const base =
+    explicitBase ||
+    (fallbackBase ? `${fallbackBase.replace(/\/$/, "")}/liff/route` : "");
   if (!base) return undefined;
   try {
     const url = new URL(base);
@@ -78,7 +81,10 @@ function parseStructuredAgentText(text: string): {
   }
 }
 
-function routeOptionsFromStructuredData(uiData: Record<string, unknown>): RouteCardPayload | null {
+function routeOptionsFromStructuredData(
+  uiData: Record<string, unknown>,
+  toolResults: RunToolLoopResult["toolResults"],
+): RouteCardPayload | null {
   const origin = asString(uiData.origin);
   const destination = asString(uiData.destination);
   if (!origin || !destination) return null;
@@ -93,14 +99,30 @@ function routeOptionsFromStructuredData(uiData: Record<string, unknown>): RouteC
       const time = asString(value);
       return time ? { label, time } : null;
     })
-    .filter((value): value is { label: string; time: string } => Boolean(value));
+    .filter((value): value is { label: string; time: string } =>
+      Boolean(value),
+    );
 
   if (!options.length) return null;
+
+  let sessionId = asString(uiData.sessionId);
+  if (!sessionId) {
+    const routeResult = [...toolResults]
+      .reverse()
+      .find(
+        (entry) =>
+          entry.name === "planRouteToSosVictim" && isRecord(entry.result),
+      );
+    if (routeResult && isRecord(routeResult.result)) {
+      sessionId = asString(routeResult.result.sessionId);
+    }
+  }
+
   return {
     origin,
     destination,
     options,
-    liffUrl: asString(uiData.liff_url) ?? routePreviewUrl(asString(uiData.sessionId)),
+    liffUrl: asString(uiData.liff_url) ?? routePreviewUrl(sessionId),
   };
 }
 
@@ -112,8 +134,10 @@ function describeRouteLegs(legs: unknown): string | undefined {
       if (!isRecord(leg)) return undefined;
       const type = asString(leg.type);
       if (type === "WALK") return "步行";
-      if (type === "BUS") return `公車${asString(leg.routeName) ? ` ${asString(leg.routeName)}` : ""}`;
-      if (type === "METRO") return `捷運${asString(leg.lineName) ? ` ${asString(leg.lineName)}` : ""}`;
+      if (type === "BUS")
+        return `公車${asString(leg.routeName) ? ` ${asString(leg.routeName)}` : ""}`;
+      if (type === "METRO")
+        return `捷運${asString(leg.lineName) ? ` ${asString(leg.lineName)}` : ""}`;
       if (type === "THSR") return "高鐵";
       if (type === "TRA") return "台鐵";
       if (type === "DRIVE") return "汽車";
@@ -124,11 +148,21 @@ function describeRouteLegs(legs: unknown): string | undefined {
   return labels.length ? labels.join(" → ") : undefined;
 }
 
-function routeCardFromToolResults(toolResults: RunToolLoopResult["toolResults"]): RouteCardPayload | null {
+function routeCardFromToolResults(
+  toolResults: RunToolLoopResult["toolResults"],
+): RouteCardPayload | null {
   const routeResult = [...toolResults]
     .reverse()
-    .find((entry) => entry.name === "planRouteToSosVictim" && isRecord(entry.result));
-  if (!routeResult || !isRecord(routeResult.result) || routeResult.result.ok !== true) return null;
+    .find(
+      (entry) =>
+        entry.name === "planRouteToSosVictim" && isRecord(entry.result),
+    );
+  if (
+    !routeResult ||
+    !isRecord(routeResult.result) ||
+    routeResult.result.ok !== true
+  )
+    return null;
 
   const result = routeResult.result;
   const routes = Array.isArray(result.routes) ? result.routes : [];
@@ -136,20 +170,28 @@ function routeCardFromToolResults(toolResults: RunToolLoopResult["toolResults"])
     .slice(0, 3)
     .map((route, index): RouteCardPayload["options"][number] | null => {
       if (!isRecord(route)) return null;
-      const totalMinutes = typeof route.totalMinutes === "number" ? route.totalMinutes : undefined;
+      const totalMinutes =
+        typeof route.totalMinutes === "number" ? route.totalMinutes : undefined;
       return {
         label: asString(route.routeName) ?? `路線 ${index + 1}`,
-        time: totalMinutes !== undefined ? `約 ${Math.round(totalMinutes)} 分鐘` : "時間待確認",
+        time:
+          totalMinutes !== undefined
+            ? `約 ${Math.round(totalMinutes)} 分鐘`
+            : "時間待確認",
         detail: describeRouteLegs(route.legs),
       };
     })
-    .filter((value): value is RouteCardPayload["options"][number] => Boolean(value));
+    .filter((value): value is RouteCardPayload["options"][number] =>
+      Boolean(value),
+    );
 
   if (!options.length) return null;
 
   const destination = isRecord(result.destination)
-    ? asString(result.destination.address) ?? asString(result.ownerName) ?? "求救者位置"
-    : asString(result.ownerName) ?? "求救者位置";
+    ? (asString(result.destination.address) ??
+      asString(result.ownerName) ??
+      "求救者位置")
+    : (asString(result.ownerName) ?? "求救者位置");
   return {
     origin: "你分享的位置",
     destination,
@@ -166,11 +208,15 @@ function buildAgentReply(result: RunToolLoopResult): {
 
   const structuredRouteCard =
     structured.uiType === "route_card" && structured.uiData
-      ? routeOptionsFromStructuredData(structured.uiData)
+      ? routeOptionsFromStructuredData(
+          structured.uiData,
+          result.toolResults ?? [],
+        )
       : null;
   return {
     speech: structured.speech || LINE_MSG.INFO,
-    routeCard: structuredRouteCard ?? routeCardFromToolResults(result.toolResults ?? []),
+    routeCard:
+      structuredRouteCard ?? routeCardFromToolResults(result.toolResults ?? []),
   };
 }
 
@@ -214,7 +260,9 @@ async function handleTextMessage(
 
 async function handleLocationMessage(
   replyToken: string,
-  message: Extract<LineEvent, { type: "message" }>["message"] & { type: "location" },
+  message: Extract<LineEvent, { type: "message" }>["message"] & {
+    type: "location";
+  },
   lineUserId?: string,
 ): Promise<void> {
   if (!lineUserId) return;
@@ -231,7 +279,11 @@ async function handleLocationMessage(
   );
 
   if (replyToken) {
-    await replyText(replyToken, "已收到你的位置，可以直接說要去哪裡，我會幫你規劃路線。");
+    await handleTextMessage(
+      replyToken,
+      `我的目前位置為${message.latitude}, ${message.longitude}，我要過去`,
+      lineUserId,
+    );
   }
 }
 
@@ -281,6 +333,9 @@ export async function handleEvents(events: LineEvent[]): Promise<void> {
 
 export async function getRoutePreview(
   sessionId: string,
+  travelMode?: TravelMode,
+  mode?: AccessibilityMode,
+  departureTime?: string,
 ): Promise<LineServiceResult<LineRoutePreviewData>> {
   if (!Types.ObjectId.isValid(sessionId)) {
     return fail(ResponseCode.NOT_FOUND, "找不到進行中的求救紀錄");
@@ -318,8 +373,10 @@ export async function getRoutePreview(
       latitude: session.lat,
       longitude: session.lng,
     },
-    mode: "normal",
+    mode: mode ?? "normal",
+    travelMode: travelMode ?? "transit",
     maxTransfers: 2,
+    departureTime,
   });
 
   if (!routeResult.ok) {

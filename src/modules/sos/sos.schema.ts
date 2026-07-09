@@ -81,10 +81,10 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/sos/sessions/{token}/public",
+  path: "/sos/sessions/{id}/public",
   tags: ["SOS"],
   summary: "公開追蹤頁查詢（無需登入）",
-  request: { params: ShareTokenParamSchema },
+  request: { params: SessionIdParamSchema },
   responses: {
     200: { description: "即時位置" },
     404: { description: "找不到此追蹤連結" },

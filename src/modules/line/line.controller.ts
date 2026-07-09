@@ -21,8 +21,18 @@ export function handleWebhook(req: Request, res: Response) {
 }
 
 export async function getRoutePreview(req: Request, res: Response) {
-  const query = req.validated?.query as { sessionId: string };
-  const result = await service.getRoutePreview(query.sessionId);
+  const query = req.validated?.query as {
+    sessionId: string;
+    travelMode?: any;
+    mode?: any;
+    departureTime?: string;
+  };
+  const result = await service.getRoutePreview(
+    query.sessionId,
+    query.travelMode,
+    query.mode,
+    query.departureTime,
+  );
   return sendResponse(
     res,
     result.ok,
