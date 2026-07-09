@@ -374,7 +374,7 @@ export async function getRoutePreview(
       longitude: session.lng,
     },
     mode: mode ?? "normal",
-    travelMode: travelMode ?? "transit",
+    travelMode: travelMode ?? "drive",
     maxTransfers: 2,
     departureTime,
   });
@@ -392,18 +392,9 @@ export async function getRoutePreview(
       ...routeResult.data,
       sessionId: String(session._id),
       ownerName: owner?.name ?? "未知使用者",
-      origin: {
-        label: "你分享的位置",
-        lat: contact.lastLineLat,
-        lng: contact.lastLineLng,
-      },
-      destination: {
-        label: session.address ?? "求救者位置",
-        lat: session.lat,
-        lng: session.lng,
-        address: session.address ?? null,
-      },
-      travelMode: routeResult.data.travelMode ?? "transit",
+      originLabel: "你分享的位置",
+      destinationLabel: session.address ?? "求救者位置",
+      travelMode: routeResult.data.travelMode ?? travelMode ?? "drive",
     },
   };
 }

@@ -26,20 +26,11 @@ export const RoutePreviewQuerySchema = z
   })
   .strict();
 
-const RoutePreviewPointSchema = z
-  .object({
-    label: z.string().openapi({ example: "你分享的位置" }),
-    lat: z.number().openapi({ example: 25.03 }),
-    lng: z.number().openapi({ example: 121.56 }),
-    address: z.string().nullable().optional().openapi({ example: "台北車站" }),
-  })
-  .openapi("LineRoutePreviewPoint");
-
 const RoutePreviewDataSchema = AccessibleRouteDataSchema.extend({
   sessionId: z.string().openapi({ example: "6a4e797394fbb1b1721c8b81" }),
   ownerName: z.string().openapi({ example: "王小明" }),
-  origin: RoutePreviewPointSchema,
-  destination: RoutePreviewPointSchema,
+  originLabel: z.string().openapi({ example: "你分享的位置" }),
+  destinationLabel: z.string().openapi({ example: "台北車站" }),
 }).openapi("LineRoutePreviewData");
 
 const RoutePreviewResponseSchema = z

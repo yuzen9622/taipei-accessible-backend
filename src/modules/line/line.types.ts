@@ -1,5 +1,6 @@
 import type { webhook } from "@line/bot-sdk";
 import type { AccessibleRoute } from "../accessible-route/accessible-route.service";
+import type { PlanRouteResult } from "../accessible-route/accessible-route.service";
 import type { ResponseCode } from "../../types/code";
 
 export type LineEvent = webhook.Event;
@@ -9,21 +10,13 @@ export interface LineWebhookBody {
   events: LineEvent[];
 }
 
-export interface LineRoutePreviewPoint {
-  label: string;
-  lat: number;
-  lng: number;
-  address?: string | null;
-}
+export type PlanRouteData = Exclude<PlanRouteResult, { ok: false }>["data"];
 
-export interface LineRoutePreviewData {
+export interface LineRoutePreviewData extends PlanRouteData {
   sessionId: string;
   ownerName: string;
-  origin: LineRoutePreviewPoint;
-  destination: LineRoutePreviewPoint;
-  city: string;
-  travelMode: "transit" | "drive" | "motorcycle" | "walk";
-  routes: AccessibleRoute[];
+  originLabel: string;
+  destinationLabel: string;
 }
 
 export interface LineServiceResult<T = unknown> {

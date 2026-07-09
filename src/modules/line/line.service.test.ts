@@ -211,6 +211,11 @@ describe("line.service — message", () => {
   });
 
   it("stores shared location and acknowledges it", async () => {
+    vi.mocked(runToolLoop).mockResolvedValue({
+      text: JSON.stringify({ speech: "規劃路線中..." }),
+      toolResults: [],
+    });
+
     await handleEvents([
       {
         type: "message",
@@ -236,9 +241,10 @@ describe("line.service — message", () => {
         },
       },
     );
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
       "r2",
-      "已收到你的位置，可以直接說要去哪裡，我會幫你規劃路線。",
+      "規劃路線中...",
+      null
     );
   });
 });
@@ -292,15 +298,17 @@ describe("line.service — route preview", () => {
       origin: { latitude: 25.03, longitude: 121.56 },
       destination: { latitude: 25.0478, longitude: 121.5171 },
       mode: "normal",
-      travelMode: "transit",
+      travelMode: "drive",
       maxTransfers: 2,
       departureTime: undefined,
     });
     expect(result.data).toMatchObject({
       sessionId,
       ownerName: "王小明",
-      origin: { label: "你分享的位置", lat: 25.03, lng: 121.56 },
-      destination: { label: "台北車站", lat: 25.0478, lng: 121.5171, address: "台北車站" },
+      origin: { lat: 25.03, lng: 121.56 },
+      destination: { lat: 25.0478, lng: 121.5171 },
+      originLabel: "你分享的位置",
+      destinationLabel: "台北車站",
       routes: [{ routeName: "route1" }],
     });
   });
