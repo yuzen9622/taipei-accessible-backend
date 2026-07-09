@@ -23,6 +23,12 @@ vi.mock("@line/bot-sdk", async (orig) => {
 });
 
 vi.mock("./line.service", () => ({
+  getRoutePreview: vi.fn().mockResolvedValue({
+    ok: true,
+    httpCode: 200,
+    message: "OK",
+    data: { sessionId: "s1", routes: [] },
+  }),
   handleEvents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -35,6 +41,12 @@ const URL = "/api/v1/line/webhook";
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(service.getRoutePreview).mockResolvedValue({
+    ok: true,
+    httpCode: ResponseCode.OK,
+    message: "OK",
+    data: { sessionId: "s1", routes: [] },
+  } as any);
   vi.mocked(service.handleEvents).mockResolvedValue(undefined);
 });
 
@@ -57,5 +69,46 @@ describe("POST /line/webhook", () => {
       .send(JSON.stringify({ events }));
     expect(res.status).toBe(200);
     expect(vi.mocked(service.handleEvents)).toHaveBeenCalledWith(events);
+  });
+});
+
+describe("GET /line/route-preview", () => {
+  it("returns 400 when sessionId is missing", async () => {
+    const res = await request(app).get("/api/v1/line/route-preview");
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(service.getRoutePreview)).not.toHaveBeenCalled();
+  });
+
+  it("delegates to the service and returns the route preview envelope", async () => {
+    const res = await request(app).get("/api/v1/line/route-preview?sessionId=s1");
+
+    expect(res.status).toBe(ResponseCode.OK);
+    expect(vi.mocked(service.getRoutePreview)).toHaveBeenCalledWith("s1");
+    expect(res.body).toMatchObject({
+      ok: true,
+      status: "success",
+      code: ResponseCode.OK,
+      message: "OK",
+      data: { sessionId: "s1", routes: [] },
+    });
+  });
+
+  it("passes service errors through the standard envelope", async () => {
+    vi.mocked(service.getRoutePreview).mockResolvedValue({
+      ok: false,
+      httpCode: ResponseCode.NOT_FOUND,
+      message: "找不到進行中的求救紀錄",
+    } as any);
+
+    const res = await request(app).get("/api/v1/line/route-preview?sessionId=missing");
+
+    expect(res.status).toBe(ResponseCode.NOT_FOUND);
+    expect(res.body).toMatchObject({
+      ok: false,
+      status: "error",
+      code: ResponseCode.NOT_FOUND,
+      message: "找不到進行中的求救紀錄",
+    });
   });
 });

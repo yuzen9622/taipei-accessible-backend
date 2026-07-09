@@ -1,4 +1,5 @@
 import { webhook } from "@line/bot-sdk";
+import { Types } from "mongoose";
 import { executeLocalTool } from "../ai/agent-tools";
 import { toGeminiHistory, runToolLoop } from "../ai/ai-chat.service";
 import { lineFamilyTools } from "../../config/ai/tool";
@@ -11,7 +12,15 @@ import {
 } from "../../adapters/line.adapter";
 import { LINE_MSG } from "../../constants/messages";
 import { model } from "../../config/ai";
-import type { LineEvent } from "./line.types";
+import SosSession from "../../model/sos-session.model";
+import User from "../../model/user.model";
+import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
+import { ResponseCode } from "../../types/code";
+import type {
+  LineEvent,
+  LineRoutePreviewData,
+  LineServiceResult,
+} from "./line.types";
 import type { RunToolLoopResult } from "../ai/ai-chat.service";
 
 function getUserId(event: LineEvent): string | undefined {
@@ -40,6 +49,13 @@ function routePreviewUrl(sessionId?: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function fail<T = never>(
+  httpCode: ResponseCode,
+  message: string,
+): LineServiceResult<T> {
+  return { ok: false, httpCode, message };
 }
 
 function parseStructuredAgentText(text: string): {
@@ -261,4 +277,76 @@ export async function handleEvents(events: LineEvent[]): Promise<void> {
       console.error("[line.service] event handling failed", err);
     }
   }
+}
+
+export async function getRoutePreview(
+  sessionId: string,
+): Promise<LineServiceResult<LineRoutePreviewData>> {
+  if (!Types.ObjectId.isValid(sessionId)) {
+    return fail(ResponseCode.NOT_FOUND, "找不到進行中的求救紀錄");
+  }
+
+  const session = await SosSession.findById(sessionId).lean();
+  if (!session || session.status !== "active") {
+    return fail(ResponseCode.NOT_FOUND, "找不到進行中的求救紀錄");
+  }
+
+  const contact = await EmergencyContact.findOne({
+    userId: String(session.userId),
+    bindStatus: "bound",
+    lineUserId: { $ne: null },
+    lastLineLat: { $ne: null },
+    lastLineLng: { $ne: null },
+  })
+    .sort({ lastLineLocationUpdatedAt: -1, updatedAt: -1 })
+    .select("lastLineLat lastLineLng lastLineLocationUpdatedAt")
+    .lean();
+
+  if (
+    typeof contact?.lastLineLat !== "number" ||
+    typeof contact?.lastLineLng !== "number"
+  ) {
+    return fail(ResponseCode.INVALID_INPUT, "尚未取得家人目前位置");
+  }
+
+  const routeResult = await planAccessibleRouteFromRequest({
+    origin: {
+      latitude: contact.lastLineLat,
+      longitude: contact.lastLineLng,
+    },
+    destination: {
+      latitude: session.lat,
+      longitude: session.lng,
+    },
+    mode: "normal",
+    maxTransfers: 2,
+  });
+
+  if (!routeResult.ok) {
+    return fail(routeResult.status, routeResult.error);
+  }
+
+  const owner = await User.findById(session.userId).select("name").lean();
+  return {
+    ok: true,
+    httpCode: ResponseCode.OK,
+    message: "OK",
+    data: {
+      ...routeResult.data,
+      sessionId: String(session._id),
+      ownerName: owner?.name ?? "未知使用者",
+      origin: {
+        label: "你分享的位置",
+        lat: contact.lastLineLat,
+        lng: contact.lastLineLng,
+      },
+      destination: {
+        label: session.address ?? "求救者位置",
+        lat: session.lat,
+        lng: session.lng,
+        address: session.address ?? null,
+      },
+      travelMode: routeResult.data.travelMode ?? "transit",
+    },
+  };
 }

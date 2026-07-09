@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { ResponseCode } from "../../types/code";
+import { sendResponse } from "../../config/lib";
 import * as service from "./line.service";
 import type { LineEvent } from "./line.types";
 
@@ -17,4 +18,17 @@ export function handleWebhook(req: Request, res: Response) {
   void service.handleEvents(events).catch((err) => {
     console.error("[line.controller] handleEvents failed", err);
   });
+}
+
+export async function getRoutePreview(req: Request, res: Response) {
+  const query = req.validated?.query as { sessionId: string };
+  const result = await service.getRoutePreview(query.sessionId);
+  return sendResponse(
+    res,
+    result.ok,
+    result.ok ? "success" : "error",
+    result.httpCode,
+    result.message,
+    result.data,
+  );
 }

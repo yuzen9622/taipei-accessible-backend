@@ -20,19 +20,47 @@ vi.mock("../../config/ai/line-family-prompt", () => ({
 
 vi.mock("../../model/emergency-contact.model", () => ({
   default: {
+    findOne: vi.fn(),
     updateMany: vi.fn(),
   },
 }));
 
-import { handleEvents } from "./line.service";
+vi.mock("../../model/sos-session.model", () => ({
+  default: {
+    findById: vi.fn(),
+  },
+}));
+
+vi.mock("../../model/user.model", () => ({
+  default: {
+    findById: vi.fn(),
+  },
+}));
+
+vi.mock("../accessible-route/accessible-route.service", () => ({
+  planAccessibleRouteFromRequest: vi.fn(),
+}));
+
+import { getRoutePreview, handleEvents } from "./line.service";
 import { replyAgentResult, replyText } from "../../adapters/line.adapter";
 import { runToolLoop } from "../ai/ai-chat.service";
 import EmergencyContact from "../../model/emergency-contact.model";
+import SosSession from "../../model/sos-session.model";
+import User from "../../model/user.model";
+import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { LINE_MSG } from "../../constants/messages";
+import { ResponseCode } from "../../types/code";
 import type { LineEvent } from "./line.types";
 
 const contactModel = EmergencyContact as unknown as {
+  findOne: ReturnType<typeof vi.fn>;
   updateMany: ReturnType<typeof vi.fn>;
+};
+const sosSessionModel = SosSession as unknown as {
+  findById: ReturnType<typeof vi.fn>;
+};
+const userModel = User as unknown as {
+  findById: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
@@ -41,6 +69,16 @@ beforeEach(() => {
   vi.mocked(replyAgentResult).mockResolvedValue(undefined);
   vi.mocked(replyText).mockResolvedValue(undefined);
   vi.mocked(runToolLoop).mockResolvedValue({ text: "agent reply", toolResults: [] });
+  vi.mocked(planAccessibleRouteFromRequest).mockResolvedValue({
+    ok: true,
+    data: {
+      origin: { lat: 25.03, lng: 121.56 },
+      destination: { lat: 25.0478, lng: 121.5171 },
+      city: "Taipei",
+      travelMode: "transit",
+      routes: [{ routeName: "route1", totalMinutes: 12, legs: [{ type: "WALK" }] }],
+    } as any,
+  });
 });
 
 function textEvent(text: string): LineEvent {
@@ -217,5 +255,86 @@ describe("line.service — unfollow", () => {
       { lineUserId: "U1" },
       { $set: { bindStatus: "pending", lineUserId: null } },
     );
+  });
+});
+
+describe("line.service — route preview", () => {
+  it("plans a route from the latest bound contact location to an active SOS session", async () => {
+    const sessionId = "68ef6e5b7f7f3a3b78f51291";
+    sosSessionModel.findById.mockReturnValue({
+      lean: () => Promise.resolve({
+        _id: sessionId,
+        userId: "u1",
+        status: "active",
+        lat: 25.0478,
+        lng: 121.5171,
+        address: "台北車站",
+      }),
+    });
+    contactModel.findOne.mockReturnValue({
+      sort: () => ({
+        select: () => ({
+          lean: () => Promise.resolve({
+            lastLineLat: 25.03,
+            lastLineLng: 121.56,
+          }),
+        }),
+      }),
+    });
+    userModel.findById.mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve({ name: "王小明" }) }),
+    });
+
+    const result = await getRoutePreview(sessionId);
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(planAccessibleRouteFromRequest)).toHaveBeenCalledWith({
+      origin: { latitude: 25.03, longitude: 121.56 },
+      destination: { latitude: 25.0478, longitude: 121.5171 },
+      mode: "normal",
+      maxTransfers: 2,
+    });
+    expect(result.data).toMatchObject({
+      sessionId,
+      ownerName: "王小明",
+      origin: { label: "你分享的位置", lat: 25.03, lng: 121.56 },
+      destination: { label: "台北車站", lat: 25.0478, lng: 121.5171, address: "台北車站" },
+      routes: [{ routeName: "route1" }],
+    });
+  });
+
+  it("returns 404 when the session is not active", async () => {
+    sosSessionModel.findById.mockReturnValue({
+      lean: () => Promise.resolve({ _id: "68ef6e5b7f7f3a3b78f51291", status: "resolved" }),
+    });
+
+    const result = await getRoutePreview("68ef6e5b7f7f3a3b78f51291");
+
+    expect(result.ok).toBe(false);
+    expect(result.httpCode).toBe(ResponseCode.NOT_FOUND);
+    expect(vi.mocked(planAccessibleRouteFromRequest)).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when no bound contact has shared a location", async () => {
+    sosSessionModel.findById.mockReturnValue({
+      lean: () => Promise.resolve({
+        _id: "68ef6e5b7f7f3a3b78f51291",
+        userId: "u1",
+        status: "active",
+        lat: 25.0478,
+        lng: 121.5171,
+      }),
+    });
+    contactModel.findOne.mockReturnValue({
+      sort: () => ({
+        select: () => ({ lean: () => Promise.resolve(null) }),
+      }),
+    });
+
+    const result = await getRoutePreview("68ef6e5b7f7f3a3b78f51291");
+
+    expect(result.ok).toBe(false);
+    expect(result.httpCode).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(planAccessibleRouteFromRequest)).not.toHaveBeenCalled();
   });
 });

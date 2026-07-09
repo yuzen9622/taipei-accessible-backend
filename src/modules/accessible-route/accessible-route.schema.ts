@@ -516,7 +516,7 @@ const AccessibleRouteSchema = z
   })
   .openapi("AccessibleRoute");
 
-const AccessibleRouteDataSchema = z
+export const AccessibleRouteDataSchema = z
   .object({
     origin: CoordSchema.openapi({ example: { lat: 25.041, lng: 121.567 } }),
     destination: CoordSchema.openapi({

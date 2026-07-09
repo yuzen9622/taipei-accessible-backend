@@ -13,6 +13,7 @@ import "../modules/review/review.schema";
 import "../modules/campus/campus.schema";
 import "../modules/emergency-contact/emergency-contact.schema";
 import "../modules/sos/sos.schema";
+import "../modules/line/line.schema";
 
 export function generateOpenAPIDocument() {
   const generator = new OpenApiGeneratorV3(registry.definitions);
