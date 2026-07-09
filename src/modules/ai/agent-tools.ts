@@ -7,9 +7,14 @@ import { getEnvironmentInfo as fetchEnvironment } from "../environment/environme
 import type { GroundingChunk } from "@google/genai";
 import { googleGenAi, model } from "../../config/ai";
 import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
+import { buildBindUrl } from "../../adapters/line.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
 import { slimFacility } from "../accessible-route/facility-slim";
+import EmergencyContact from "../../model/emergency-contact.model";
+import LineLinkCode from "../../model/line-link-code.model";
+import SosSession from "../../model/sos-session.model";
+import User from "../../model/user.model";
 import * as memoryService from "./memory.service";
 import { searchKnowledge } from "./knowledge.service";
 import type {
@@ -93,6 +98,55 @@ export async function findA11yPlaces(args: {
     console.error("[agent-tool:findA11yPlaces]", error);
     return JSON.stringify({ error: "資料庫查詢失敗" });
   }
+}
+
+function normalizeLineCode(code: string): string {
+  return code.trim().toUpperCase();
+}
+
+function googleMapsUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+}
+
+async function getLineContacts(lineUserId: string): Promise<Array<{ userId: string; name: string; _id: unknown }>> {
+  return EmergencyContact.find({
+    lineUserId,
+    bindStatus: "bound",
+  })
+    .select("userId name")
+    .lean();
+}
+
+async function getAuthorizedSessionForLineUser(
+  lineUserId: string,
+  sessionId: string,
+): Promise<{
+  session: {
+    _id: string;
+    userId: string;
+    type: "body" | "trapped" | "share_location";
+    status: "active" | "resolved";
+    lat: number;
+    lng: number;
+    address?: string | null;
+    shareToken: string;
+    locationUpdatedAt: Date;
+    resolvedAt?: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+  } | null;
+  ownerName: string;
+} | null> {
+  const contacts = await getLineContacts(lineUserId);
+  if (!contacts.length) return null;
+  const ownerIds = new Set(contacts.map((contact) => contact.userId));
+  const session = await SosSession.findById(sessionId).lean();
+  if (!session || !ownerIds.has(String(session.userId))) return null;
+  const owner = await User.findById(session.userId).select("name").lean();
+  return {
+    session,
+    ownerName: owner?.name ?? "未知使用者",
+  };
 }
 
 function asCoords(
@@ -797,6 +851,313 @@ export async function searchAccessibilityGuide(args: {
   }
 }
 
+export async function bindEmergencyContactCode(args: {
+  code: string;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
+  }
+  const code = normalizeLineCode(args.code ?? "");
+  if (!/^[A-Z0-9]{6}$/.test(code)) {
+    return JSON.stringify({ ok: false, error: "綁定碼格式錯誤" });
+  }
+
+  try {
+    const contact = await EmergencyContact.findOne({
+      bindStatus: "pending",
+      bindCode: code,
+      bindCodeExpiresAt: { $gt: new Date() },
+    });
+    if (!contact) {
+      return JSON.stringify({ ok: false, error: "找不到可用的緊急聯絡人綁定碼" });
+    }
+
+    contact.bindStatus = "bound";
+    contact.lineUserId = lineUserId;
+    contact.bindCode = null;
+    contact.bindCodeExpiresAt = null;
+    await contact.save();
+
+    return JSON.stringify({
+      ok: true,
+      bound: true,
+      contactId: String(contact._id),
+      contactName: contact.name,
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:bindEmergencyContactCode]", error);
+    return JSON.stringify({ ok: false, error: "緊急聯絡人綁定失敗" });
+  }
+}
+
+export async function bindLineAccountCode(args: {
+  code: string;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
+  }
+  const code = normalizeLineCode(args.code ?? "");
+  if (!/^[A-Z0-9]{6}$/.test(code)) {
+    return JSON.stringify({ ok: false, error: "綁定碼格式錯誤" });
+  }
+
+  try {
+    const linkCode = await LineLinkCode.findOne({ code, expiresAt: { $gt: new Date() } });
+    if (!linkCode) {
+      return JSON.stringify({ ok: false, error: "找不到可用的 LINE 帳號綁定碼" });
+    }
+
+    const existingBoundUser = await User.findOne({ lineUserId }).select("_id name").lean();
+    if (existingBoundUser && String(existingBoundUser._id) !== String(linkCode.userId)) {
+      return JSON.stringify({
+        ok: false,
+        error: "這個 LINE 帳號已綁定其他使用者",
+      });
+    }
+
+    const alreadyLinkedUser = await User.findById(linkCode.userId).select("name lineUserId").lean();
+    if (!alreadyLinkedUser) {
+      return JSON.stringify({ ok: false, error: "找不到對應的使用者" });
+    }
+    if (alreadyLinkedUser.lineUserId && alreadyLinkedUser.lineUserId !== lineUserId) {
+      return JSON.stringify({ ok: false, error: "這個使用者已綁定其他 LINE 帳號" });
+    }
+
+    await User.updateOne(
+      { _id: linkCode.userId },
+      { $set: { lineUserId } },
+    );
+    await LineLinkCode.deleteOne({ _id: linkCode._id });
+
+    return JSON.stringify({
+      ok: true,
+      bound: true,
+      userId: String(linkCode.userId),
+      userName: alreadyLinkedUser.name,
+      bindUrl: buildBindUrl(),
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:bindLineAccountCode]", error);
+    return JSON.stringify({ ok: false, error: "LINE 帳號綁定失敗" });
+  }
+}
+
+export async function getActiveSosContext(args: {}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
+  }
+
+  try {
+    const contacts = await getLineContacts(lineUserId);
+    if (!contacts.length) {
+      return JSON.stringify({ ok: true, activeSessions: [], latestSession: null, message: "目前沒有綁定的家人求救" });
+    }
+
+    const userIds = contacts.map((contact) => contact.userId);
+    const [users, sessions] = await Promise.all([
+      User.find({ _id: { $in: userIds } }).select("name").lean(),
+      SosSession.find({ userId: { $in: userIds } }).sort({ updatedAt: -1 }).lean(),
+    ]);
+
+    const userNameById = new Map(users.map((u) => [String(u._id), u.name ?? "未知使用者"]));
+    const activeSessions = sessions
+      .filter((session) => session.status === "active")
+      .map((session) => ({
+        sessionId: String(session._id),
+        ownerUserId: String(session.userId),
+        ownerName: userNameById.get(String(session.userId)) ?? "未知使用者",
+        type: session.type,
+        status: session.status,
+        address: session.address ?? null,
+        lat: session.lat,
+        lng: session.lng,
+        locationUpdatedAt: session.locationUpdatedAt,
+        updatedAt: session.updatedAt,
+        mapsUrl: googleMapsUrl(session.lat, session.lng),
+      }));
+
+    const latestSession = sessions[0]
+      ? {
+          sessionId: String(sessions[0]._id),
+          ownerUserId: String(sessions[0].userId),
+          ownerName: userNameById.get(String(sessions[0].userId)) ?? "未知使用者",
+          type: sessions[0].type,
+          status: sessions[0].status,
+          address: sessions[0].address ?? null,
+          lat: sessions[0].lat,
+          lng: sessions[0].lng,
+          locationUpdatedAt: sessions[0].locationUpdatedAt,
+          updatedAt: sessions[0].updatedAt,
+          mapsUrl: googleMapsUrl(sessions[0].lat, sessions[0].lng),
+        }
+      : null;
+
+    return JSON.stringify({
+      ok: true,
+      contacts: contacts.map((contact) => ({
+        contactId: String(contact._id),
+        contactName: contact.name,
+        ownerUserId: contact.userId,
+      })),
+      activeSessions,
+      latestSession,
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:getActiveSosContext]", error);
+    return JSON.stringify({ ok: false, error: "SOS 狀態查詢失敗" });
+  }
+}
+
+export async function getSosLiveLocation(args: {
+  sessionId: string;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
+  }
+  if (!args.sessionId?.trim()) {
+    return JSON.stringify({ ok: false, error: "缺少 sessionId" });
+  }
+
+  try {
+    const result = await getAuthorizedSessionForLineUser(lineUserId, args.sessionId.trim());
+    if (!result?.session) {
+      return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
+    }
+    const { session, ownerName } = result;
+    return JSON.stringify({
+      ok: true,
+      sessionId: session._id,
+      ownerName,
+      type: session.type,
+      status: session.status,
+      lat: session.lat,
+      lng: session.lng,
+      address: session.address ?? null,
+      locationUpdatedAt: session.locationUpdatedAt,
+      mapsUrl: googleMapsUrl(session.lat, session.lng),
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:getSosLiveLocation]", error);
+    return JSON.stringify({ ok: false, error: "即時位置查詢失敗" });
+  }
+}
+
+export async function findSosNearbyPlaces(args: {
+  sessionId: string;
+  query: string;
+  maxResults?: number;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
+  }
+  if (!args.sessionId?.trim()) {
+    return JSON.stringify({ ok: false, error: "缺少 sessionId" });
+  }
+  if (!args.query?.trim()) {
+    return JSON.stringify({ ok: false, error: "搜尋關鍵字不能為空" });
+  }
+
+  try {
+    const result = await getAuthorizedSessionForLineUser(lineUserId, args.sessionId.trim());
+    if (!result?.session) {
+      return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
+    }
+
+    const places = await searchPlaces(args.query.trim(), {
+      latitude: result.session.lat,
+      longitude: result.session.lng,
+      maxResults: args.maxResults ?? 3,
+    });
+    return JSON.stringify({
+      ok: true,
+      sessionId: result.session._id,
+      ownerName: result.ownerName,
+      query: args.query.trim(),
+      center: { lat: result.session.lat, lng: result.session.lng },
+      places,
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:findSosNearbyPlaces]", error);
+    return JSON.stringify({ ok: false, error: "附近地點查詢失敗" });
+  }
+}
+
+export async function findSosNearbyA11yPlaces(args: {
+  sessionId: string;
+  query: string;
+  range?: number;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
+  }
+  if (!args.sessionId?.trim()) {
+    return JSON.stringify({ ok: false, error: "缺少 sessionId" });
+  }
+  if (!args.query?.trim()) {
+    return JSON.stringify({ ok: false, error: "地點名稱不能為空" });
+  }
+
+  try {
+    const result = await getAuthorizedSessionForLineUser(lineUserId, args.sessionId.trim());
+    if (!result?.session) {
+      return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
+    }
+    const places = await a11yService.findNearbyLimited(
+      result.session.lat,
+      result.session.lng,
+      args.range ?? 300,
+    );
+    return JSON.stringify({
+      ok: true,
+      sessionId: result.session._id,
+      ownerName: result.ownerName,
+      query: args.query.trim(),
+      center: { lat: result.session.lat, lng: result.session.lng },
+      places: {
+        ...places,
+        nearbyOsm: places.nearbyOsm.map(slimFacility),
+      },
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:findSosNearbyA11yPlaces]", error);
+    return JSON.stringify({ ok: false, error: "附近無障礙設施查詢失敗" });
+  }
+}
+
+export async function getSosEnvironmentInfo(args: {
+  sessionId: string;
+  radius?: number;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
+  }
+  if (!args.sessionId?.trim()) {
+    return JSON.stringify({ ok: false, error: "缺少 sessionId" });
+  }
+
+  try {
+    const result = await getAuthorizedSessionForLineUser(lineUserId, args.sessionId.trim());
+    if (!result?.session) {
+      return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
+    }
+    const data = await fetchEnvironment(
+      result.session.lat,
+      result.session.lng,
+      args.radius ?? 1000,
+    );
+    return JSON.stringify({
+      ok: true,
+      sessionId: result.session._id,
+      ownerName: result.ownerName,
+      center: { lat: result.session.lat, lng: result.session.lng },
+      ...data,
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:getSosEnvironmentInfo]", error);
+    return JSON.stringify({ ok: false, error: "環境資訊查詢失敗" });
+  }
+}
+
 function collectGroundingSources(chunks?: GroundingChunk[]): Array<{
   title: string | null;
   url: string;
@@ -922,7 +1283,11 @@ export async function executeLocalTool(
   args: Record<string, any>,
   userLocation?: { latitude: number; longitude: number },
   userId?: string,
-  options: { allowMemoryWrite?: boolean; explicitMemoryRequest?: boolean } = {},
+  options: {
+    allowMemoryWrite?: boolean;
+    explicitMemoryRequest?: boolean;
+    lineUserId?: string;
+  } = {},
 ): Promise<string> {
   switch (name) {
     case "findGooglePlaces":
@@ -1080,6 +1445,53 @@ export async function executeLocalTool(
       return searchAccessibilityGuide({
         query: args.query as string,
       });
+
+    case "bindEmergencyContactCode":
+      return bindEmergencyContactCode(
+        { code: args.code as string },
+        options.lineUserId,
+      );
+
+    case "bindLineAccountCode":
+      return bindLineAccountCode(
+        { code: args.code as string },
+        options.lineUserId,
+      );
+
+    case "getActiveSosContext":
+      return getActiveSosContext({}, options.lineUserId);
+
+    case "getSosLiveLocation":
+      return getSosLiveLocation({ sessionId: args.sessionId as string }, options.lineUserId);
+
+    case "findSosNearbyPlaces":
+      return findSosNearbyPlaces(
+        {
+          sessionId: args.sessionId as string,
+          query: args.query as string,
+          maxResults: args.maxResults as number | undefined,
+        },
+        options.lineUserId,
+      );
+
+    case "findSosNearbyA11yPlaces":
+      return findSosNearbyA11yPlaces(
+        {
+          sessionId: args.sessionId as string,
+          query: args.query as string,
+          range: args.range as number | undefined,
+        },
+        options.lineUserId,
+      );
+
+    case "getSosEnvironmentInfo":
+      return getSosEnvironmentInfo(
+        {
+          sessionId: args.sessionId as string,
+          radius: args.radius as number | undefined,
+        },
+        options.lineUserId,
+      );
 
     case "webSearch":
       return webSearch({

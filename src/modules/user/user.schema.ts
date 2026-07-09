@@ -49,6 +49,7 @@ const UserSchema = z
     avatar: z.string().url().optional().openapi({ example: "https://example.com/avatar.png" }),
     email: z.string().email().openapi({ example: "jane@example.com" }),
     client_id: z.string().openapi({ example: "google-oauth2|10293847" }),
+    lineUserId: z.string().nullable().optional().openapi({ example: "U1234567890abcdef" }),
     createdAt: z.string().openapi({ example: "2026-01-15T08:30:00.000Z" }),
     updatedAt: z.string().openapi({ example: "2026-06-03T11:45:00.000Z" }),
   })
@@ -104,6 +105,14 @@ export const UserInfoResponseSchema = apiResponse(
 export const ConfigResponseSchema = apiResponse(ConfigSchema.nullable()).openapi("ConfigResponse");
 
 export const UpdateConfigResponseSchema = apiResponse(ConfigSchema).openapi("UpdateConfigResponse");
+
+export const LineLinkCodeResponseSchema = apiResponse(
+  z.object({
+    bindCode: z.string().openapi({ example: "A1B2C3" }),
+    bindCodeExpiresAt: z.string().openapi({ example: "2026-07-09T08:30:00.000Z" }),
+    bindUrl: z.string().openapi({ example: "https://line.me/R/ti/p/@xxxxxxx" }),
+  }),
+).openapi("LineLinkCodeResponse");
 
 export const LogoutResponseSchema = apiResponse().openapi("LogoutResponse");
 
@@ -197,6 +206,29 @@ registry.registerPath({
     },
     403: {
       description: "禁止存取",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "伺服器錯誤",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/user/line-link-code",
+  tags: ["User"],
+  summary: "取得 LINE 帳號綁定碼",
+  description: "由已登入使用者產生一次性 LINE 綁定碼，供使用者在 LINE Bot 中傳送綁定。",
+  security: [{ BearerAuth: [] }],
+  responses: {
+    200: {
+      description: "綁定碼與官方加好友連結",
+      content: { "application/json": { schema: LineLinkCodeResponseSchema } },
+    },
+    403: {
+      description: "未授權",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {

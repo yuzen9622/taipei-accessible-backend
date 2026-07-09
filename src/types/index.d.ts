@@ -4,6 +4,7 @@ export interface IUser {
   avatar?: string;
   email: string;
   client_id: string;
+  lineUserId?: string | null;
   settings?: {
     memoryEnabled?: boolean;
   };
@@ -311,4 +312,42 @@ export interface IHazardReport {
   createdAt: Date;
   updatedAt: Date;
   expiredAt: Date;
+}
+
+export interface IEmergencyContact {
+  _id: string;
+  userId: string;
+  name: string;
+  lineUserId: string | null;
+  bindStatus: "pending" | "bound";
+  bindCode: string | null;
+  bindCodeExpiresAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ILineLinkCode {
+  _id: string;
+  userId: string;
+  code: string;
+  expiresAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ISosSession {
+  _id: string;
+  userId: string;
+  type: "body" | "trapped" | "share_location";
+  status: "active" | "resolved";
+  lat: number;
+  lng: number;
+  address?: string | null;
+  shareToken: string;
+  locationUpdatedAt: Date;
+  resolvedAt?: Date | null;
+  claimedBy?: string | null;
+  staleAlertSent: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 }

@@ -11,6 +11,8 @@ import "../modules/hazard-report/hazard-report.schema";
 import "../modules/environment/environment.schema";
 import "../modules/review/review.schema";
 import "../modules/campus/campus.schema";
+import "../modules/emergency-contact/emergency-contact.schema";
+import "../modules/sos/sos.schema";
 
 export function generateOpenAPIDocument() {
   const generator = new OpenApiGeneratorV3(registry.definitions);

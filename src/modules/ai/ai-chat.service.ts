@@ -93,9 +93,15 @@ function isSuccessResult(json: string): boolean {
  * @param memoryEnabled When true, memory tools are appended to the catalogue.
  * @returns A single-entry Tool list holding every function declaration
  */
-export function buildGeminiTools(userId?: string, memoryEnabled = false): Tool[] {
+export function buildGeminiTools(
+  userId?: string,
+  memoryEnabled = false,
+  extraTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [],
+): Tool[] {
   const specs =
-    userId && memoryEnabled ? [...openAiChatTools, ...memoryTools] : openAiChatTools;
+    userId && memoryEnabled
+      ? [...openAiChatTools, ...memoryTools, ...extraTools]
+      : [...openAiChatTools, ...extraTools];
   const functionDeclarations: FunctionDeclaration[] = specs
     .filter(
       (t): t is Extract<OpenAI.Chat.Completions.ChatCompletionTool, { type: "function" }> =>
@@ -197,10 +203,12 @@ export async function runToolLoop(
   allowMemoryWrite = false,
   explicitMemoryRequest = false,
   execTool: typeof executeLocalTool = executeLocalTool,
+  options: { extraTools?: OpenAI.Chat.Completions.ChatCompletionTool[] } = {},
 ): Promise<RunToolLoopResult> {
   const MAX_ROUNDS = 5;
   const toolCache = new Map<string, string>();
-  const tools = buildGeminiTools(userId, memoryToolsEnabled);
+  const extraTools = options.extraTools ?? [];
+  const tools = buildGeminiTools(userId, memoryToolsEnabled, extraTools);
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const response = await googleGenAi.models.generateContent({

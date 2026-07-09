@@ -86,6 +86,44 @@ async function info(req: Request, res: Response<ApiResponse<{ user: IUser }>>) {
   }
 }
 
+async function lineLinkCode(req: Request, res: Response<ApiResponse<{
+  bindCode: string;
+  bindCodeExpiresAt: Date;
+  bindUrl: string;
+}>>) {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.FORBIDDEN,
+        ResponseMessage.FORBIDDEN
+      );
+    }
+
+    const payload = await userService.issueLineLinkCode(userId);
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      ResponseMessage.OK,
+      payload
+    );
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ResponseMessage.INTERNAL_ERROR
+    );
+  }
+}
+
 async function updateConfig(req: Request, res: Response<ApiResponse<IConfig>>) {
   try {
     const { user_id, ...rest } = req.body;
@@ -246,4 +284,4 @@ async function logout(req: Request, res: Response) {
     return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, "Logout failed");
   }
 }
-export { login, token, refresh, info, config, updateConfig, logout };
+export { login, token, refresh, info, lineLinkCode, config, updateConfig, logout };

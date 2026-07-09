@@ -104,3 +104,54 @@ export const HAZARD_MSG = {
   CONFIRMED: "已確認此回報",
   DENIED: "已否認此回報",
 } as const;
+
+export const CONTACT_REASON = {
+  CONTACT_LIMIT_REACHED: "CONTACT_LIMIT_REACHED",
+  NOT_CONTACT_OWNER: "NOT_CONTACT_OWNER",
+  CONTACT_NOT_FOUND: "CONTACT_NOT_FOUND",
+} as const;
+
+export const CONTACT_MSG = {
+  LIST_OK: "OK",
+  CREATED: "聯絡人已建立，請將綁定連結與綁定碼分享給對方",
+  DELETED: "已刪除",
+  CONTACT_LIMIT_REACHED: "緊急聯絡人已達上限（5 位）",
+  NOT_CONTACT_OWNER: "無權刪除此聯絡人",
+  CONTACT_NOT_FOUND: "找不到該聯絡人",
+} as const;
+
+export const SOS_REASON = {
+  NOT_SESSION_OWNER: "NOT_SESSION_OWNER",
+  SESSION_NOT_ACTIVE: "SESSION_NOT_ACTIVE",
+  SESSION_NOT_FOUND: "SESSION_NOT_FOUND",
+  TRACKING_EXPIRED: "TRACKING_EXPIRED",
+} as const;
+
+export const SOS_MSG = {
+  CREATED: "已發出求救通知",
+  ALREADY_ACTIVE: "已有進行中的求救",
+  RESOLVED: "已解除求救",
+  PUBLIC_OK: "OK",
+  NOT_SESSION_OWNER: "無權更新此求救紀錄",
+  SESSION_NOT_ACTIVE: "此求救已結束",
+  SESSION_NOT_FOUND: "找不到該求救紀錄",
+  TRACKING_NOT_FOUND: "找不到此追蹤連結",
+  TRACKING_EXPIRED: "此追蹤連結已失效",
+} as const;
+
+export const SOS_TYPE_LABEL: Record<"body" | "trapped" | "share_location", string> = {
+  body: "人身安全",
+  trapped: "受困",
+  share_location: "分享位置",
+} as const;
+
+export const LINE_MSG = {
+  WELCOME:
+    "歡迎加入！請輸入朋友分享給你的 6 碼綁定碼以完成綁定。",
+  BIND_SUCCESS: "綁定成功！當對方發出緊急求救時，你會在這裡收到通知。",
+  INFO:
+    "這是緊急求救通知官方帳號。若你收到綁定碼，請直接輸入以完成綁定；當你綁定的親友發出求救時，我們會在此通知你。如遇緊急狀況，請直接撥打 119（消防/救護）或 110（警察）。",
+  SOS_NOTIFY_TITLE: "緊急求救通知",
+  SOS_RESOLVED_TITLE: "求救已解除",
+  VIEW_LOCATION: "查看即時位置",
+} as const;

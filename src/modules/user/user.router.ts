@@ -4,6 +4,7 @@ import {
   token,
   refresh,
   info,
+  lineLinkCode,
   config,
   updateConfig,
   logout,
@@ -23,6 +24,7 @@ export function createUserRouter(): Router {
   router.post("/token", validateRequest({ body: TokenBodySchema }), token);
   router.post("/refresh", refresh);
   router.get("/info", info);
+  router.post("/line-link-code", lineLinkCode);
   router.post("/config", validateRequest({ body: ConfigBodySchema }), config);
   router.post(
     "/config/update",

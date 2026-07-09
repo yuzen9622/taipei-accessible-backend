@@ -488,3 +488,146 @@ export const memoryTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     },
   },
 ];
+
+export const lineFamilyTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "bindEmergencyContactCode",
+      description:
+        "把使用者輸入的 6 碼綁定碼套用到目前這個 LINE 使用者，完成緊急聯絡人綁定。這是緊急聯絡人綁定流程，與 app 帳號綁定不同；若不是 6 碼或找不到對應資料，回傳失敗原因。",
+      parameters: {
+        type: "object",
+        properties: {
+          code: {
+            type: "string",
+            description: "6 碼英數大寫綁定碼；可接受小寫，工具會自行正規化。",
+          },
+        },
+        required: ["code"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "bindLineAccountCode",
+      description:
+        "把使用者輸入的 6 碼帳號綁定碼套用到目前這個 LINE 使用者，完成 app 帳號與 LINE 的對應。這個工具只處理 app 帳號綁定，不處理緊急聯絡人綁定。",
+      parameters: {
+        type: "object",
+        properties: {
+          code: {
+            type: "string",
+            description: "6 碼英數大寫綁定碼；可接受小寫，工具會自行正規化。",
+          },
+        },
+        required: ["code"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getActiveSosContext",
+      description:
+        "查目前這個 LINE 使用者所綁定的所有聯絡人對應的 SOS 狀態，回傳進行中的求救清單與最近一筆求救摘要。使用者問『他現在在哪』『目前狀況如何』『有沒有在求救』時先用這個工具。",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getSosLiveLocation",
+      description:
+        "回傳指定 SOS session 的即時位置、地址、更新時間與 Google Maps 連結。先用 getActiveSosContext 找到 sessionId，再用這個工具查細節。",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "SOS session ID，來自 getActiveSosContext 的結果",
+          },
+        },
+        required: ["sessionId"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "findSosNearbyPlaces",
+      description:
+        "以指定 SOS session 的受困者位置為中心，搜尋附近一般地點（例如醫院、警局、超商）。不要拿家人的位置當中心。",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "SOS session ID，來自 getActiveSosContext 的結果",
+          },
+          query: {
+            type: "string",
+            description: "搜尋關鍵字，例如：『醫院』『警局』『超商』",
+          },
+          maxResults: {
+            type: "number",
+            description: "回傳筆數上限，預設 3",
+          },
+        },
+        required: ["sessionId", "query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "findSosNearbyA11yPlaces",
+      description:
+        "以指定 SOS session 的受困者位置為中心，搜尋附近無障礙設施（電梯、無障礙廁所、坡道等）。不要拿家人的位置當中心。",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "SOS session ID，來自 getActiveSosContext 的結果",
+          },
+          query: {
+            type: "string",
+            description: "地點名稱，例如：『台北車站』『附近捷運站』",
+          },
+          range: {
+            type: "number",
+            description: "搜尋範圍（公尺），預設 300",
+          },
+        },
+        required: ["sessionId", "query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getSosEnvironmentInfo",
+      description:
+        "以指定 SOS session 的受困者位置為中心，回傳天氣、空品與周邊環境資訊。使用者問『那邊天氣怎樣』『附近環境如何』時用這個工具。",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "SOS session ID，來自 getActiveSosContext 的結果",
+          },
+          radius: {
+            type: "number",
+            description: "查詢半徑（公尺），預設 1000",
+          },
+        },
+        required: ["sessionId"],
+      },
+    },
+  },
+];
