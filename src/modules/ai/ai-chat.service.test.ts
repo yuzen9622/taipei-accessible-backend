@@ -120,6 +120,35 @@ describe("runToolLoop dedup", () => {
     expect(mockExec).toHaveBeenCalledTimes(2);
   });
 
+  it("returns parsed tool results for downstream UI mappers", async () => {
+    mockCreate
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "planRouteToSosVictim", args: { sessionId: "s1" } }]),
+      )
+      .mockResolvedValueOnce(stopResponse());
+
+    mockExec.mockResolvedValue(JSON.stringify({
+      ok: true,
+      sessionId: "s1",
+      routes: [{ routeName: "route1", totalMinutes: 12 }],
+    }));
+
+    const contents: Content[] = [{ role: "user", parts: [{ text: "test" }] }];
+    const result = await runToolLoop(contents, undefined, "test-model");
+
+    expect(result.toolResults).toEqual([
+      {
+        name: "planRouteToSosVictim",
+        args: { sessionId: "s1" },
+        result: {
+          ok: true,
+          sessionId: "s1",
+          routes: [{ routeName: "route1", totalMinutes: 12 }],
+        },
+      },
+    ]);
+  });
+
   it("args 順序不同但值相同 → 命中 cache", async () => {
     mockCreate
       .mockResolvedValueOnce(

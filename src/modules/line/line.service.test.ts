@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../adapters/line.adapter", () => ({
+  replyAgentResult: vi.fn().mockResolvedValue(undefined),
   replyText: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -24,7 +25,7 @@ vi.mock("../../model/emergency-contact.model", () => ({
 }));
 
 import { handleEvents } from "./line.service";
-import { replyText } from "../../adapters/line.adapter";
+import { replyAgentResult, replyText } from "../../adapters/line.adapter";
 import { runToolLoop } from "../ai/ai-chat.service";
 import EmergencyContact from "../../model/emergency-contact.model";
 import { LINE_MSG } from "../../constants/messages";
@@ -36,8 +37,10 @@ const contactModel = EmergencyContact as unknown as {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  delete process.env.PUBLIC_LIFF_ROUTE_BASE_URL;
+  vi.mocked(replyAgentResult).mockResolvedValue(undefined);
   vi.mocked(replyText).mockResolvedValue(undefined);
-  vi.mocked(runToolLoop).mockResolvedValue({ text: "agent reply" });
+  vi.mocked(runToolLoop).mockResolvedValue({ text: "agent reply", toolResults: [] });
 });
 
 function textEvent(text: string): LineEvent {
@@ -63,7 +66,102 @@ describe("line.service — message", () => {
     await handleEvents([textEvent("他現在在哪")]);
 
     expect(vi.mocked(runToolLoop)).toHaveBeenCalled();
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("r1", "agent reply");
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith("r1", "agent reply", null);
+  });
+
+  it("turns structured route_card JSON into a text reply plus route card payload", async () => {
+    vi.mocked(runToolLoop).mockResolvedValue({
+      text: JSON.stringify({
+        speech: "我幫你找到 3 種路線，機車最快，約 8 分鐘。",
+        ui_type: "route_card",
+        ui_data: {
+          origin: "清華大學",
+          destination: "陽明交通大學",
+          scooter_time: "8 分鐘",
+          car_time: "10 分鐘",
+          transit_time: "25 分鐘",
+          liff_url: "https://liff.example.com/route?id=abc123",
+        },
+      }),
+      toolResults: [],
+    });
+
+    await handleEvents([textEvent("清大到交大")]);
+
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
+      "r1",
+      "我幫你找到 3 種路線，機車最快，約 8 分鐘。",
+      {
+        origin: "清華大學",
+        destination: "陽明交通大學",
+        options: [
+          { label: "機車", time: "8 分鐘" },
+          { label: "汽車", time: "10 分鐘" },
+          { label: "大眾運輸", time: "25 分鐘" },
+        ],
+        liffUrl: "https://liff.example.com/route?id=abc123",
+      },
+    );
+  });
+
+  it("builds a route card from the planRouteToSosVictim tool result when final text is plain speech", async () => {
+    process.env.PUBLIC_LIFF_ROUTE_BASE_URL = "https://liff.example.com/route";
+    vi.mocked(runToolLoop).mockResolvedValue({
+      text: "我幫你找到可前往的路線。",
+      toolResults: [
+        {
+          name: "planRouteToSosVictim",
+          args: { sessionId: "s1" },
+          result: {
+            ok: true,
+            sessionId: "s1",
+            ownerName: "王小明",
+            destination: { address: "台北車站" },
+            routes: [
+              {
+                routeName: "無障礙路線",
+                totalMinutes: 12,
+                legs: [{ type: "WALK" }, { type: "BUS", routeName: "307" }],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await handleEvents([textEvent("我要過去")]);
+
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
+      "r1",
+      "我幫你找到可前往的路線。",
+      {
+        origin: "你分享的位置",
+        destination: "台北車站",
+        options: [
+          {
+            label: "無障礙路線",
+            time: "約 12 分鐘",
+            detail: "步行 → 公車 307",
+          },
+        ],
+        liffUrl: "https://liff.example.com/route?sessionId=s1",
+      },
+    );
+  });
+
+  it("falls back to plain speech when structured JSON has no supported UI card", async () => {
+    vi.mocked(runToolLoop).mockResolvedValue({
+      text: JSON.stringify({ speech: "目前沒有進行中的求救。", ui_type: "none", ui_data: {} }),
+      toolResults: [],
+    });
+
+    await handleEvents([textEvent("他現在在哪")]);
+
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
+      "r1",
+      "目前沒有進行中的求救。",
+      null,
+    );
   });
 
   it("falls back to the fixed info reply when the agent fails", async () => {
@@ -72,6 +170,38 @@ describe("line.service — message", () => {
     await handleEvents([textEvent("他現在在哪")]);
 
     expect(vi.mocked(replyText)).toHaveBeenCalledWith("r1", LINE_MSG.INFO);
+  });
+
+  it("stores shared location and acknowledges it", async () => {
+    await handleEvents([
+      {
+        type: "message",
+        replyToken: "r2",
+        source: { type: "user", userId: "U1" },
+        message: {
+          type: "location",
+          title: "現在位置",
+          address: "台北車站",
+          latitude: 25.0478,
+          longitude: 121.5171,
+        },
+      } as unknown as LineEvent,
+    ]);
+
+    expect(contactModel.updateMany).toHaveBeenCalledWith(
+      { lineUserId: "U1", bindStatus: "bound" },
+      {
+        $set: {
+          lastLineLat: 25.0478,
+          lastLineLng: 121.5171,
+          lastLineLocationUpdatedAt: expect.any(Date),
+        },
+      },
+    );
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "r2",
+      "已收到你的位置，可以直接說要去哪裡，我會幫你規劃路線。",
+    );
   });
 });
 

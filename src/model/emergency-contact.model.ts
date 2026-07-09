@@ -6,13 +6,16 @@ const emergencyContactSchema = new Schema<IEmergencyContact>(
     userId: { type: String, required: true, index: true },
     name: { type: String, required: true, maxlength: 50 },
     lineUserId: { type: String, default: null },
-    bindStatus: {
+  bindStatus: {
       type: String,
       enum: ["pending", "bound"],
       default: "pending",
     },
     bindCode: { type: String, default: null },
     bindCodeExpiresAt: { type: Date, default: null },
+    lastLineLat: { type: Number, default: null },
+    lastLineLng: { type: Number, default: null },
+    lastLineLocationUpdatedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

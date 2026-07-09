@@ -17,6 +17,11 @@ export type { OAIMessage };
 
 export interface RunToolLoopResult {
   text?: string;
+  toolResults: Array<{
+    name: string;
+    args: Record<string, unknown>;
+    result: unknown;
+  }>;
 }
 
 /**
@@ -187,9 +192,9 @@ export function toGeminiHistory(
  * @param memoryEnabled Enables memory tools when userId is present.
  * @param execTool Tool executor, injectable for offline eval; defaults to the
  *   real `executeLocalTool`.
- * @returns The model's final text answer. Always resolves with a `text` field
- *   (possibly empty); never returns without one, so callers never need a
- *   divergent fallback generation.
+ * @returns The model's final text answer plus parsed tool results. Always
+ *   resolves with a `text` field (possibly empty); never returns without one,
+ *   so callers never need a divergent fallback generation.
  */
 export async function runToolLoop(
   contents: Content[],
@@ -209,6 +214,7 @@ export async function runToolLoop(
   const toolCache = new Map<string, string>();
   const extraTools = options.extraTools ?? [];
   const tools = buildGeminiTools(userId, memoryToolsEnabled, extraTools);
+  const toolResults: RunToolLoopResult["toolResults"] = [];
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const response = await googleGenAi.models.generateContent({
@@ -220,7 +226,7 @@ export async function runToolLoop(
     const calls = response.functionCalls;
     if (!calls?.length) {
       const text = response.text ?? "";
-      if (text) return { text };
+      if (text) return { text, toolResults };
       break;
     }
 
@@ -256,6 +262,7 @@ export async function runToolLoop(
       }
 
       onToolResult?.(name, parsedResult);
+      toolResults.push({ name, args, result: parsedResult });
 
       const responseObj =
         parsedResult && typeof parsedResult === "object"
@@ -272,7 +279,7 @@ export async function runToolLoop(
     contents,
     config: buildFinalConfig(systemInstruction, tools),
   });
-  return { text: finalResp.text ?? "" };
+  return { text: finalResp.text ?? "", toolResults };
 }
 
 export interface RouteOnceResult {

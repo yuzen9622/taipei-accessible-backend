@@ -322,6 +322,9 @@ export interface IEmergencyContact {
   bindStatus: "pending" | "bound";
   bindCode: string | null;
   bindCodeExpiresAt: Date | null;
+  lastLineLat?: number | null;
+  lastLineLng?: number | null;
+  lastLineLocationUpdatedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -719,7 +719,7 @@ export async function executeLocalTool(
 
 | 家人輸入意圖 | 處理方式 |
 |---|---|
-| 「他在哪」 | 讀取 session 最新 `lat/lng/address/locationUpdatedAt`，附 Google Maps 連結 |
+| 「他在哪」 | 讀取 session 最新 `lat/lng/address/locationUpdatedAt`，附**本服務公開追蹤頁連結**（`{PUBLIC_TRACKING_BASE_URL}/sos/{shareToken}`，與求救推播中的連結一致——家人點開就是前端地圖即時位置）；不以 Google Maps 連結為主要入口 |
 | 「附近有醫院／無障礙設施」 | 重用 `findGooglePlaces` / `findA11yPlaces`，以受困者當前位置為中心 |
 | 「我要過去」 | 重用 `planAccessibleRoute`；**前提**：家人需先透過 LINE 的「分享位置」訊息把自己的位置傳給官方帳號，作為起點 |
 | 「我來處理」 | 認領流程：`SosSession.claimedBy = contactId`，並 push 通知其他已綁定聯絡人「OOO 已認領處理」 |

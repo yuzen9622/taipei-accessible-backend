@@ -41,6 +41,34 @@ vi.mock("../nav-instructions/nav-instructions.service", () => ({
 vi.mock("../accessible-route/facility-slim", () => ({
   slimFacility: vi.fn((f: any) => ({ osmId: f.osmId, category: f.category })),
 }));
+vi.mock("../../model/emergency-contact.model", () => ({
+  default: {
+    find: vi.fn(),
+    findOne: vi.fn(),
+    updateMany: vi.fn(),
+  },
+}));
+vi.mock("../../model/line-link-code.model", () => ({
+  default: {
+    findOne: vi.fn(),
+    deleteOne: vi.fn(),
+  },
+}));
+vi.mock("../../model/sos-session.model", () => ({
+  default: {
+    findById: vi.fn(),
+    findOne: vi.fn(),
+    find: vi.fn(),
+  },
+}));
+vi.mock("../../model/user.model", () => ({
+  default: {
+    find: vi.fn(),
+    findById: vi.fn(),
+    findOne: vi.fn(),
+    updateOne: vi.fn(),
+  },
+}));
 vi.mock("./memory.service", () => ({
   saveMemory: vi.fn(),
   deleteMemory: vi.fn(),
@@ -63,6 +91,10 @@ import { getCoordinates } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
 import { googleGenAi } from "../../config/ai";
+import EmergencyContact from "../../model/emergency-contact.model";
+import LineLinkCode from "../../model/line-link-code.model";
+import SosSession from "../../model/sos-session.model";
+import User from "../../model/user.model";
 import * as memoryServiceMod from "./memory.service";
 import { searchKnowledge } from "./knowledge.service";
 import {
@@ -77,6 +109,9 @@ import {
   searchAccessibilityGuide,
   webSearch,
   executeLocalTool,
+  getActiveSosContext,
+  getSosLiveLocation,
+  planRouteToSosVictim,
 } from "./agent-tools";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<typeof vi.fn>;
@@ -89,6 +124,18 @@ const mockA11yParking = a11yService.findNearbyParking as unknown as ReturnType<t
 const mockPlanRoute = planAccessibleRouteFromRequest as unknown as ReturnType<typeof vi.fn>;
 const mockGenNav = generateNavInstructions as unknown as ReturnType<typeof vi.fn>;
 const mockGenerateContent = googleGenAi.models.generateContent as unknown as ReturnType<typeof vi.fn>;
+const mockEmergencyContactFind = EmergencyContact.find as unknown as ReturnType<typeof vi.fn>;
+const mockEmergencyContactFindOne = EmergencyContact.findOne as unknown as ReturnType<typeof vi.fn>;
+const mockEmergencyContactUpdateMany = EmergencyContact.updateMany as unknown as ReturnType<typeof vi.fn>;
+const mockLineLinkFindOne = LineLinkCode.findOne as unknown as ReturnType<typeof vi.fn>;
+const mockLineLinkDeleteOne = LineLinkCode.deleteOne as unknown as ReturnType<typeof vi.fn>;
+const mockSosSessionFindById = SosSession.findById as unknown as ReturnType<typeof vi.fn>;
+const mockSosSessionFindOne = SosSession.findOne as unknown as ReturnType<typeof vi.fn>;
+const mockSosSessionFind = SosSession.find as unknown as ReturnType<typeof vi.fn>;
+const mockUserFind = User.find as unknown as ReturnType<typeof vi.fn>;
+const mockUserFindById = User.findById as unknown as ReturnType<typeof vi.fn>;
+const mockUserFindOne = User.findOne as unknown as ReturnType<typeof vi.fn>;
+const mockUserUpdateOne = User.updateOne as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -596,6 +643,146 @@ describe("getNavInstructions", () => {
 });
 
 // ---------------------------------------------------------------------------
+// LINE SOS tools
+// ---------------------------------------------------------------------------
+describe("LINE SOS tools", () => {
+  it("getActiveSosContext 回傳 trackingUrl", async () => {
+    mockEmergencyContactFind.mockReturnValue({
+      select: () => ({
+        lean: () =>
+          Promise.resolve([
+            { _id: "c1", userId: "u1", name: "王小明" },
+          ]),
+      }),
+    });
+    mockUserFind.mockReturnValue({
+      select: () => ({
+        lean: () =>
+          Promise.resolve([
+            { _id: "u1", name: "王小明" },
+          ]),
+      }),
+    });
+    mockSosSessionFind.mockReturnValue({
+      sort: () => ({
+        lean: () =>
+          Promise.resolve([
+            {
+              _id: "s1",
+              userId: "u1",
+              type: "body",
+              status: "active",
+              address: "台北車站",
+              lat: 25.0478,
+              lng: 121.5171,
+              locationUpdatedAt: new Date("2026-07-09T01:00:00.000Z"),
+              updatedAt: new Date("2026-07-09T01:00:00.000Z"),
+              shareToken: "token123",
+            },
+          ]),
+      }),
+    });
+
+    const raw = await getActiveSosContext({}, "line-1");
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(true);
+    expect(result.activeSessions[0].trackingUrl).toContain("/sos/token123");
+  });
+
+  it("getSosLiveLocation 回傳前端 trackingUrl", async () => {
+    mockEmergencyContactFind.mockReturnValue({
+      select: () => ({
+        lean: () =>
+          Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
+      }),
+    });
+    mockSosSessionFindById.mockReturnValue({
+      lean: () =>
+        Promise.resolve({
+          _id: "s1",
+          userId: "u1",
+          type: "body",
+          status: "active",
+          address: "台北車站",
+          lat: 25.0478,
+          lng: 121.5171,
+          locationUpdatedAt: new Date("2026-07-09T01:00:00.000Z"),
+          shareToken: "token123",
+        }),
+    });
+    mockUserFindById.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve({ name: "王小明" }),
+      }),
+    });
+
+    const raw = await getSosLiveLocation({ sessionId: "s1" }, "line-1");
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(true);
+    expect(result.trackingUrl).toContain("/sos/token123");
+  });
+
+  it("planRouteToSosVictim 使用共享位置當起點", async () => {
+    mockEmergencyContactFindOne.mockReturnValue({
+      sort: () => ({
+        select: () => ({
+          lean: () =>
+            Promise.resolve({
+              lastLineLat: 25.03,
+              lastLineLng: 121.56,
+              lastLineLocationUpdatedAt: new Date("2026-07-09T01:10:00.000Z"),
+            }),
+        }),
+      }),
+    });
+    mockEmergencyContactFind.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
+      }),
+    });
+    mockSosSessionFindById.mockReturnValue({
+      lean: () =>
+        Promise.resolve({
+          _id: "s1",
+          userId: "u1",
+          type: "body",
+          status: "active",
+          address: "台北車站",
+          lat: 25.0478,
+          lng: 121.5171,
+          locationUpdatedAt: new Date("2026-07-09T01:00:00.000Z"),
+          shareToken: "token123",
+        }),
+    });
+    mockUserFindById.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve({ name: "王小明" }),
+      }),
+    });
+    mockPlanRoute.mockResolvedValue({
+      ok: true,
+      data: {
+        origin: { lat: 25.03, lng: 121.56 },
+        destination: { lat: 25.0478, lng: 121.5171 },
+        city: "Taipei",
+        routes: [{ routeName: "route1", totalMinutes: 12, legs: [{ type: "WALK" }] }],
+      },
+    });
+
+    const raw = await planRouteToSosVictim({ sessionId: "s1" }, "line-1");
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(true);
+    expect(mockPlanRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        origin: { latitude: 25.03, longitude: 121.56 },
+        destination: { latitude: 25.0478, longitude: 121.5171 },
+        maxTransfers: 2,
+      }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // executeLocalTool — 新工具註冊
 // ---------------------------------------------------------------------------
 describe("executeLocalTool dispatches new tools", () => {
@@ -684,6 +871,63 @@ describe("executeLocalTool dispatches new tools", () => {
       "getNavInstructions",
       { origin: "A", destination: "B" },
       undefined,
+    );
+    expect(JSON.parse(raw).ok).toBe(true);
+  });
+
+  it("planRouteToSosVictim 走到正確函式", async () => {
+    mockEmergencyContactFindOne.mockReturnValue({
+      sort: () => ({
+        select: () => ({
+          lean: () =>
+            Promise.resolve({
+              lastLineLat: 25.03,
+              lastLineLng: 121.56,
+              lastLineLocationUpdatedAt: new Date("2026-07-09T01:10:00.000Z"),
+            }),
+        }),
+      }),
+    });
+    mockEmergencyContactFind.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
+      }),
+    });
+    mockSosSessionFindById.mockReturnValue({
+      lean: () =>
+        Promise.resolve({
+          _id: "s1",
+          userId: "u1",
+          type: "body",
+          status: "active",
+          address: "台北車站",
+          lat: 25.0478,
+          lng: 121.5171,
+          locationUpdatedAt: new Date("2026-07-09T01:00:00.000Z"),
+          shareToken: "token123",
+        }),
+    });
+    mockUserFindById.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve({ name: "王小明" }),
+      }),
+    });
+    mockPlanRoute.mockResolvedValue({
+      ok: true,
+      data: {
+        origin: { lat: 25.03, lng: 121.56 },
+        destination: { lat: 25.0478, lng: 121.5171 },
+        city: "Taipei",
+        routes: [{ routeName: "route1", totalMinutes: 12, legs: [{ type: "WALK" }] }],
+      },
+    });
+
+    const raw = await executeLocalTool(
+      "planRouteToSosVictim",
+      { sessionId: "s1" },
+      undefined,
+      undefined,
+      { lineUserId: "line-1" },
     );
     expect(JSON.parse(raw).ok).toBe(true);
   });

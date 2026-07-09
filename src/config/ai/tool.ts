@@ -543,13 +543,40 @@ export const lineFamilyTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getSosLiveLocation",
       description:
-        "回傳指定 SOS session 的即時位置、地址、更新時間與 Google Maps 連結。先用 getActiveSosContext 找到 sessionId，再用這個工具查細節。",
+        "回傳指定 SOS session 的即時位置、地址、更新時間與前端追蹤頁連結。先用 getActiveSosContext 找到 sessionId，再用這個工具查細節。",
       parameters: {
         type: "object",
         properties: {
           sessionId: {
             type: "string",
             description: "SOS session ID，來自 getActiveSosContext 的結果",
+          },
+        },
+        required: ["sessionId"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "planRouteToSosVictim",
+      description:
+        "用目前這個 LINE 使用者最近一次分享的位置當起點，規劃前往指定 SOS session 受困者的無障礙路線。先用 getActiveSosContext 找到 sessionId；如果還沒有分享位置，請先要求對方傳送位置。",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "SOS session ID，來自 getActiveSosContext 的結果",
+          },
+          mode: {
+            type: "string",
+            enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
+            description: "無障礙需求模式，預設 normal",
+          },
+          departureTime: {
+            type: "string",
+            description: "出發時間，ISO8601 或 HH:mm；不指定表示現在",
           },
         },
         required: ["sessionId"],

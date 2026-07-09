@@ -108,6 +108,11 @@ function googleMapsUrl(lat: number, lng: number): string {
   return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
 }
 
+function publicTrackingUrl(shareToken: string): string {
+  const base = process.env.PUBLIC_TRACKING_BASE_URL ?? "";
+  return `${base}/sos/${shareToken}`;
+}
+
 async function getLineContacts(lineUserId: string): Promise<Array<{ userId: string; name: string; _id: unknown }>> {
   return EmergencyContact.find({
     lineUserId,
@@ -146,6 +151,35 @@ async function getAuthorizedSessionForLineUser(
   return {
     session,
     ownerName: owner?.name ?? "未知使用者",
+  };
+}
+
+async function getLatestSharedLineLocation(lineUserId: string): Promise<{
+  latitude: number;
+  longitude: number;
+  updatedAt: Date | null;
+} | null> {
+  const contact = await EmergencyContact.findOne({
+    lineUserId,
+    bindStatus: "bound",
+    lastLineLat: { $ne: null },
+    lastLineLng: { $ne: null },
+  })
+    .sort({ lastLineLocationUpdatedAt: -1, updatedAt: -1 })
+    .select("lastLineLat lastLineLng lastLineLocationUpdatedAt")
+    .lean();
+
+  if (
+    typeof contact?.lastLineLat !== "number" ||
+    typeof contact?.lastLineLng !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    latitude: contact.lastLineLat,
+    longitude: contact.lastLineLng,
+    updatedAt: contact.lastLineLocationUpdatedAt ?? null,
   };
 }
 
@@ -974,6 +1008,7 @@ export async function getActiveSosContext(args: {}, lineUserId?: string): Promis
         locationUpdatedAt: session.locationUpdatedAt,
         updatedAt: session.updatedAt,
         mapsUrl: googleMapsUrl(session.lat, session.lng),
+        trackingUrl: publicTrackingUrl(session.shareToken),
       }));
 
     const latestSession = sessions[0]
@@ -989,6 +1024,7 @@ export async function getActiveSosContext(args: {}, lineUserId?: string): Promis
           locationUpdatedAt: sessions[0].locationUpdatedAt,
           updatedAt: sessions[0].updatedAt,
           mapsUrl: googleMapsUrl(sessions[0].lat, sessions[0].lng),
+          trackingUrl: publicTrackingUrl(sessions[0].shareToken),
         }
       : null;
 
@@ -1034,11 +1070,88 @@ export async function getSosLiveLocation(args: {
       lng: session.lng,
       address: session.address ?? null,
       locationUpdatedAt: session.locationUpdatedAt,
+      trackingUrl: publicTrackingUrl(session.shareToken),
       mapsUrl: googleMapsUrl(session.lat, session.lng),
     });
   } catch (error: any) {
     console.error("[agent-tool:getSosLiveLocation]", error);
     return JSON.stringify({ ok: false, error: "即時位置查詢失敗" });
+  }
+}
+
+export async function planRouteToSosVictim(args: {
+  sessionId: string;
+  mode?: string;
+  departureTime?: string;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
+  }
+  if (!args.sessionId?.trim()) {
+    return JSON.stringify({ ok: false, error: "缺少 sessionId" });
+  }
+
+  try {
+    const sessionResult = await getAuthorizedSessionForLineUser(lineUserId, args.sessionId.trim());
+    if (!sessionResult?.session) {
+      return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
+    }
+
+    const sharedLocation = await getLatestSharedLineLocation(lineUserId);
+    if (!sharedLocation) {
+      return JSON.stringify({
+        ok: false,
+        error: "請先傳送你目前的位置，再規劃前往路線",
+      });
+    }
+
+    const validMode = [
+      "wheelchair",
+      "elderly",
+      "visual_impaired",
+      "normal",
+    ].includes(args.mode ?? "")
+      ? (args.mode as "wheelchair" | "elderly" | "visual_impaired" | "normal")
+      : "normal";
+
+    const result = await planAccessibleRouteFromRequest({
+      origin: {
+        latitude: sharedLocation.latitude,
+        longitude: sharedLocation.longitude,
+      },
+      destination: {
+        latitude: sessionResult.session.lat,
+        longitude: sessionResult.session.lng,
+      },
+      mode: validMode,
+      maxTransfers: 2,
+      departureTime: args.departureTime,
+    });
+
+    if (!result.ok) {
+      return JSON.stringify({ ok: false, error: result.error });
+    }
+
+    return JSON.stringify({
+      ok: true,
+      ownerName: sessionResult.ownerName,
+      sessionId: sessionResult.session._id,
+      destination: {
+        lat: sessionResult.session.lat,
+        lng: sessionResult.session.lng,
+        address: sessionResult.session.address ?? null,
+      },
+      origin: {
+        lat: sharedLocation.latitude,
+        lng: sharedLocation.longitude,
+        updatedAt: sharedLocation.updatedAt,
+      },
+      mode: validMode,
+      routes: result.data.routes.slice(0, 3).map(summarizeRoute),
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:planRouteToSosVictim]", error);
+    return JSON.stringify({ ok: false, error: error?.message ?? "路線規劃失敗" });
   }
 }
 
@@ -1463,6 +1576,16 @@ export async function executeLocalTool(
 
     case "getSosLiveLocation":
       return getSosLiveLocation({ sessionId: args.sessionId as string }, options.lineUserId);
+
+    case "planRouteToSosVictim":
+      return planRouteToSosVictim(
+        {
+          sessionId: args.sessionId as string,
+          mode: args.mode as string | undefined,
+          departureTime: args.departureTime as string | undefined,
+        },
+        options.lineUserId,
+      );
 
     case "findSosNearbyPlaces":
       return findSosNearbyPlaces(

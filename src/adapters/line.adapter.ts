@@ -4,6 +4,8 @@ import type { SosType } from "../modules/sos/sos.types";
 
 let client: messagingApi.MessagingApiClient | null = null;
 
+export type LineReplyMessage = messagingApi.Message;
+
 /**
  * Lazily constructs (and caches) the LINE Messaging API client. Reads
  * `LINE_CHANNEL_ACCESS_TOKEN` on first use so the module stays importable in
@@ -35,6 +37,19 @@ interface SosNotificationPayload {
   type: SosType;
   trackingUrl: string;
   address?: string | null;
+}
+
+export interface RouteCardOption {
+  label: string;
+  time: string;
+  detail?: string;
+}
+
+export interface RouteCardPayload {
+  origin: string;
+  destination: string;
+  options: RouteCardOption[];
+  liffUrl?: string;
 }
 
 /**
@@ -121,6 +136,86 @@ function buildSosResolvedFlex(userName?: string): messagingApi.FlexMessage {
 }
 
 /**
+ * Builds a route summary card for LINE chat. The route data is deliberately
+ * small and already normalized by the service layer; this function only owns
+ * LINE Flex presentation details.
+ *
+ * @param payload Normalized route card content.
+ * @returns A LINE Flex Message ready to reply.
+ */
+export function buildRouteCardFlex(payload: RouteCardPayload): messagingApi.FlexMessage {
+  const optionContents: messagingApi.FlexComponent[] = payload.options.slice(0, 3).map((option) => ({
+    type: "box",
+    layout: "vertical",
+    margin: "md",
+    contents: [
+      {
+        type: "text",
+        text: `${option.label}：${option.time}`,
+        weight: "bold",
+        size: "sm",
+        wrap: true,
+      },
+      ...(option.detail
+        ? [{
+            type: "text" as const,
+            text: option.detail,
+            size: "xs" as const,
+            color: "#666666",
+            margin: "xs" as const,
+            wrap: true,
+          }]
+        : []),
+    ],
+  }));
+
+  const footerContents: messagingApi.FlexComponent[] = payload.liffUrl
+    ? [
+        {
+          type: "button",
+          style: "primary",
+          action: {
+            type: "uri",
+            label: "查看地圖",
+            uri: payload.liffUrl,
+          },
+        },
+      ]
+    : [];
+
+  return {
+    type: "flex",
+    altText: "路線規劃結果",
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          {
+            type: "text",
+            text: "路線規劃結果",
+            weight: "bold",
+            size: "lg",
+            color: "#1F4E79",
+          },
+          {
+            type: "text",
+            text: `${payload.origin} → ${payload.destination}`,
+            margin: "md",
+            wrap: true,
+          },
+          ...optionContents,
+        ],
+      },
+      ...(footerContents.length
+        ? { footer: { type: "box" as const, layout: "vertical" as const, contents: footerContents } }
+        : {}),
+    },
+  };
+}
+
+/**
  * Multicasts the SOS notification to bound contacts (best-effort; individual
  * push failures are swallowed so they never block SOS creation).
  *
@@ -174,12 +269,42 @@ export async function sendSosResolved(
  * @param text Message text.
  */
 export async function replyText(replyToken: string, text: string): Promise<void> {
+  await replyMessages(replyToken, [{ type: "text", text }]);
+}
+
+/**
+ * Replies with speech text and, when available, a route preview Flex card.
+ *
+ * @param replyToken One-time reply token from the webhook event.
+ * @param text Plain speech text shown before the card.
+ * @param routeCard Optional normalized route card content.
+ */
+export async function replyAgentResult(
+  replyToken: string,
+  text: string,
+  routeCard?: RouteCardPayload | null,
+): Promise<void> {
+  const messages: LineReplyMessage[] = [{ type: "text", text }];
+  if (routeCard) messages.push(buildRouteCardFlex(routeCard));
+  await replyMessages(replyToken, messages);
+}
+
+/**
+ * Replies to a webhook event with one or more LINE messages via the reply token.
+ *
+ * @param replyToken One-time reply token from the webhook event.
+ * @param messages LINE messages to send in order.
+ */
+export async function replyMessages(
+  replyToken: string,
+  messages: LineReplyMessage[],
+): Promise<void> {
   try {
     await getClient().replyMessage({
       replyToken,
-      messages: [{ type: "text", text }],
+      messages,
     });
   } catch (err) {
-    console.error("[line.adapter] replyText failed", err);
+    console.error("[line.adapter] replyMessages failed", err);
   }
 }
