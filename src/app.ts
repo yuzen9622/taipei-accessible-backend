@@ -24,6 +24,7 @@ import { createCampusRouter } from "./modules/campus";
 import { createEmergencyContactRouter } from "./modules/emergency-contact";
 import { createSosRouter } from "./modules/sos";
 import { createLineRouter } from "./modules/line";
+import { createVoiceRouter } from "./modules/voice";
 import { generateOpenAPIDocument } from "./openapi/document";
 
 const app: Express = express();
@@ -86,6 +87,10 @@ app.use("/api/v1/a11y", createReviewRouter());
 app.use("/api/v1/a11y", createCampusRouter());
 app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/ai", createAiRouter());
+
+if (process.env.VOICE_POC_ENABLED === "true") {
+  app.use("/api/v1/voice", createVoiceRouter());
+}
 
 app.use("*", (req: Request, res: Response<ApiResponse<null>>) => {
   sendResponse(
