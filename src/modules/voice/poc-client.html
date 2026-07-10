@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>語音對話 POC</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif;
+        margin: 0;
+        padding: 16px;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 12px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+        align-items: center;
+      }
+      input {
+        flex: 1;
+        min-width: 160px;
+        padding: 8px;
+        border-radius: 6px;
+        border: 1px solid #334155;
+        background: #1e293b;
+        color: #e2e8f0;
+        font-size: 13px;
+      }
+      button {
+        padding: 8px 16px;
+        border-radius: 6px;
+        border: none;
+        background: #2563eb;
+        color: #fff;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      button.stop {
+        background: #dc2626;
+      }
+      .panels {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .panel {
+        background: #1e293b;
+        border-radius: 8px;
+        padding: 10px;
+        height: 320px;
+        overflow-y: auto;
+      }
+      .panel h2 {
+        font-size: 13px;
+        margin: 0 0 8px;
+        color: #94a3b8;
+      }
+      .line {
+        font-size: 13px;
+        margin-bottom: 6px;
+        line-height: 1.4;
+      }
+      .line .who {
+        font-weight: 600;
+        margin-right: 4px;
+      }
+      .user .who {
+        color: #38bdf8;
+      }
+      .model .who {
+        color: #4ade80;
+      }
+      .evt {
+        font-size: 12px;
+        margin-bottom: 4px;
+        font-family: ui-monospace, monospace;
+        color: #cbd5e1;
+      }
+      .evt.err {
+        color: #f87171;
+      }
+      #status {
+        font-size: 13px;
+        color: #fbbf24;
+      }
+      .metric {
+        font-size: 12px;
+        color: #a5b4fc;
+        margin-bottom: 4px;
+        font-family: ui-monospace, monospace;
+      }
+      @media (max-width: 640px) {
+        .panels {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>即時語音對話 POC (Gemini Live)</h1>
+    <div class="row">
+      <input id="token" type="password" placeholder="貼上登入取得的 accessToken" />
+    </div>
+    <div class="row">
+      <input id="lat" type="text" value="25.0478" placeholder="緯度" />
+      <input id="lng" type="text" value="121.5170" placeholder="經度" />
+    </div>
+    <div class="row">
+      <button id="connect">連線並開始說話</button>
+      <button id="disconnect" class="stop" disabled>結束</button>
+      <span id="status">尚未連線</span>
+    </div>
+    <div class="panels">
+      <div class="panel">
+        <h2>逐字稿</h2>
+        <div id="transcripts"></div>
+      </div>
+      <div class="panel">
+        <h2>事件與延遲</h2>
+        <div id="events"></div>
+      </div>
+    </div>
+
+    <script>
+      const IN_RATE = 16000;
+      const OUT_RATE = 24000;
+      const $ = (id) => document.getElementById(id);
+      let ws = null;
+      let audioCtx = null;
+      let micStream = null;
+      let workletNode = null;
+      let playCtx = null;
+      let playHead = 0;
+      let lastSpeechEndAt = null;
+      let awaitingFirstAudio = false;
+
+      function log(el, text, cls) {
+        const div = document.createElement("div");
+        div.className = cls || "";
+        div.textContent = text;
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function setStatus(text) {
+        $("status").textContent = text;
+      }
+
+      const captureWorklet = `
+        class Capture extends AudioWorkletProcessor {
+          constructor() {
+            super();
+            this._buf = [];
+            this._target = Math.round(sampleRate / ${IN_RATE});
+            this._count = 0;
+          }
+          process(inputs) {
+            const ch = inputs[0][0];
+            if (!ch) return true;
+            for (let i = 0; i < ch.length; i++) {
+              this._count++;
+              if (this._count >= this._target) {
+                this._count = 0;
+                this._buf.push(ch[i]);
+              }
+            }
+            if (this._buf.length >= ${IN_RATE / 10}) {
+              const out = new Int16Array(this._buf.length);
+              for (let i = 0; i < this._buf.length; i++) {
+                const s = Math.max(-1, Math.min(1, this._buf[i]));
+                out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+              }
+              this.port.postMessage(out.buffer, [out.buffer]);
+              this._buf = [];
+            }
+            return true;
+          }
+        }
+        registerProcessor('capture', Capture);
+      `;
+
+      async function startMic() {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        audioCtx = new AudioContext();
+        const blob = new Blob([captureWorklet], { type: "application/javascript" });
+        const url = URL.createObjectURL(blob);
+        await audioCtx.audioWorklet.addModule(url);
+        const src = audioCtx.createMediaStreamSource(micStream);
+        workletNode = new AudioWorkletNode(audioCtx, "capture");
+        let silentFrames = 0;
+        workletNode.port.onmessage = (e) => {
+          const pcm = new Int16Array(e.data);
+          let energy = 0;
+          for (let i = 0; i < pcm.length; i++) energy += Math.abs(pcm[i]);
+          energy /= pcm.length;
+          if (energy < 300) {
+            silentFrames++;
+            if (silentFrames === 3 && !awaitingFirstAudio) {
+              lastSpeechEndAt = performance.now();
+              awaitingFirstAudio = true;
+            }
+          } else {
+            silentFrames = 0;
+          }
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+        };
+        src.connect(workletNode);
+      }
+
+      function playPcm24(buffer) {
+        if (awaitingFirstAudio && lastSpeechEndAt != null) {
+          const delta = Math.round(performance.now() - lastSpeechEndAt);
+          log($("events"), "首音延遲 ~" + delta + " ms", "metric");
+          awaitingFirstAudio = false;
+        }
+        if (!playCtx) {
+          playCtx = new AudioContext({ sampleRate: OUT_RATE });
+          playHead = playCtx.currentTime;
+        }
+        const view = new Int16Array(buffer);
+        const f32 = new Float32Array(view.length);
+        for (let i = 0; i < view.length; i++) f32[i] = view[i] / 0x8000;
+        const audioBuffer = playCtx.createBuffer(1, f32.length, OUT_RATE);
+        audioBuffer.getChannelData(0).set(f32);
+        const node = playCtx.createBufferSource();
+        node.buffer = audioBuffer;
+        node.connect(playCtx.destination);
+        const now = playCtx.currentTime;
+        if (playHead < now) playHead = now;
+        node.start(playHead);
+        playHead += audioBuffer.duration;
+      }
+
+      function clearPlayback() {
+        if (playCtx) {
+          playCtx.close();
+          playCtx = null;
+        }
+      }
+
+      function connect() {
+        const token = $("token").value.trim();
+        if (!token) {
+          setStatus("請先貼上 token");
+          return;
+        }
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(proto + "//" + location.host + "/api/v1/voice/ws");
+        ws.binaryType = "arraybuffer";
+        ws.onopen = () => {
+          setStatus("已連線，認證中…");
+          const lat = parseFloat($("lat").value);
+          const lng = parseFloat($("lng").value);
+          const payload = { type: "session.start", token };
+          if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+            payload.userLocation = { latitude: lat, longitude: lng };
+          }
+          ws.send(JSON.stringify(payload));
+        };
+        ws.onmessage = async (e) => {
+          if (e.data instanceof ArrayBuffer) {
+            playPcm24(e.data);
+            return;
+          }
+          const msg = JSON.parse(e.data);
+          switch (msg.type) {
+            case "session.ready":
+              setStatus("已就緒，請開始說話");
+              await startMic();
+              break;
+            case "transcript":
+              log($("transcripts"), msg.text, "line " + msg.role);
+              break;
+            case "tool_call":
+              log($("events"), "→ 呼叫工具 " + msg.name, "evt");
+              break;
+            case "tool_result":
+              log(
+                $("events"),
+                "← " + msg.name + " ok=" + msg.ok + " " + msg.durationMs + "ms",
+                "evt" + (msg.ok ? "" : " err"),
+              );
+              break;
+            case "interrupted":
+              clearPlayback();
+              log($("events"), "(打斷)", "evt");
+              break;
+            case "turn.complete":
+              log($("events"), "— 回合結束 —", "evt");
+              break;
+            case "error":
+              log($("events"), "錯誤 " + msg.code, "evt err");
+              break;
+          }
+        };
+        ws.onclose = (e) => {
+          setStatus("連線關閉 (" + e.code + " " + e.reason + ")");
+          cleanup();
+        };
+        ws.onerror = () => setStatus("連線錯誤");
+        $("connect").disabled = true;
+        $("disconnect").disabled = false;
+      }
+
+      function cleanup() {
+        if (workletNode) workletNode.disconnect();
+        if (micStream) micStream.getTracks().forEach((t) => t.stop());
+        if (audioCtx) audioCtx.close();
+        workletNode = null;
+        micStream = null;
+        audioCtx = null;
+        clearPlayback();
+        $("connect").disabled = false;
+        $("disconnect").disabled = true;
+      }
+
+      function disconnect() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "session.end" }));
+          ws.close(1000, "client-end");
+        }
+        cleanup();
+      }
+
+      $("connect").addEventListener("click", connect);
+      $("disconnect").addEventListener("click", disconnect);
+    </script>
+  </body>
+</html>
