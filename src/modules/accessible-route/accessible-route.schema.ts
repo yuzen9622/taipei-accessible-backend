@@ -85,7 +85,7 @@ export const AccessibleRouteBodySchema = z
       .default("transit")
       .openapi({
         description:
-          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸，走 OTP 規劃）、drive（開車）、motorcycle（騎車）、walk（步行）；開車／騎車／步行走 Google Routes API，可依 departureTime 推算塞車。",
+          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸，走 OTP 規劃）、drive（開車）、motorcycle（騎車）、walk（步行）；開車／騎車／步行走 TomTom Routing API，可依 departureTime 推算塞車。",
         example: "drive",
       }),
     waypoints: z
@@ -569,7 +569,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵；drive／motorcycle／walk 走 Google Routes API（開車／騎車可依 departureTime 推算塞車）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。",
+    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵；drive／motorcycle／walk 走 TomTom Routing API（開車／騎車可依 departureTime 推算塞車）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。",
   request: {
     body: {
       content: { "application/json": { schema: AccessibleRouteBodySchema } },
@@ -598,7 +598,7 @@ registry.registerPath({
     },
     503: {
       description:
-        "路線規劃服務暫時忙線（OTP 斷路器開啟或 Google Routes API 上游錯誤）",
+        "路線規劃服務暫時忙線（OTP 斷路器開啟或 TomTom Routing API 上游錯誤）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
