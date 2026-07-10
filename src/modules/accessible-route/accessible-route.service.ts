@@ -802,19 +802,19 @@ async function findDrivingRoutes(
   destination: LatLng,
   opts: FindDrivingRoutesOptions,
 ): Promise<DrivingOutcome> {
-  const { planGoogleRoute, GoogleRoutingError } = await import(
-    "./planners/google-routing"
+  const { planTomTomRoute, TomTomRoutingError } = await import(
+    "./planners/tomtom-routing"
   );
   let raw: AccessibleRoute[];
   try {
-    raw = await planGoogleRoute(origin, destination, {
+    raw = await planTomTomRoute(origin, destination, {
       travelMode: opts.travelMode,
       waypoints: opts.waypoints,
       departureTime: opts.departureTime,
     });
   } catch (err) {
-    if (err instanceof GoogleRoutingError) return { kind: "unavailable" };
-    console.error("[accessible-route] google routing failed", err);
+    if (err instanceof TomTomRoutingError) return { kind: "unavailable" };
+    console.error("[accessible-route] tomtom routing failed", err);
     return { kind: "error" };
   }
   if (!raw.length) return { kind: "empty" };
