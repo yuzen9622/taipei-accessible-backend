@@ -908,8 +908,8 @@ export async function bindEmergencyContactCode(args: {
 
     contact.bindStatus = "bound";
     contact.lineUserId = lineUserId;
-    contact.bindCode = null;
-    contact.bindCodeExpiresAt = null;
+    contact.bindCode = undefined;
+    contact.bindCodeExpiresAt = undefined;
     await contact.save();
 
     return JSON.stringify({

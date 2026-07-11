@@ -320,8 +320,8 @@ export interface IEmergencyContact {
   name: string;
   lineUserId: string | null;
   bindStatus: "pending" | "bound";
-  bindCode: string | null;
-  bindCodeExpiresAt: Date | null;
+  bindCode?: string | null;
+  bindCodeExpiresAt?: Date | null;
   lastLineLat?: number | null;
   lastLineLng?: number | null;
   lastLineLocationUpdatedAt?: Date | null;

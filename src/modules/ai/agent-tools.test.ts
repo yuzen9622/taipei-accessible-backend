@@ -112,6 +112,8 @@ import {
   getActiveSosContext,
   getSosLiveLocation,
   planRouteToSosVictim,
+  bindEmergencyContactCode,
+  bindLineAccountCode,
 } from "./agent-tools";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<typeof vi.fn>;
@@ -1180,3 +1182,90 @@ describe("webSearch", () => {
     expect(result.error).toBe("網路搜尋失敗");
   });
 });
+
+describe("bindEmergencyContactCode agent tool", () => {
+  it("成功綁定緊急聯絡人，並將 bindCode 與時效改為 undefined", async () => {
+    const mockSave = vi.fn().mockResolvedValue({});
+    const mockContact = {
+      _id: "c1",
+      name: "媽媽",
+      bindStatus: "pending",
+      lineUserId: null,
+      bindCode: "K7X2QD",
+      bindCodeExpiresAt: new Date(Date.now() + 10000),
+      save: mockSave,
+    };
+    mockEmergencyContactFindOne.mockResolvedValue(mockContact);
+
+    const raw = await bindEmergencyContactCode({ code: "K7X2QD" }, "U1");
+    const result = JSON.parse(raw);
+
+    expect(result.ok).toBe(true);
+    expect(result.bound).toBe(true);
+    expect(result.contactName).toBe("媽媽");
+    expect(mockContact.bindStatus).toBe("bound");
+    expect(mockContact.lineUserId).toBe("U1");
+    expect(mockContact.bindCode).toBeUndefined();
+    expect(mockContact.bindCodeExpiresAt).toBeUndefined();
+    expect(mockSave).toHaveBeenCalled();
+  });
+
+  it("缺少 LINE 使用者資訊時回傳錯誤", async () => {
+    const raw = await bindEmergencyContactCode({ code: "K7X2QD" }, undefined);
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("缺少 LINE 使用者資訊");
+  });
+
+  it("綁定碼格式錯誤時回傳錯誤", async () => {
+    const raw = await bindEmergencyContactCode({ code: "SHORT" }, "U1");
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("綁定碼格式錯誤");
+  });
+
+  it("找不到可用綁定碼或已過期時回傳錯誤", async () => {
+    mockEmergencyContactFindOne.mockResolvedValue(null);
+    const raw = await bindEmergencyContactCode({ code: "ABCDEF" }, "U1");
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("找不到可用的緊急聯絡人綁定碼");
+  });
+});
+
+describe("bindLineAccountCode agent tool", () => {
+  it("成功綁定 LINE 帳號並刪除對應的 LinkCode", async () => {
+    mockLineLinkFindOne.mockResolvedValue({
+      _id: "link1",
+      userId: "u1",
+      code: "K7X2QD",
+      expiresAt: new Date(Date.now() + 10000),
+    });
+    mockUserFindOne.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve(null),
+      }),
+    });
+    mockUserFindById.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve({ _id: "u1", name: "王小明", lineUserId: null }),
+      }),
+    });
+
+    const raw = await bindLineAccountCode({ code: "K7X2QD" }, "U1");
+    const result = JSON.parse(raw);
+
+    expect(result.ok).toBe(true);
+    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: "u1" }, { $set: { lineUserId: "U1" } });
+    expect(mockLineLinkDeleteOne).toHaveBeenCalledWith({ _id: "link1" });
+  });
+
+  it("找不到可用帳號綁定碼時回傳錯誤", async () => {
+    mockLineLinkFindOne.mockResolvedValue(null);
+    const raw = await bindLineAccountCode({ code: "ABCDEF" }, "U1");
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("找不到可用的 LINE 帳號綁定碼");
+  });
+});
+
