@@ -11,7 +11,8 @@ import * as busService from "./bus.service";
 async function resolveCityOr400(
   city: string | undefined,
   res: Response<ApiResponse<any>>,
-): Promise<TaiwanCityEn | null> {
+): Promise<TaiwanCityEn | "InterCity" | null> {
+  if (city === "InterCity") return "InterCity";
   const resolved = await busService.resolveBusCity(city);
   if (!resolved) {
     sendResponse(

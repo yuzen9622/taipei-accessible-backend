@@ -495,7 +495,7 @@ export async function planAccessibleRoute(args: {
 async function resolveBusCityOrError(
   city: string | undefined,
   userLocation?: { latitude: number; longitude: number },
-): Promise<TaiwanCityEn | { error: string }> {
+): Promise<TaiwanCityEn | "InterCity" | { error: string }> {
   const resolved = await busService.resolveBusCity(city, userLocation);
   if (!resolved) {
     return {

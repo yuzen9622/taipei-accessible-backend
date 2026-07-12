@@ -16,6 +16,7 @@ import { detectBusApiType, equalStopName } from "../../utils/transit-text";
 import { busUrl } from "../../config/transit";
 import { tdxFetch } from "../../config/fetch";
 import { getCity } from "../../adapters/google.adapter";
+import { taipeiHHmm } from "../../config/taipei-time";
 import BusRouteModel from "../../model/bus-route.model";
 import BusVehicleModel from "../../model/bus-vehicle.model";
 import BusStopModel from "../../model/bus-stop.model";
@@ -60,7 +61,8 @@ import type {
 export async function resolveBusCity(
   cityInput?: string,
   userLoc?: { latitude: number; longitude: number },
-): Promise<TaiwanCityEn | null> {
+): Promise<TaiwanCityEn | "InterCity" | null> {
+  if (cityInput === "InterCity") return "InterCity";
   const direct = cityFromAlias(cityInput);
   if (direct) return direct;
   if (userLoc) {
@@ -130,16 +132,23 @@ function buildDirections(records: NormalizedRoute[]): BusRouteDirection[] {
  */
 export async function getBusRouteInfo(params: {
   routeName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
 }): Promise<BusRouteInfoResult> {
   const { city } = params;
   const { type, routeId } = detectBusApiType(params.routeName);
 
   try {
-    const docs = await BusRouteModel.find({
-      city,
-      "routeName.Zh_tw": routeId,
-    }).lean();
+    const query = type === "InterCity"
+      ? { "routeName.Zh_tw": routeId }
+      : { city, "routeName.Zh_tw": routeId };
+    let docs = await BusRouteModel.find(query).lean();
+
+    if (!docs.length && params.routeName !== routeId) {
+      const fallbackQuery = type === "InterCity"
+        ? { "routeName.Zh_tw": params.routeName }
+        : { city, "routeName.Zh_tw": params.routeName };
+      docs = await BusRouteModel.find(fallbackQuery).lean();
+    }
 
     if (docs.length) {
       const normalized: NormalizedRoute[] = docs.map((d) => ({
@@ -154,7 +163,7 @@ export async function getBusRouteInfo(params: {
       }));
       return {
         ok: true,
-        routeName: routeId,
+        routeName: docs[0].routeName?.Zh_tw || routeId,
         city,
         source: "db",
         operators: [...new Set(normalized.flatMap((n) => n.operators))],
@@ -167,7 +176,14 @@ export async function getBusRouteInfo(params: {
       type === "City"
         ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${routeId}'`
         : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${routeId}'`;
-    const live = await fetchTdxArray(url);
+    let live = await fetchTdxArray(url);
+    if (!live.length && params.routeName !== routeId) {
+      const fallbackUrl =
+        type === "City"
+          ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'`
+          : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'`;
+      live = await fetchTdxArray(fallbackUrl);
+    }
     if (!live.length) {
       return { ok: false, error: `找不到路線「${params.routeName}」的站序資料`, status: 404 };
     }
@@ -204,7 +220,7 @@ export async function getBusRouteInfo(params: {
 export async function getBusArrivalAtStop(params: {
   routeName: string;
   stopName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
   direction?: number;
 }): Promise<BusArrivalResult> {
   const { city, stopName, direction } = params;
@@ -220,7 +236,14 @@ export async function getBusArrivalAtStop(params: {
         ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${routeId}?$format=JSON${dirFilter}`
         : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${routeId}?$format=JSON${dirFilter}`;
 
-    const records = await fetchTdxArray(url);
+    let records = await fetchTdxArray(url);
+    if (!records.length && params.routeName !== routeId) {
+      const fallbackUrl =
+        type === "City"
+          ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${params.routeName}?$format=JSON${dirFilter}`
+          : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${params.routeName}?$format=JSON${dirFilter}`;
+      records = await fetchTdxArray(fallbackUrl);
+    }
     const matched = records.filter((r: any) =>
       equalStopName(r.StopName?.Zh_tw, stopName),
     );
@@ -259,13 +282,26 @@ export async function getBusArrivalAtStop(params: {
   }
 }
 
+function getNextDepartureText(frequencies: any[], nowHHmm: string): string | null {
+  const starts = frequencies
+    .map((f) => f.start)
+    .filter((s): s is string => !!s && /^\d{2}:\d{2}$/.test(s));
+
+  if (!starts.length) return null;
+
+  starts.sort();
+
+  const nextToday = starts.find((s) => s >= nowHHmm);
+  return nextToday || starts[0];
+}
+
 /**
  * Get full route details: stops, ETA for all stops, and timetables.
  * Ideal for a full bus route view in an app.
  */
 export async function getBusRouteDetail(params: {
   routeName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
 }): Promise<BusRouteDetailResult> {
   const { city, routeName } = params;
   const { type, routeId } = detectBusApiType(routeName);
@@ -316,8 +352,15 @@ export async function getBusRouteDetail(params: {
 
     const directions: BusRouteDetailDirection[] = routeInfoRes.directions.map((d) => {
       const dirMap = etaMap.get(d.direction);
+      const dirSchedule = timetableRes.ok 
+        ? timetableRes.schedules.find((sched) => sched.direction === d.direction)
+        : null;
+      const frequencies = dirSchedule?.frequencies || [];
+      const nowHHmm = taipeiHHmm();
+      const nextDepText = frequencies.length ? getNextDepartureText(frequencies, nowHHmm) : null;
+
       const stops: BusRouteDetailStop[] = d.stops.map((s) => {
-        let etaData = { estimateMinutes: null as number | null, statusLabel: "未發車" };
+        let etaData = { estimateMinutes: null as number | null, statusLabel: "尚未發車" };
         if (dirMap) {
           for (const [key, value] of dirMap.entries()) {
             if (equalStopName(key, s.name)) {
@@ -326,10 +369,16 @@ export async function getBusRouteDetail(params: {
             }
           }
         }
+
+        let statusLabel = etaData.statusLabel;
+        if ((statusLabel === "尚未發車" || !statusLabel) && nextDepText) {
+          statusLabel = nextDepText;
+        }
+
         return {
           ...s,
           estimateMinutes: etaData.estimateMinutes,
-          statusLabel: etaData.statusLabel,
+          statusLabel,
         };
       });
       return {
@@ -386,7 +435,7 @@ function serviceDayLabel(sd?: Record<string, number>): string {
  */
 export async function getBusTimetable(params: {
   routeName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
 }): Promise<BusTimetableResult> {
   const { city } = params;
   const { type, routeId } = detectBusApiType(params.routeName);
@@ -397,7 +446,14 @@ export async function getBusTimetable(params: {
         ? `${busUrl.cityScheduleUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${routeId}'`
         : `${busUrl.cityScheduleUrl.replace("/City", "/InterCity")}?$format=JSON&$filter=RouteName/Zh_tw eq '${routeId}'`;
 
-    const records = await fetchTdxArray(url);
+    let records = await fetchTdxArray(url);
+    if (!records.length && params.routeName !== routeId) {
+      const fallbackUrl =
+        type === "City"
+          ? `${busUrl.cityScheduleUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'`
+          : `${busUrl.cityScheduleUrl.replace("/City", "/InterCity")}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'`;
+      records = await fetchTdxArray(fallbackUrl);
+    }
     if (!records.length) {
       return { ok: false, error: `找不到路線「${params.routeName}」的時刻表`, status: 404 };
     }
@@ -449,7 +505,7 @@ export async function getBusTimetable(params: {
  */
 export async function getBusRealtimeOnRoute(params: {
   routeName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
   direction?: number;
 }): Promise<BusRealtimeOnRouteResult> {
   const { city, direction } = params;
@@ -465,7 +521,16 @@ export async function getBusRealtimeOnRoute(params: {
             direction === 0 || direction === 1 ? ` and Direction eq ${direction}` : ""
           }`;
 
-    const records = await fetchTdxArray(url);
+    let records = await fetchTdxArray(url);
+    if (!records.length && params.routeName !== routeId) {
+      const fallbackUrl =
+        type === "City"
+          ? `${busUrl.cityRealtimeByFrequencyUrl}/${city}/${params.routeName}?$format=JSON${dirFilter}`
+          : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'${
+              direction === 0 || direction === 1 ? ` and Direction eq ${direction}` : ""
+            }`;
+      records = await fetchTdxArray(fallbackUrl);
+    }
     if (!records.length) {
       return {
         ok: false,
