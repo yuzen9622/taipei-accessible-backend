@@ -19,23 +19,33 @@ import { BusRoute } from "../types/transit";
 const DELAY_MS = 60000;
 const TOP = 10000;
 
-const ALL_CITIES = Object.values(TaiwanCityEn);
+const ALL_CITIES = [...Object.values(TaiwanCityEn), "InterCity"];
 
 function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
 
 async function importCity(city: string): Promise<number> {
-  const url = `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$top=${TOP}`;
-  const resp = await tdxFetch(url);
+  const routes: BusRoute[] = [];
+  const PAGE_DELAY_MS = 1500;
+  for (let skip = 0; ; skip += TOP) {
+    const url = city === "InterCity"
+      ? `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$top=${TOP}&$skip=${skip}`
+      : `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$top=${TOP}&$skip=${skip}`;
+    const resp = await tdxFetch(url);
 
-  if (!resp.ok) {
-    const body = await resp.text();
-    console.warn(`  TDX ${resp.status} for ${city}: ${body.slice(0, 120)}`);
-    return 0;
+    if (!resp.ok) {
+      const body = await resp.text();
+      console.warn(`  TDX ${resp.status} for ${city}: ${body.slice(0, 120)}`);
+      break;
+    }
+
+    const page = (await resp.json()) as BusRoute[];
+    routes.push(...page);
+    if (page.length < TOP) break;
+    await sleep(PAGE_DELAY_MS);
   }
 
-  const routes = (await resp.json()) as BusRoute[];
   if (!routes.length) {
     console.log(`  No routes found for ${city}`);
     return 0;
