@@ -1,6 +1,7 @@
 import { ResponseCode } from "../../types/code";
 import type {
   BusLeg,
+  DriveLeg,
   MetroLeg,
   ThsrLeg,
   TraLeg,
@@ -29,9 +30,12 @@ export type {
 };
 
 export const WARN_STEPS_UNAVAILABLE = "ORS_STEPS_UNAVAILABLE";
+export const WARN_ROAD_STEPS_UNAVAILABLE = "ROAD_STEPS_UNAVAILABLE";
 
 const KNOWN_LEG_TYPES = new Set<NavLegType>([
   "WALK",
+  "DRIVE",
+  "MOTORCYCLE",
   "BUS",
   "METRO",
   "THSR",
@@ -170,6 +174,8 @@ function stepType(relativeDirection: string): NavInstructionType {
 }
 
 function walkStepText(step: WalkStep, bearing: number | null): string {
+  const upstreamText = step.instruction?.trim();
+  if (upstreamText) return upstreamText;
   const street = step.streetName?.trim() ?? "";
   const named = hasStreetName(step);
   const dir = (step.relativeDirection ?? "CONTINUE").toUpperCase();
@@ -209,6 +215,57 @@ function walkStepText(step: WalkStep, bearing: number | null): string {
     default:
       return named ? `請沿「${street}」前進` : "請繼續前行";
   }
+}
+
+function roadStepType(maneuver: string | undefined): NavInstructionType {
+  return maneuver?.toUpperCase() === "DEPART" ? "depart" : "turn";
+}
+
+function roadLegToInstructions(
+  leg: DriveLeg,
+  isFirstLeg: boolean,
+  warnings: string[],
+): NavInstruction[] {
+  const steps = leg.steps ?? [];
+  if (!steps.length) {
+    if (!warnings.includes(WARN_ROAD_STEPS_UNAVAILABLE)) {
+      warnings.push(WARN_ROAD_STEPS_UNAVAILABLE);
+    }
+    const bearing =
+      leg.polyline.length >= 2
+        ? Math.round(calcBearing(leg.polyline[0], leg.polyline[1]))
+        : null;
+    return [{
+      text: isFirstLeg ? "請沿道路出發，前往目的地" : "請沿道路繼續前往目的地",
+      type: isFirstLeg ? "depart" : "turn",
+      bearing,
+      relativeDirection: null,
+      distanceM: leg.distanceM,
+      streetName: null,
+      legType: leg.type,
+      polylineIndex: bearing === null ? null : 0,
+    }];
+  }
+
+  return steps.map((step) => {
+    const bearing =
+      step.polyline.length >= 2
+        ? Math.round(calcBearing(step.polyline[0], step.polyline[1]))
+        : null;
+    return {
+      text: step.instruction.trim() || "請沿道路繼續前行",
+      type: roadStepType(step.maneuver),
+      bearing,
+      relativeDirection: null,
+      distanceM: step.distanceM,
+      streetName: null,
+      legType: leg.type,
+      polylineIndex:
+        step.polyline[0] && leg.polyline.length
+          ? nearestPolylineIndex(leg.polyline, step.polyline[0])
+          : null,
+    };
+  });
 }
 
 function exitInfoInstruction(
@@ -408,11 +465,23 @@ export function generateNavInstructions(
   const instructions: NavInstruction[] = [];
 
   legs.forEach((rawLeg) => {
-    const leg = rawLeg as WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg;
+    const leg = rawLeg as
+      | WalkLeg
+      | DriveLeg
+      | BusLeg
+      | MetroLeg
+      | ThsrLeg
+      | TraLeg;
     switch (leg.type) {
       case "WALK":
         instructions.push(
           ...walkLegToInstructions(leg, instructions.length === 0, warnings),
+        );
+        break;
+      case "DRIVE":
+      case "MOTORCYCLE":
+        instructions.push(
+          ...roadLegToInstructions(leg, instructions.length === 0, warnings),
         );
         break;
       case "BUS":

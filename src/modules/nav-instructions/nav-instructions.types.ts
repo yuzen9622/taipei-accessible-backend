@@ -23,7 +23,14 @@ export type NavInstructionType =
   | "depart"
   | "arrive";
 
-export type NavLegType = "WALK" | "BUS" | "METRO" | "THSR" | "TRA";
+export type NavLegType =
+  | "WALK"
+  | "DRIVE"
+  | "MOTORCYCLE"
+  | "BUS"
+  | "METRO"
+  | "THSR"
+  | "TRA";
 
 export interface NavInstruction {
   text: string;

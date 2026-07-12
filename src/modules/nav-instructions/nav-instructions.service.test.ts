@@ -5,8 +5,9 @@ import {
   degToCompassWord,
   generateNavInstructions,
   WARN_STEPS_UNAVAILABLE,
+  WARN_ROAD_STEPS_UNAVAILABLE,
 } from "./nav-instructions.service";
-import type { MetroLeg, ThsrLeg, WalkLeg } from "../../types/route";
+import type { DriveLeg, MetroLeg, ThsrLeg, WalkLeg } from "../../types/route";
 
 describe("calcBearing", () => {
   it("正北方向應回傳 0", () => {
@@ -111,6 +112,45 @@ const metroLeg = (): MetroLeg =>
     facilityHighlights: ["電梯", "無障礙廁所"],
   }) as unknown as MetroLeg;
 
+const roadLeg = (
+  type: "DRIVE" | "MOTORCYCLE",
+  modeFallback?: "DRIVE",
+): DriveLeg => ({
+  type,
+  from: { lat: 25.04, lng: 121.56 },
+  to: { lat: 25.03, lng: 121.55 },
+  distanceM: 5200,
+  durationMin: 10,
+  polyline: [
+    [121.56, 25.04],
+    [121.555, 25.035],
+    [121.55, 25.03],
+  ],
+  steps: [
+    {
+      instruction: "沿信義路出發",
+      distanceM: 240,
+      durationMin: 1,
+      maneuver: "DEPART",
+      polyline: [
+        [121.56, 25.04],
+        [121.555, 25.035],
+      ],
+    },
+    {
+      instruction: "左轉進入市府路",
+      distanceM: 4960,
+      durationMin: 9,
+      maneuver: "TURN_LEFT",
+      polyline: [
+        [121.555, 25.035],
+        [121.55, 25.03],
+      ],
+    },
+  ],
+  modeFallback,
+});
+
 describe("generateNavInstructions", () => {
   it("純步行（含 steps）回傳 depart + turn + arrive", () => {
     const result = generateNavInstructions({ legs: [walkWithSteps()] });
@@ -177,6 +217,53 @@ describe("generateNavInstructions", () => {
     if (!result.ok) return;
     expect(result.data.warnings).toContain(WARN_STEPS_UNAVAILABLE);
     expect(result.data.instructions[0].type).toBe("depart");
+  });
+
+  it("DRIVE guidance 轉成 depart + turn + arrive", () => {
+    const result = generateNavInstructions({ legs: [roadLeg("DRIVE")] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.instructions.map((i) => i.type)).toEqual([
+      "depart",
+      "turn",
+      "arrive",
+    ]);
+    expect(result.data.instructions[0]).toMatchObject({
+      text: "沿信義路出發",
+      legType: "DRIVE",
+      distanceM: 240,
+    });
+    expect(result.data.instructions[1]).toMatchObject({
+      text: "左轉進入市府路",
+      legType: "DRIVE",
+      distanceM: 4960,
+    });
+    expect(result.data.warnings).toEqual([]);
+  });
+
+  it.each([
+    ["原生 MOTORCYCLE", roadLeg("MOTORCYCLE")],
+    ["fallback DRIVE 的 MOTORCYCLE", roadLeg("MOTORCYCLE", "DRIVE")],
+  ])("%s guidance 保留 MOTORCYCLE legType", (_label, leg) => {
+    const result = generateNavInstructions({ legs: [leg] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.instructions[0].legType).toBe("MOTORCYCLE");
+    expect(result.data.instructions.at(-1)?.legType).toBe("MOTORCYCLE");
+  });
+
+  it("無 guidance 的 DRIVE 回概略指引並標示降級", () => {
+    const leg = roadLeg("DRIVE");
+    delete leg.steps;
+    const result = generateNavInstructions({ legs: [leg] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.warnings).toContain(WARN_ROAD_STEPS_UNAVAILABLE);
+    expect(result.data.instructions[0]).toMatchObject({
+      type: "depart",
+      legType: "DRIVE",
+      distanceM: 5200,
+    });
   });
 
   it("提供 userHeading 時所有含 bearing 步驟填入 relativeDirection", () => {

@@ -11,9 +11,10 @@ export const NavInstructionsRequestSchema = z
         routeId: z.string().optional(),
         legs: z.array(z.any()),
       })
+      .strict()
       .openapi({
         description:
-          "由 /accessible-route 回傳的路線物件（前端 passthrough）。僅需含 legs 陣列。",
+          "由 /accessible-route 回傳的路線物件（前端 passthrough）。支援 WALK、DRIVE、MOTORCYCLE、BUS、METRO、THSR、TRA legs。",
       }),
     userHeading: z
       .number()
@@ -29,6 +30,7 @@ export const NavInstructionsRequestSchema = z
       description: "輸出語言（預留，目前僅支援 zh-TW）。",
     }),
   })
+  .strict()
   .openapi("NavInstructionsRequest");
 
 const RelativeDirectionEnum = z
@@ -50,7 +52,15 @@ const NavInstructionSchema = z
     relativeDirection: RelativeDirectionEnum.nullable(),
     distanceM: z.number().nullable(),
     streetName: z.string().nullable(),
-    legType: z.enum(["WALK", "BUS", "METRO", "THSR", "TRA"]),
+    legType: z.enum([
+      "WALK",
+      "DRIVE",
+      "MOTORCYCLE",
+      "BUS",
+      "METRO",
+      "THSR",
+      "TRA",
+    ]),
     polylineIndex: z.number().nullable(),
   })
   .openapi("NavInstruction");
@@ -90,7 +100,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "路線逐步導航指引產生",
   description:
-    "將 /accessible-route 回傳的路線攤平為可語音朗讀的逐步指引陣列，並提供起始與每步方位角；提供 userHeading 時附帶八方位相對方向。",
+    "將 /accessible-route 回傳的步行、汽車、機車與大眾運輸路線攤平為可語音朗讀的逐步指引。若上游缺少 turn-by-turn guidance，仍回傳概略指引並在 warnings 標示降級。",
   request: {
     body: {
       content: { "application/json": { schema: NavInstructionsRequestSchema } },
@@ -105,7 +115,7 @@ registry.registerPath({
       },
     },
     400: {
-      description: "route.legs 為空或含未支援的 leg 型別",
+      description: "route.legs 為空或含未支援的 leg 型別（例如 FERRY）",
       content: { "application/json": { schema: NavErrorResponseSchema } },
     },
     500: {
