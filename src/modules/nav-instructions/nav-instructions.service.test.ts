@@ -5,6 +5,7 @@ import {
   degToCompassWord,
   generateNavInstructions,
   WARN_STEPS_UNAVAILABLE,
+  WARN_WALK_STEPS_UNAVAILABLE,
   WARN_ROAD_STEPS_UNAVAILABLE,
 } from "./nav-instructions.service";
 import type { DriveLeg, MetroLeg, ThsrLeg, WalkLeg } from "../../types/route";
@@ -215,7 +216,10 @@ describe("generateNavInstructions", () => {
     const result = generateNavInstructions({ legs: [leg] });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.warnings).toContain(WARN_STEPS_UNAVAILABLE);
+    expect(result.data.warnings).toEqual([
+      WARN_WALK_STEPS_UNAVAILABLE,
+      WARN_STEPS_UNAVAILABLE,
+    ]);
     expect(result.data.instructions[0].type).toBe("depart");
   });
 

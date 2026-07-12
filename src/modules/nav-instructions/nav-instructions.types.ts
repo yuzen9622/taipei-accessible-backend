@@ -32,6 +32,11 @@ export type NavLegType =
   | "THSR"
   | "TRA";
 
+export type NavWarningCode =
+  | "WALK_STEPS_UNAVAILABLE"
+  | "ORS_STEPS_UNAVAILABLE"
+  | "ROAD_STEPS_UNAVAILABLE";
+
 export interface NavInstruction {
   text: string;
   type: NavInstructionType;
@@ -47,7 +52,7 @@ export interface NavInstructionsResult {
   instructions: NavInstruction[];
   initialBearing: number;
   totalSteps: number;
-  warnings: string[];
+  warnings: NavWarningCode[];
 }
 
 export interface NavRouteInput {

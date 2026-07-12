@@ -17,6 +17,7 @@ import type {
   NavInstructionsResult,
   NavRouteInput,
   GenerateNavResult,
+  NavWarningCode,
 } from "./nav-instructions.types";
 
 export type {
@@ -27,10 +28,16 @@ export type {
   NavInstructionsResult,
   NavRouteInput,
   GenerateNavResult,
+  NavWarningCode,
 };
 
 export const WARN_STEPS_UNAVAILABLE = "ORS_STEPS_UNAVAILABLE";
+export const WARN_WALK_STEPS_UNAVAILABLE = "WALK_STEPS_UNAVAILABLE";
 export const WARN_ROAD_STEPS_UNAVAILABLE = "ROAD_STEPS_UNAVAILABLE";
+
+function pushWarning(warnings: NavWarningCode[], warning: NavWarningCode): void {
+  if (!warnings.includes(warning)) warnings.push(warning);
+}
 
 const KNOWN_LEG_TYPES = new Set<NavLegType>([
   "WALK",
@@ -224,13 +231,11 @@ function roadStepType(maneuver: string | undefined): NavInstructionType {
 function roadLegToInstructions(
   leg: DriveLeg,
   isFirstLeg: boolean,
-  warnings: string[],
+  warnings: NavWarningCode[],
 ): NavInstruction[] {
   const steps = leg.steps ?? [];
   if (!steps.length) {
-    if (!warnings.includes(WARN_ROAD_STEPS_UNAVAILABLE)) {
-      warnings.push(WARN_ROAD_STEPS_UNAVAILABLE);
-    }
+    pushWarning(warnings, WARN_ROAD_STEPS_UNAVAILABLE);
     const bearing =
       leg.polyline.length >= 2
         ? Math.round(calcBearing(leg.polyline[0], leg.polyline[1]))
@@ -291,7 +296,7 @@ function exitInfoInstruction(
 function walkLegToInstructions(
   leg: WalkLeg,
   isFirstLeg: boolean,
-  warnings: string[],
+  warnings: NavWarningCode[],
 ): NavInstruction[] {
   const out: NavInstruction[] = [];
   const polyline = leg.polyline ?? [];
@@ -328,9 +333,8 @@ function walkLegToInstructions(
       legType: "WALK",
       polylineIndex: bearing !== null ? 0 : null,
     });
-    if (!warnings.includes(WARN_STEPS_UNAVAILABLE)) {
-      warnings.push(WARN_STEPS_UNAVAILABLE);
-    }
+    pushWarning(warnings, WARN_WALK_STEPS_UNAVAILABLE);
+    pushWarning(warnings, WARN_STEPS_UNAVAILABLE);
   }
 
   if (leg.exitInfo) {
@@ -461,7 +465,7 @@ export function generateNavInstructions(
     }
   }
 
-  const warnings: string[] = [];
+  const warnings: NavWarningCode[] = [];
   const instructions: NavInstruction[] = [];
 
   legs.forEach((rawLeg) => {

@@ -6,6 +6,11 @@ const URL = "/api/v1/a11y/route/instructions";
 
 const driveRoute = {
   routeId: "drive-contract",
+  routeName: "開車",
+  totalMinutes: 10,
+  transferCount: 0,
+  accessibilityHighlights: [],
+  attribution: "© OpenStreetMap contributors",
   legs: [
     {
       type: "DRIVE",
@@ -67,16 +72,32 @@ describe("POST /api/v1/a11y/route/instructions", () => {
   it("returns 400 with the standard envelope for an unsupported leg type", async () => {
     const res = await request(app)
       .post(URL)
-      .send({ route: { legs: [{ type: "FERRY" }] } });
+      .send({ route: { ...driveRoute, legs: [{ type: "FERRY" }] } });
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({
       ok: false,
       status: "error",
       code: 400,
-      message: "legs 含未支援的型別：FERRY",
-      data: { reason: "UNSUPPORTED_LEG_TYPE" },
+      message: "Invalid request.",
+      data: { errors: expect.any(Array) },
     });
+  });
+
+  it("accepts a full Valhalla WALK route and returns compatible dual warnings", async () => {
+    const res = await request(app).post(URL).send({
+      route: {
+        routeId: "walk-0", routeName: "步行", totalMinutes: 2, transferCount: 0,
+        accessibilityHighlights: [], attribution: "© OpenStreetMap contributors",
+        legs: [{ type: "WALK", from: "起點", to: "終點", distanceM: 100, minutesEst: 2,
+          polyline: [[121.51, 25.04], [121.52, 25.05]], a11yFacilities: [] }],
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.data.warnings).toEqual([
+      "WALK_STEPS_UNAVAILABLE",
+      "ORS_STEPS_UNAVAILABLE",
+    ]);
   });
 
   it("returns 400 when the strict request body contains an unknown key", async () => {

@@ -30,7 +30,9 @@ Copy `.env.example` to `.env`. Required variables:
 | `PORT` | Server port (default 5000) |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 | `GOOGLE_MAPS_API_KEY` | Google Maps reverse geocoding + Places Text Search |
-| `TOMTOM_API_KEY` | TomTom Routing API — drive / motorcycle / walk route planning |
+| `VALHALLA_BASE_URL` | Self-hosted Valhalla — drive / motorcycle / walk route planning |
+| `VALHALLA_DATA_DIR` | Host directory containing versioned Valhalla tile releases |
+| `VALHALLA_PBF_PATH` | Host path to the Taiwan OSM PBF used for tile builds |
 | `GEMINI_API_KEY` | Google Gemini AI (auto-read by `@google/genai` SDK) |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | JWT signing |
 | `DATABASE_URL` | MongoDB connection URI |
@@ -67,7 +69,7 @@ Each module exposes a `createXRouter()` factory via its `index.ts` (the single r
 | `src/modules/<feature>/*.schema.ts` | Zod request schemas (edge validation); registered to OpenAPI |
 | `src/modules/<feature>/*.controller.ts` | Thin handler: read `req.validated` / identity, call one service, `sendResponse` |
 | `src/modules/<feature>/*.service.ts` | Business logic + orchestration; no framework objects |
-| `src/adapters/*.adapter.ts` | External I/O clients (`google.adapter.ts` geocoding/Places, `tomtom.adapter.ts` road routing, `tdx.adapter.ts`) — one source per file |
+| `src/adapters/*.adapter.ts` | External I/O clients (`google.adapter.ts` geocoding/Places, `valhalla.adapter.ts` road routing, `tdx.adapter.ts`) — one source per file |
 | `src/model/*.model.ts` | Mongoose models |
 | `src/constants/messages.ts` | Shared message strings (no magic literals) |
 | `src/config/*` | Shared infra: `lib.ts` (envelope), `jwt.ts`, `redis.ts`, `fetch.ts`, `taipei-time.ts`, `transit.ts`, `ai.ts`, `ai/` |

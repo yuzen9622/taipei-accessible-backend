@@ -26,6 +26,7 @@
         "import:gtfs-levels": "npx dotenvx run -- ts-node src/scripts/import-gtfs-levels.ts",
         "generate:gtfs-parents": "npx dotenvx run -- ts-node src/scripts/generate-gtfs-parents.ts",
         "build:otp": "npm run generate:gtfs-parents && docker-compose run --rm otp --build --save",
+        "build:valhalla-tiles": "bash src/scripts/build-valhalla-tiles.sh",
         "import:gtfs-all": "npx dotenvx run -- node --max-old-space-size=2048 -r ts-node/register src/scripts/import-gtfs-all.ts",
         "import:bathrooms": "npx dotenvx run -- ts-node src/scripts/import-bathrooms.ts",
         "import:parking": "npx dotenvx run -- ts-node src/scripts/import-disabled-parking.ts",

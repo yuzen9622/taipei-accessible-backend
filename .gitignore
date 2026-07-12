@@ -124,6 +124,9 @@ data/
 otp-data/*
 !otp-data/*.json
 
+# Valhalla graph tiles (generated locally from the OSM PBF)
+valhalla-data/
+
 
 /reports
 # AI eval reports (real-API output, not source)

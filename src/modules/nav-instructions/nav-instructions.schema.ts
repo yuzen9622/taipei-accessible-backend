@@ -1,17 +1,14 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import { AccessibleRouteSchema } from "../accessible-route/accessible-route.schema";
 
 extendZodWithOpenApi(z);
 
 export const NavInstructionsRequestSchema = z
   .object({
     route: z
-      .object({
-        routeId: z.string().optional(),
-        legs: z.array(z.any()),
-      })
-      .strict()
+      .lazy(() => AccessibleRouteSchema)
       .openapi({
         description:
           "由 /accessible-route 回傳的路線物件（前端 passthrough）。支援 WALK、DRIVE、MOTORCYCLE、BUS、METRO、THSR、TRA legs。",
@@ -70,7 +67,11 @@ const NavInstructionsDataSchema = z
     instructions: z.array(NavInstructionSchema),
     initialBearing: z.number(),
     totalSteps: z.number(),
-    warnings: z.array(z.string()),
+    warnings: z.array(z.enum([
+      "WALK_STEPS_UNAVAILABLE",
+      "ORS_STEPS_UNAVAILABLE",
+      "ROAD_STEPS_UNAVAILABLE",
+    ])),
   })
   .openapi("NavInstructionsData");
 
@@ -100,7 +101,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "路線逐步導航指引產生",
   description:
-    "將 /accessible-route 回傳的步行、汽車、機車與大眾運輸路線攤平為可語音朗讀的逐步指引。若上游缺少 turn-by-turn guidance，仍回傳概略指引並在 warnings 標示降級。",
+    "將 /accessible-route 回傳的完整路線原樣轉為可語音朗讀的逐步指引。支援 Valhalla 步行、汽車與機車 guidance；若缺少 steps 仍回傳 200 概略指引。WALK 過渡期同時回 WALK_STEPS_UNAVAILABLE 與 legacy ORS_STEPS_UNAVAILABLE，車行回 ROAD_STEPS_UNAVAILABLE。",
   request: {
     body: {
       content: { "application/json": { schema: NavInstructionsRequestSchema } },

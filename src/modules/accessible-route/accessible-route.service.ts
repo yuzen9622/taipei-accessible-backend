@@ -790,7 +790,7 @@ type DrivingOutcome =
   | { kind: "error" };
 
 /**
- * Plan + finalize a drive/motorcycle/walk route via the Google Routes API.
+ * Plan + finalize a drive/motorcycle/walk route via self-hosted Valhalla.
  *
  * @param origin Journey origin.
  * @param destination Journey destination.
@@ -802,19 +802,19 @@ async function findDrivingRoutes(
   destination: LatLng,
   opts: FindDrivingRoutesOptions,
 ): Promise<DrivingOutcome> {
-  const { planTomTomRoute, TomTomRoutingError } = await import(
-    "./planners/tomtom-routing"
+  const { planValhallaRoute, ValhallaRoutingError } = await import(
+    "./planners/valhalla-routing"
   );
   let raw: AccessibleRoute[];
   try {
-    raw = await planTomTomRoute(origin, destination, {
+    raw = await planValhallaRoute(origin, destination, {
       travelMode: opts.travelMode,
       waypoints: opts.waypoints,
       departureTime: opts.departureTime,
     });
   } catch (err) {
-    if (err instanceof TomTomRoutingError) return { kind: "unavailable" };
-    console.error("[accessible-route] tomtom routing failed", err);
+    if (err instanceof ValhallaRoutingError) return { kind: "unavailable" };
+    console.error("[accessible-route] valhalla routing failed", err);
     return { kind: "error" };
   }
   if (!raw.length) return { kind: "empty" };

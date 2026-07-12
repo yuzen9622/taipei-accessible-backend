@@ -207,4 +207,5 @@ export interface AccessibleRoute {
     criticalFeatureScore: number;
     walkPenalty: number;
   };
+  attribution?: string;
 }
