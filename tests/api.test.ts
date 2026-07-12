@@ -57,7 +57,7 @@ function cleanWarnings(warnings: string[]): string[] {
 
 async function runTests() {
   console.log("==================================================");
-  console.log("   TAIPEI ACCESSIBLE BACKEND INTEGRATION TESTS    ");
+  console.log("   ACCESSIBLE SMART MAP BACKEND INTEGRATION TESTS ");
   console.log("==================================================");
   console.log(`Targeting Server: ${BASE_URL}\n`);
 
