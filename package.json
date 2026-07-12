@@ -1,7 +1,7 @@
 {
-    "name": "taipei-accessible-backend",
+    "name": "accessible-smart-map-backend",
     "version": "1.0.0",
-    "description": "Backend server for Taipei Accessible project",
+    "description": "Backend server for Accessible Smart Map project",
     "main": "dist/server.js",
     "scripts": {
         "build": "npm run lint:arch && tsc",
