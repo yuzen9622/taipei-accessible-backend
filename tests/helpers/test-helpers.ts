@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import app from "../src/app";
+import app from "../../src/app";
 
 /**
  * Returns the real Express app for route-level integration tests.

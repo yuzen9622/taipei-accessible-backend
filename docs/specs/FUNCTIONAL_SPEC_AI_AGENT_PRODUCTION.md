@@ -730,7 +730,7 @@ P0.1 + P0.2 + P0.3（可並行）
 
 ### 12.1 單元 / 路由整合測試（vitest + supertest）
 
-沿用現有 `buildTestApp()` + `buildAuthorizationHeader()` 測試框架（`test/test-helpers.ts`），對新端點撰寫路由整合測試：
+沿用現有 `buildTestApp()` + `buildAuthorizationHeader()` 測試框架（`tests/helpers/test-helpers.ts`），對新端點撰寫路由整合測試：
 
 | 測試案例 | 驗證重點 |
 |---|---|

@@ -19,7 +19,7 @@ const openSockets: WebSocket[] = [];
 
 /**
  * Signs a valid access token with the same payload shape and secret used by
- * test/test-helpers.ts buildAuthorizationHeader.
+ * tests/helpers/test-helpers.ts buildAuthorizationHeader.
  *
  * @param userId The user _id embedded in the JWT payload.
  * @returns A signed access token string.

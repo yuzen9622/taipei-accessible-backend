@@ -789,7 +789,7 @@ LINE Messaging API 官方帳號免費方案（**Communication Plan**）每月 **
 
 ## 13. 測試策略
 
-沿用專案既有 vitest + supertest 路由層整合測試慣例（`test/test-helpers.ts` 的 `buildTestApp()` / `buildAuthorizationHeader(user?)`），以 `vi.mock` 掛掉 service 層，讓請求真正跑過 router + middleware + validation + controller + envelope。**LINE adapter 全程 mock，測試中不打真實 LINE API。**
+沿用專案既有 vitest + supertest 路由層整合測試慣例（`tests/helpers/test-helpers.ts` 的 `buildTestApp()` / `buildAuthorizationHeader(user?)`），以 `vi.mock` 掛掉 service 層，讓請求真正跑過 router + middleware + validation + controller + envelope。**LINE adapter 全程 mock，測試中不打真實 LINE API。**
 
 | 測試案例 | 型態 | 重點 |
 |---|---|---|

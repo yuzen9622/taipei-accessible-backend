@@ -32,7 +32,7 @@ vi.mock("./line.service", () => ({
   handleEvents: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { buildTestApp } from "../../../test/test-helpers";
+import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import * as service from "./line.service";
 import { ResponseCode } from "../../types/code";
 

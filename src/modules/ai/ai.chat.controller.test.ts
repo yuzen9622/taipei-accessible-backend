@@ -6,7 +6,7 @@ vi.mock("./ai-chat.service", () => ({
   toGeminiHistory: vi.fn(() => ({ systemInstruction: undefined, contents: [] })),
 }));
 
-import { buildTestApp } from "../../../test/test-helpers";
+import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import { googleGenAi } from "../../config/ai";
 import { runToolLoop } from "./ai-chat.service";
 

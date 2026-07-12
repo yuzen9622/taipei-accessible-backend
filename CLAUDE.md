@@ -15,8 +15,8 @@ npm run test:watch # Vitest in watch mode
 
 Tests use **vitest**; specs live next to the code as `*.test.ts` (e.g. `src/modules/accessible-route/scoring.test.ts`).
 We support unit tests and route-level integration tests. The integration test harness uses **supertest** to drive the Express application:
-- `buildTestApp()` (from `test/test-helpers.ts`) returns the real Express app instance (from `src/app.ts`) without starting the HTTP server or connecting to MongoDB.
-- `buildAuthorizationHeader(user?)` (from `test/test-helpers.ts`) signs a JWT token and returns a Bearer header string for authenticated routes.
+- `buildTestApp()` (from `tests/helpers/test-helpers.ts`) returns the real Express app instance (from `src/app.ts`) without starting the HTTP server or connecting to MongoDB.
+- `buildAuthorizationHeader(user?)` (from `tests/helpers/test-helpers.ts`) signs a JWT token and returns a Bearer header string for authenticated routes.
 - Mock the service layer with `vi.mock` in test files so that the request exercises router + middleware + validation + controller + envelope without touching the network or DB.
 
 Data-import scripts run via dotenvx + ts-node and populate MongoDB from TDX / GTFS / OSM sources — e.g. `npm run import:gtfs-all`, `npm run import:tdx-tra`, `npm run import:osm`. See `package.json` for the full list (`src/scripts/*`).
