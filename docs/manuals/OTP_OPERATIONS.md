@@ -269,7 +269,7 @@ Node 端固定使用 OTP 作為唯一路徑規劃引擎；設定 `OTP_BASE_URL` 
 
 ```cron
 # 每週日 04:00 全量更新（feed + TRA + 月度 OSM + 建圖 + 換檔）
-0 4 * * 0  cd /path/to/taipei-accessible-backend && \
+0 4 * * 0  cd /path/to/accessible-smart-map-backend && \
            OTP_DATA_DIR=$PWD/otp-data OTP_GTFS_URLS="<url>" \
            src/scripts/build-otp-graph.sh >> /var/log/otp-build.log 2>&1
 ```

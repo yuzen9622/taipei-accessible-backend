@@ -356,7 +356,7 @@ export interface ISosSession {
 本功能依賴的 LINE 官方帳號 **尚未建立**，實作前需先完成以下設定（一次性，由專案負責人操作）：
 
 1. 前往 [LINE Developers Console](https://developers.line.biz/console/)，登入 LINE 帳號。
-2. 建立一個 **Provider**（若尚未有，可用專案名稱，如「台北無障礙」）。
+2. 建立一個 **Provider**（若尚未有，可用專案名稱，如「無障礙智慧地圖」）。
 3. 在該 Provider 下建立一個 **Messaging API Channel**（頻道類型選 Messaging API，非 LINE Login）。填入頻道名稱、說明、圖示、分類等基本資料。
 4. 進入該 Channel 的「Messaging API」分頁：
    - 取得 **Channel access token（long-lived）**：點選「Issue」產生，對應 `LINE_CHANNEL_ACCESS_TOKEN`。

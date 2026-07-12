@@ -1,4 +1,4 @@
-# 台北無障礙 API 回傳資訊合理性與多餘欄位審計報告
+# 無障礙智慧地圖 API 回傳資訊合理性與多餘欄位審計報告
 
 本報告針對整個 API 路由回傳資訊的合理性進行審計，整理並標出所有多餘、重複的欄位，同時將自動化測試腳本寫於 [api.test.ts](file:///Users/yuen/project/taipei-accessible-backend/tests/api.test.ts)。
 
