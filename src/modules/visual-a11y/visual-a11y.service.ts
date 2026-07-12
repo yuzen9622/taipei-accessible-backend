@@ -70,7 +70,7 @@ async function fetchOverpass(query: string): Promise<any[]> {
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
         "User-Agent":
-          "taipei-accessible-backend/1.0 (visual-a11y sync)",
+          "accessible-smart-map-backend/1.0 (visual-a11y sync)",
       },
       body: `data=${encodeURIComponent(query)}`,
     });

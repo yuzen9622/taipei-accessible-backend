@@ -81,7 +81,7 @@ async function fetchOverpass(query: string): Promise<any[]> {
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           "Accept": "application/json",
-          "User-Agent": "taipei-accessible-backend/1.0 (accessibility data import)",
+          "User-Agent": "accessible-smart-map-backend/1.0 (accessibility data import)",
         },
         body: `data=${encodeURIComponent(query)}`,
       });
