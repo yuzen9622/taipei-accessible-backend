@@ -299,6 +299,24 @@ describe("planTomTomRoute", () => {
               ],
             },
           ],
+          guidance: {
+            instructions: [
+              {
+                routeOffsetInMeters: 0,
+                travelTimeInSeconds: 0,
+                pointIndex: 0,
+                maneuver: "DEPART",
+                message: "沿信義路出發",
+              },
+              {
+                routeOffsetInMeters: 300,
+                travelTimeInSeconds: 240,
+                pointIndex: 1,
+                maneuver: "TURN_LEFT",
+                message: "左轉進入市府路",
+              },
+            ],
+          },
         },
       ],
     } as any);
@@ -318,6 +336,19 @@ describe("planTomTomRoute", () => {
       [121.57, 25.05],
     ]);
     expect(leg.a11yFacilities).toEqual([]);
+    expect(leg.steps).toHaveLength(2);
+    expect(leg.steps[0]).toMatchObject({
+      instruction: "沿信義路出發",
+      relativeDirection: "DEPART",
+      distanceM: 300,
+      location: [121.56, 25.04],
+    });
+    expect(leg.steps[1]).toMatchObject({
+      instruction: "左轉進入市府路",
+      relativeDirection: "LEFT",
+      distanceM: 500,
+      location: [121.57, 25.05],
+    });
     expect(routes[0].totalWalkDistanceM).toBe(800);
     expect(mockCompute.mock.calls[0][0].travelMode).toBe("pedestrian");
     expect(mockCompute.mock.calls[0][0].trafficAware).toBe(false);

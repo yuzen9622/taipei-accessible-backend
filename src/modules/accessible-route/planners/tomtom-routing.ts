@@ -19,6 +19,7 @@ import type {
   DriveLeg,
   DriveStep,
   WalkLeg,
+  WalkStep,
 } from "../../../types/route";
 import type {
   LatLng,
@@ -108,6 +109,38 @@ function segmentLabels(idx: number, legCount: number): [string, string] {
 function mapManeuver(code: string | undefined): string | undefined {
   if (!code) return undefined;
   return MANEUVER_MAP[code] ?? code;
+}
+
+const WALK_DIRECTION_BY_MANEUVER: Record<string, string> = {
+  DEPART: "DEPART",
+  STRAIGHT: "STRAIGHT",
+  TURN_LEFT: "LEFT",
+  TURN_RIGHT: "RIGHT",
+  TURN_SHARP_LEFT: "HARD_LEFT",
+  TURN_SHARP_RIGHT: "HARD_RIGHT",
+  TURN_SLIGHT_LEFT: "SLIGHTLY_LEFT",
+  TURN_SLIGHT_RIGHT: "SLIGHTLY_RIGHT",
+  KEEP_LEFT: "SLIGHTLY_LEFT",
+  KEEP_RIGHT: "SLIGHTLY_RIGHT",
+  UTURN_LEFT: "UTURN_LEFT",
+  ROUNDABOUT_LEFT: "CIRCLE_COUNTERCLOCKWISE",
+  ROUNDABOUT_RIGHT: "CIRCLE_CLOCKWISE",
+};
+
+function driveStepsToWalkSteps(steps: DriveStep[] | undefined): WalkStep[] | undefined {
+  if (!steps?.length) return undefined;
+  return steps.map((step) => ({
+    instruction: step.instruction,
+    maneuver: step.maneuver,
+    relativeDirection:
+      WALK_DIRECTION_BY_MANEUVER[step.maneuver ?? ""] ?? "CONTINUE",
+    absoluteDirection: null,
+    streetName: "",
+    bogusName: true,
+    area: false,
+    distanceM: step.distanceM,
+    location: step.polyline[0] ?? [0, 0],
+  }));
 }
 
 interface RouteGeometry {
@@ -295,7 +328,12 @@ function coordOf(leg: TomTomLeg, first: boolean): LatLng {
   return p ? { lat: p.latitude, lng: p.longitude } : { lat: 0, lng: 0 };
 }
 
-function mapWalkLeg(leg: TomTomLeg, idx: number, legCount: number): WalkLeg {
+function mapWalkLeg(
+  leg: TomTomLeg,
+  idx: number,
+  legCount: number,
+  steps: WalkStep[] | undefined,
+): WalkLeg {
   const [from, to] = segmentLabels(idx, legCount);
   const s = leg.summary ?? {};
   return {
@@ -306,6 +344,7 @@ function mapWalkLeg(leg: TomTomLeg, idx: number, legCount: number): WalkLeg {
     minutesEst: secToMin(s.travelTimeInSeconds),
     polyline: (leg.points ?? []).map(toLngLat),
     a11yFacilities: [],
+    steps,
   };
 }
 
@@ -348,20 +387,28 @@ function mapRoute(
   const legs = route.legs ?? [];
   const legCount = legs.length;
 
+  const geo = buildRouteGeometry(legs);
+  const perLeg: TomTomInstruction[][] = legs.map(() => []);
+  for (const inst of route.guidance?.instructions ?? []) {
+    const k = dispatchLeg(
+      inst.routeOffsetInMeters ?? 0,
+      geo.legStartOffset,
+      geo.legEndOffset,
+    );
+    if (k >= 0 && k < legCount) perLeg[k].push(inst);
+  }
+
   let mapped: (DriveLeg | WalkLeg)[];
   if (travelMode === "walk") {
-    mapped = legs.map((leg, i) => mapWalkLeg(leg, i, legCount));
+    mapped = legs.map((leg, i) =>
+      mapWalkLeg(
+        leg,
+        i,
+        legCount,
+        driveStepsToWalkSteps(buildSteps(i, perLeg[i], geo)),
+      ),
+    );
   } else {
-    const geo = buildRouteGeometry(legs);
-    const perLeg: TomTomInstruction[][] = legs.map(() => []);
-    for (const inst of route.guidance?.instructions ?? []) {
-      const k = dispatchLeg(
-        inst.routeOffsetInMeters ?? 0,
-        geo.legStartOffset,
-        geo.legEndOffset,
-      );
-      if (k >= 0 && k < legCount) perLeg[k].push(inst);
-    }
     mapped = legs.map((leg, k) =>
       mapDriveLeg(
         leg,
