@@ -20,6 +20,7 @@ export type BusPositionResult =
 export type BusServiceError = { ok: false; error: string; status: 400 | 404 | 500 };
 
 export type BusRouteDirection = {
+  subRouteUid?: string;
   direction: number;
   directionLabel: string;
   from: string;
@@ -49,6 +50,7 @@ export type BusRouteDetailStop = {
 };
 
 export type BusRouteDetailDirection = {
+  subRouteUid?: string;
   direction: number;
   directionLabel: string;
   from: string;
@@ -87,6 +89,7 @@ export type BusFrequency = {
   minHeadwayMins?: number;
   maxHeadwayMins?: number;
   serviceDays: string;
+  stopTimes?: { seq: number; stopName: string; arrivalTime: string }[];
 };
 
 export type BusScheduleByDirection = {
