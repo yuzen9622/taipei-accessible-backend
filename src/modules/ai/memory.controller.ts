@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
 import { MEMORY_MSG, ERROR_MESSAGE } from "../../constants/messages";
-import { ResponseCode } from "../../types/code";
+import { ResponseCode, ResponseMessage } from "../../types/code";
 import type {
   MemoryCategory,
   MemorySensitivity,
@@ -17,8 +17,13 @@ import {
   updateMemorySettings,
 } from "./memory.service";
 
-function requireUserId(req: Request): string {
-  return req.auth?.userId ?? "";
+function getUserId(req: Request, res: Response): string | null {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    sendResponse(res, false, "error", ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORIZED);
+    return null;
+  }
+  return userId;
 }
 
 function toMemoryDto(memory: {
@@ -48,7 +53,8 @@ export async function listUserMemories(
   res: Response,
 ): Promise<void> {
   try {
-    const userId = requireUserId(req);
+    const userId = getUserId(req, res);
+    if (!userId) return;
     const { limit } = req.query as { limit?: number };
     const memories = await listMemories(userId, limit ?? 100);
     sendResponse(res, true, "success", ResponseCode.OK, MEMORY_MSG.LIST_OK, {
@@ -65,7 +71,8 @@ export async function createUserMemory(
   res: Response,
 ): Promise<void> {
   try {
-    const userId = requireUserId(req);
+    const userId = getUserId(req, res);
+    if (!userId) return;
     const body = req.body as {
       content: string;
       category: MemoryCategory;
@@ -92,7 +99,8 @@ export async function updateUserMemory(
   res: Response,
 ): Promise<void> {
   try {
-    const userId = requireUserId(req);
+    const userId = getUserId(req, res);
+    if (!userId) return;
     const { id } = req.params as { id: string };
     const body = req.body as {
       content?: string;
@@ -130,7 +138,8 @@ export async function deleteUserMemory(
   res: Response,
 ): Promise<void> {
   try {
-    const userId = requireUserId(req);
+    const userId = getUserId(req, res);
+    if (!userId) return;
     const { id } = req.params as { id: string };
     const deleted = await deleteMemory(userId, id);
     if (!deleted) {
@@ -151,7 +160,8 @@ export async function clearUserMemories(
   res: Response,
 ): Promise<void> {
   try {
-    const userId = requireUserId(req);
+    const userId = getUserId(req, res);
+    if (!userId) return;
     const deletedCount = await clearMemories(userId);
     sendResponse(res, true, "success", ResponseCode.OK, MEMORY_MSG.CLEARED, {
       deletedCount,
@@ -167,7 +177,9 @@ export async function getUserMemorySettings(
   res: Response,
 ): Promise<void> {
   try {
-    const settings = await getMemorySettings(requireUserId(req));
+    const userId = getUserId(req, res);
+    if (!userId) return;
+    const settings = await getMemorySettings(userId);
     sendResponse(res, true, "success", ResponseCode.OK, MEMORY_MSG.SETTINGS_OK, settings);
   } catch (error) {
     console.error("[memory/settings:get]", error);
@@ -181,7 +193,9 @@ export async function updateUserMemorySettings(
 ): Promise<void> {
   try {
     const { memoryEnabled } = req.body as { memoryEnabled: boolean };
-    const settings = await updateMemorySettings(requireUserId(req), {
+    const userId = getUserId(req, res);
+    if (!userId) return;
+    const settings = await updateMemorySettings(userId, {
       memoryEnabled,
     });
     sendResponse(

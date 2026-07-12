@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { model } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
-import { ResponseCode } from "../../types/code";
+import { ResponseCode, ResponseMessage } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import { verifyAccessToken } from "../../config/jwt";
 import { runToolLoop, toGeminiHistory, type OAIMessage } from "./ai-chat.service";
@@ -13,12 +13,20 @@ function sendSse(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-function resolveAuthUser(req: Request): IUser | null {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return null;
+function resolveAuthUser(req: Request): { user: IUser | null; expired: boolean; invalid: boolean } {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return { user: null, expired: false, invalid: false };
+  const token = authHeader.split(" ")[1];
+  if (!token) return { user: null, expired: false, invalid: false };
   const v = verifyAccessToken(token);
-  if (!v.success || !v.decoded) return null;
-  return (v.decoded as { user?: IUser }).user ?? null;
+  if (v.expired) {
+    return { user: null, expired: true, invalid: false };
+  }
+  if (!v.success || !v.decoded) {
+    return { user: null, expired: false, invalid: true };
+  }
+  const user = (v.decoded as { user?: IUser }).user ?? null;
+  return { user, expired: false, invalid: false };
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -60,7 +68,14 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     userLocation?: { latitude: number; longitude: number };
   };
 
-  const authUser = resolveAuthUser(req);
+  const authResult = resolveAuthUser(req);
+  if (authResult.expired) {
+    return sendResponse(res, false, "error", ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORIZED);
+  }
+  if (authResult.invalid) {
+    return sendResponse(res, false, "error", ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN);
+  }
+  const authUser = authResult.user;
   const userId = authUser ? String(authUser._id) : undefined;
   const latestText = latestUserText(rawMessages);
 
