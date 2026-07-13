@@ -9,6 +9,7 @@ import {
   ANSWER_FACT_RULE,
   ANSWER_UNCERTAINTY_RULE,
 } from "./agent-prompt-shared";
+import { taipeiYmdDash, taipeiWeekday } from "../taipei-time";
 
 export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 用使用者的語言回覆、稱呼「您」，把工具回傳的 JSON 整理成自然、簡潔的話，不要把原始 JSON 丟給使用者。

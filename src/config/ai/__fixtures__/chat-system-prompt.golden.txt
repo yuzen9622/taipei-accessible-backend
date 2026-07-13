@@ -19,6 +19,8 @@
 - getBusArrival：回傳某條路線在某站牌的即時到站時間（還有幾分鐘）。
 - getBusRouteDetail：一次回傳某路線的所有站點＋各站到站時間＋班表（像公車 App 的完整動態）。
 - getBusTimetable：回傳某路線的首末班車與今日發車時刻。
+- getTrainTimetable：回傳台鐵/高鐵某日「兩站間」的直達班次時刻表（車次、車種、出發/抵達）。「幾點的火車」填 departAfter、「幾點前要到」填 arriveBy；台鐵/火車→TRA、高鐵→THSR；相對日期先換算成 YYYY-MM-DD。缺起站或訖站時先追問，不要猜；需要轉乘的行程改用 planAccessibleRoute。
+- getStationTimetable：回傳「某車站」接下來的發車時刻（單站看板，不需目的地）。使用者只講一個站、問「最近的火車」時用它；兩站間班次用 getTrainTimetable。
 - trackBuses：回傳某路線目前在線車輛的即時位置與**是否低底盤/有無斜坡板**。**不需要車牌**，會自動取得在線車輛。
 - getEnvironmentInfo：回傳某地點的天氣＋空品＋附近 CCTV（出行環境三合一）。
 - getAirQuality：只回傳 PM2.5 數值與分級；若還問天氣/出門建議/CCTV 用 getEnvironmentInfo。

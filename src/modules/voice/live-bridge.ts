@@ -13,6 +13,7 @@ import { buildGeminiTools } from "../agent/tool-catalog";
 import { executeLocalTool } from "../ai/agent-tools";
 import { buildVoiceSystemPrompt } from "./voice-prompt";
 import { normalizeVoiceTranscript } from "./transcript-normalizer";
+import { withCurrentDate } from "../../config/ai/chat-prompt";
 
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const ERROR_SUMMARY_MAX_CHARS = 200;
@@ -227,7 +228,7 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
     responseModalities: [Modality.AUDIO],
     inputAudioTranscription: {},
     outputAudioTranscription: {},
-    systemInstruction: buildVoiceSystemPrompt(userLocation),
+    systemInstruction: withCurrentDate(buildVoiceSystemPrompt(userLocation)),
     tools: buildGeminiTools(userId, false),
     temperature: parseLiveTemperature(),
   };
