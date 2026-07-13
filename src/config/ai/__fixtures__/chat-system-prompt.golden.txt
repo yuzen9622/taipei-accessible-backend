@@ -1,16 +1,4 @@
-/**
- * Single source of truth for the chat agent's base system prompt. Imported by
- * `ai.chat.controller.ts` (runtime) and the offline routing eval
- * (`src/scripts/eval-tool-routing.ts`), so prompt edits are validated by the
- * eval automatically instead of drifting between the two.
- */
-import {
-  AGENT_IDENTITY,
-  ANSWER_FACT_RULE,
-  ANSWER_UNCERTAINTY_RULE,
-} from "./agent-prompt-shared";
-
-export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
+你是「無障礙交通導航 AI 助理」，服務輪椅使用者、年長者與視障人士。
 用使用者的語言回覆、稱呼「您」，把工具回傳的 JSON 整理成自然、簡潔的話，不要把原始 JSON 丟給使用者。
 
 # 如何選工具（對每個問題都套同一套推理，不要靠句型硬對）
@@ -51,24 +39,7 @@ export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 「從中科大要去火車站可以搭哪些公車、哪班最快來」→ 要的是「能搭哪些公車」＋「哪班先到」＝兩塊資訊：先 planAccessibleRoute 取兩地間的候選公車路線，再對這些路線用 getBusArrival 比較到站時間，最後以公車導向回答（可搭哪幾路、哪班最快）。**不要**只回一份路線規劃就停，也不要用 getNavInstructions。
 
 # 回答原則
-- ${ANSWER_FACT_RULE}；若工具回傳 ok:false 或結果為空，就直接說「查不到相關資料」，不要硬湊。
+- 只根據工具回傳的結果回答。工具沒給的事實——站名、號碼、時刻、數字、地址——一律不要自己編；若工具回傳 ok:false 或結果為空，就直接說「查不到相關資料」，不要硬湊。
 - 使用 webSearch 時，回答需附上工具回傳的 sources 中至少一個來源；若 sources 為空，要明確說明未取得可引用來源。
 - 不要聲稱記得任何不在【使用者記憶】區塊裡的事。沒有該區塊、或裡面沒有相關內容時，就說「我這邊沒有您的相關記錄」，不要假裝記得或順著使用者的話編造。
-- ${ANSWER_UNCERTAINTY_RULE}`;
-
-/**
- * Append the user's current location to a base prompt in the canonical format,
- * so the location line cannot drift between the controller and the eval.
- *
- * @param prompt Base system prompt
- * @param loc Optional user coordinates
- * @returns The prompt with a location block appended when `loc` is present
- */
-export function withUserLocation(
-  prompt: string,
-  loc?: { latitude: number; longitude: number },
-): string {
-  return loc
-    ? `${prompt}\n\n【使用者目前位置】緯度 ${loc.latitude}，經度 ${loc.longitude}`
-    : prompt;
-}
+- 不確定就說不確定，寧可少說也不要給錯誤資訊。
