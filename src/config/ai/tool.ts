@@ -260,6 +260,67 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "getTrainTimetable",
+      description:
+        "回傳台鐵/高鐵某日「兩站間」的直達班次時刻表（車次、車種、出發/抵達時間）。「幾點的火車」填 departAfter；「幾點前要到」填 arriveBy；台鐵/火車→TRA、高鐵→THSR；相對日期（明天、週五）先換算成 YYYY-MM-DD，班次以出發日為準。只回直達車。使用者只講一個車站、想知道該站接下來有哪些車→改用 getStationTimetable；缺起站或訖站時先追問，不要猜；需要轉乘的行程改用 planAccessibleRoute。",
+      parameters: {
+        type: "object",
+        properties: {
+          originStation: { type: "string", description: "出發車站中文名稱，例如：'台北'、'新左營'" },
+          destinationStation: { type: "string", description: "抵達車站中文名稱，例如：'台中'" },
+          date: {
+            type: "string",
+            description: "查詢日期 YYYY-MM-DD（出發日）；未提供＝今天。相對日期先換算成此格式。",
+          },
+          departAfter: {
+            type: "string",
+            description: "只保留此時間（含）之後出發的班次，格式 HH:mm，例如：'09:00'。",
+          },
+          arriveBy: {
+            type: "string",
+            description: "只保留能在此時間（含）之前抵達的班次，格式 HH:mm，例如：'12:00'。",
+          },
+          railSystem: {
+            type: "string",
+            enum: ["TRA", "THSR"],
+            description: "TRA=台鐵、THSR=高鐵；未提供預設 TRA。",
+          },
+        },
+        required: ["originStation", "destinationStation"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getStationTimetable",
+      description:
+        "回傳「某個車站」接下來的火車發車時刻（單站發車看板，不需目的地）。使用者只提到一個車站、問「最近的火車幾點/接下來有哪些車」時用它。台鐵/火車→TRA、高鐵→THSR；date 未提供＝今天、departAfter 未提供＝現在。要查兩站間班次請用 getTrainTimetable；需要轉乘用 planAccessibleRoute。",
+      parameters: {
+        type: "object",
+        properties: {
+          station: { type: "string", description: "車站中文名稱，例如：'台中'、'板橋'、'左營'" },
+          date: {
+            type: "string",
+            description: "查詢日期 YYYY-MM-DD；未提供＝今天。相對日期先換算成此格式。",
+          },
+          departAfter: {
+            type: "string",
+            description: "只保留此時間（含）之後發車的班次，格式 HH:mm；未提供且查今天＝現在時刻。",
+          },
+          railSystem: {
+            type: "string",
+            enum: ["TRA", "THSR"],
+            description: "TRA=台鐵、THSR=高鐵；未提供預設 TRA。",
+          },
+        },
+        required: ["station"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "trackBuses",
       description:
         "回傳某條公車路線目前所有在線車輛的即時 GPS 位置、行駛狀態，以及每台車是否為低底盤/有無升降斜坡板。**不需要、也不要向使用者索取車牌號碼**，會自動取得在線車輛。",

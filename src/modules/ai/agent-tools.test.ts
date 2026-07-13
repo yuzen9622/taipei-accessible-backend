@@ -12,6 +12,10 @@ vi.mock("../transit/bus.service", () => ({
   getBusTimetable: vi.fn(),
   getBusRealtimeOnRoute: vi.fn(),
 }));
+vi.mock("../transit/train.service", () => ({
+  getTrainTimetable: vi.fn(),
+  getStationTimetable: vi.fn(),
+}));
 vi.mock("../air/air.service", () => ({
   getAirData: vi.fn(),
   classifyPm25: vi.fn(),
@@ -112,7 +116,10 @@ import {
   getActiveSosContext,
   getSosLiveLocation,
   planRouteToSosVictim,
+  getTrainTimetable,
+  getStationTimetable,
 } from "./agent-tools";
+import * as trainService from "../transit/train.service";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<typeof vi.fn>;
 const mockFetchEnvironment = fetchEnvironment as unknown as ReturnType<typeof vi.fn>;
@@ -1178,5 +1185,86 @@ describe("webSearch", () => {
     const result = JSON.parse(raw);
     expect(result.ok).toBe(false);
     expect(result.error).toBe("網路搜尋失敗");
+  });
+});
+
+describe("train tools", () => {
+  const trainMock = trainService.getTrainTimetable as unknown as ReturnType<typeof vi.fn>;
+  const stationMock = trainService.getStationTimetable as unknown as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("getTrainTimetable forwards args and returns the service result as JSON", async () => {
+    trainMock.mockResolvedValue({ ok: true, trains: [] });
+    const raw = await getTrainTimetable({
+      originStation: "台北",
+      destinationStation: "台中",
+      departAfter: "09:00",
+      railSystem: "TRA",
+    });
+    expect(trainMock).toHaveBeenCalledWith({
+      originStation: "台北",
+      destinationStation: "台中",
+      departAfter: "09:00",
+      railSystem: "TRA",
+    });
+    expect(JSON.parse(raw)).toEqual({ ok: true, trains: [] });
+  });
+
+  it("getTrainTimetable maps a thrown service error to a friendly failure", async () => {
+    trainMock.mockRejectedValue(new Error("boom"));
+    const raw = await getTrainTimetable({ originStation: "台北", destinationStation: "台中" });
+    expect(JSON.parse(raw)).toEqual({ ok: false, error: "火車時刻表查詢失敗" });
+  });
+
+  it("getStationTimetable forwards args and returns the service result as JSON", async () => {
+    stationMock.mockResolvedValue({ ok: true, trains: [] });
+    const raw = await getStationTimetable({ station: "台中", railSystem: "THSR" });
+    expect(stationMock).toHaveBeenCalledWith({ station: "台中", railSystem: "THSR" });
+    expect(JSON.parse(raw)).toEqual({ ok: true, trains: [] });
+  });
+
+  it("getStationTimetable maps a thrown service error to a friendly failure", async () => {
+    stationMock.mockRejectedValue(new Error("boom"));
+    const raw = await getStationTimetable({ station: "台中" });
+    expect(JSON.parse(raw)).toEqual({ ok: false, error: "車站時刻表查詢失敗" });
+  });
+
+  it("executeLocalTool dispatches getTrainTimetable with all args", async () => {
+    trainMock.mockResolvedValue({ ok: true });
+    await executeLocalTool("getTrainTimetable", {
+      originStation: "台北",
+      destinationStation: "台中",
+      date: "2026-07-14",
+      departAfter: "09:00",
+      arriveBy: "12:00",
+      railSystem: "TRA",
+    });
+    expect(trainMock).toHaveBeenCalledWith({
+      originStation: "台北",
+      destinationStation: "台中",
+      date: "2026-07-14",
+      departAfter: "09:00",
+      arriveBy: "12:00",
+      railSystem: "TRA",
+    });
+  });
+
+  it("executeLocalTool dispatches getStationTimetable with all args", async () => {
+    stationMock.mockResolvedValue({ ok: true });
+    await executeLocalTool("getStationTimetable", {
+      station: "台中",
+      date: "2026-07-14",
+      departAfter: "09:00",
+      railSystem: "THSR",
+    });
+    expect(stationMock).toHaveBeenCalledWith({
+      station: "台中",
+      date: "2026-07-14",
+      departAfter: "09:00",
+      railSystem: "THSR",
+    });
   });
 });

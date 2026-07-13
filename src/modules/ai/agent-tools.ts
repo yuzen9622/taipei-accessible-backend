@@ -1,5 +1,6 @@
 import * as a11yService from "../a11y/a11y.service";
 import * as busService from "../transit/bus.service";
+import * as trainService from "../transit/train.service";
 import * as airService from "../air/air.service";
 import * as campusService from "../campus/campus.service";
 import * as hazardService from "../hazard-report/hazard-report.service";
@@ -573,6 +574,38 @@ export async function getBusTimetable(args: {
   } catch (error: any) {
     console.error("[agent-tool:getBusTimetable]", error);
     return JSON.stringify({ ok: false, error: "公車時刻表查詢失敗" });
+  }
+}
+
+export async function getTrainTimetable(args: {
+  originStation: string;
+  destinationStation: string;
+  date?: string;
+  departAfter?: string;
+  arriveBy?: string;
+  railSystem?: "TRA" | "THSR";
+}): Promise<string> {
+  try {
+    const result = await trainService.getTrainTimetable(args);
+    return JSON.stringify(result);
+  } catch (error: any) {
+    console.error("[agent-tool:getTrainTimetable]", error);
+    return JSON.stringify({ ok: false, error: "火車時刻表查詢失敗" });
+  }
+}
+
+export async function getStationTimetable(args: {
+  station: string;
+  date?: string;
+  departAfter?: string;
+  railSystem?: "TRA" | "THSR";
+}): Promise<string> {
+  try {
+    const result = await trainService.getStationTimetable(args);
+    return JSON.stringify(result);
+  } catch (error: any) {
+    console.error("[agent-tool:getStationTimetable]", error);
+    return JSON.stringify({ ok: false, error: "車站時刻表查詢失敗" });
   }
 }
 
@@ -1472,6 +1505,24 @@ export async function executeLocalTool(
         routeName: args.routeName,
         city: args.city,
         userLocation,
+      });
+
+    case "getTrainTimetable":
+      return getTrainTimetable({
+        originStation: args.originStation,
+        destinationStation: args.destinationStation,
+        date: args.date,
+        departAfter: args.departAfter,
+        arriveBy: args.arriveBy,
+        railSystem: args.railSystem,
+      });
+
+    case "getStationTimetable":
+      return getStationTimetable({
+        station: args.station,
+        date: args.date,
+        departAfter: args.departAfter,
+        railSystem: args.railSystem,
       });
 
     case "trackBuses":
