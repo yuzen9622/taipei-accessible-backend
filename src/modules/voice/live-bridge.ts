@@ -10,6 +10,7 @@ import { googleGenAi } from "../../config/ai";
 import { buildGeminiTools } from "../ai/ai-chat.service";
 import { executeLocalTool } from "../ai/agent-tools";
 import { buildVoiceSystemPrompt } from "./voice-prompt";
+import { normalizeVoiceTranscript } from "./transcript-normalizer";
 
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const ERROR_SUMMARY_MAX_CHARS = 200;
@@ -164,10 +165,18 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
         if (part.inlineData?.data) forwardAudio(part.inlineData.data);
       }
       if (content.inputTranscription?.text) {
-        sendJson({ type: "transcript", role: "user", text: content.inputTranscription.text });
+        sendJson({
+          type: "transcript",
+          role: "user",
+          text: normalizeVoiceTranscript(content.inputTranscription.text),
+        });
       }
       if (content.outputTranscription?.text) {
-        sendJson({ type: "transcript", role: "model", text: content.outputTranscription.text });
+        sendJson({
+          type: "transcript",
+          role: "model",
+          text: normalizeVoiceTranscript(content.outputTranscription.text),
+        });
       }
       if (content.interrupted) sendJson({ type: "interrupted" });
       if (content.turnComplete) sendJson({ type: "turn.complete" });
