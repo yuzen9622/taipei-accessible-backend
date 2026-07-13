@@ -8,18 +8,38 @@ vi.mock("../../config/ai", () => ({
 vi.mock("../../config/ai/tool", () => ({
   openAiChatTools: [],
   memoryTools: [],
+  findA11yPlacesDeclaration: {},
+  findGooglePlacesDeclaration: {},
+  planRouteDeclaration: {},
 }));
-vi.mock("./agent-tools", () => ({
+vi.mock("../ai/agent-tools", () => ({
   executeLocalTool: vi.fn(),
 }));
 
 import { googleGenAi } from "../../config/ai";
-import { executeLocalTool } from "./agent-tools";
-import { runToolLoop } from "./ai-chat.service";
+import { executeLocalTool } from "../ai/agent-tools";
+import { runToolLoop, runAgent } from "./agent-manager.service";
 import { FunctionCallingConfigMode, type Content } from "@google/genai";
 
 const mockCreate = googleGenAi.models.generateContent as unknown as ReturnType<typeof vi.fn>;
 const mockExec = executeLocalTool as unknown as ReturnType<typeof vi.fn>;
+
+// The executor is now an injected dependency (execTool is required), so tests
+// pass the mocked executeLocalTool explicitly through this thin wrapper.
+const run = (contents: Content[]) =>
+  runToolLoop(
+    contents,
+    undefined,
+    "test-model",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    false,
+    false,
+    executeLocalTool,
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -58,7 +78,7 @@ describe("runToolLoop dedup", () => {
     mockCreate.mockResolvedValueOnce(stopResponse());
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "hello" }] }];
-    const result = await runToolLoop(contents, undefined, "test-model");
+    const result = await run(contents);
 
     expect(result.text).toBe("done");
     expect(mockExec).not.toHaveBeenCalled();
@@ -75,7 +95,7 @@ describe("runToolLoop dedup", () => {
     mockExec.mockResolvedValue(JSON.stringify({ ok: true, buses: [] }));
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "test" }] }];
-    await runToolLoop(contents, undefined, "test-model");
+    await run(contents);
 
     expect(mockExec).toHaveBeenCalledTimes(1);
     const fnResponses = functionResponseParts(contents);
@@ -97,7 +117,7 @@ describe("runToolLoop dedup", () => {
       .mockResolvedValueOnce(JSON.stringify({ ok: true, places: [] }));
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "test" }] }];
-    await runToolLoop(contents, undefined, "test-model");
+    await run(contents);
 
     expect(mockExec).toHaveBeenCalledTimes(2);
   });
@@ -115,7 +135,7 @@ describe("runToolLoop dedup", () => {
     mockExec.mockResolvedValue(JSON.stringify({ ok: true, arrival: "3min" }));
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "test" }] }];
-    await runToolLoop(contents, undefined, "test-model");
+    await run(contents);
 
     expect(mockExec).toHaveBeenCalledTimes(2);
   });
@@ -134,7 +154,7 @@ describe("runToolLoop dedup", () => {
     }));
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "test" }] }];
-    const result = await runToolLoop(contents, undefined, "test-model");
+    const result = await run(contents);
 
     expect(result.toolResults).toEqual([
       {
@@ -162,7 +182,7 @@ describe("runToolLoop dedup", () => {
     mockExec.mockResolvedValue(JSON.stringify({ ok: true, buses: [] }));
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "test" }] }];
-    await runToolLoop(contents, undefined, "test-model");
+    await run(contents);
 
     expect(mockExec).toHaveBeenCalledTimes(1);
   });
@@ -179,7 +199,7 @@ describe("runToolLoop dedup", () => {
       .mockResolvedValueOnce(JSON.stringify({ ok: true, pm25: 12 }));
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "test" }] }];
-    await runToolLoop(contents, undefined, "test-model");
+    await run(contents);
 
     expect(mockExec).toHaveBeenCalledTimes(2);
   });
@@ -212,7 +232,7 @@ describe("runToolLoop 最終文字保證（修沒文字 bug）", () => {
     mockExec.mockResolvedValue(JSON.stringify({ ok: true, etaMinutes: 4 }));
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "x" }] }];
-    const result = await runToolLoop(contents, undefined, "test-model");
+    const result = await run(contents);
 
     expect(mockCreate).toHaveBeenCalledTimes(6);
     const finalCfg = (mockCreate.mock.calls[5][0] as any).config;
@@ -227,7 +247,7 @@ describe("runToolLoop 最終文字保證（修沒文字 bug）", () => {
       .mockResolvedValueOnce(textResponse("補救答案"));
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "x" }] }];
-    const result = await runToolLoop(contents, undefined, "test-model");
+    const result = await run(contents);
 
     expect(mockCreate).toHaveBeenCalledTimes(2);
     const finalCfg = (mockCreate.mock.calls[1][0] as any).config;
@@ -258,11 +278,45 @@ describe("runToolLoop 最終文字保證（修沒文字 bug）", () => {
     const contents: Content[] = [
       { role: "user", parts: [{ text: "從中科大要去火車站可以搭哪些公車、哪班最快來" }] },
     ];
-    const result = await runToolLoop(contents, undefined, "test-model");
+    const result = await run(contents);
 
     const execNames = mockExec.mock.calls.map((c) => c[0]);
     expect(execNames).toEqual(["planAccessibleRoute", "getBusArrival"]);
     expect(result.text).toContain("159");
     expect((result.text ?? "").length).toBeGreaterThan(0);
+  });
+});
+
+describe("runAgent façade", () => {
+  it("maps the named input to the loop and returns an AgentResult", async () => {
+    mockCreate.mockResolvedValueOnce(stopResponse());
+
+    const result = await runAgent({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      systemInstruction: undefined,
+      model: "test-model",
+      execTool: executeLocalTool,
+    });
+
+    expect(result.text).toBe("done");
+    expect(result.toolResults).toEqual([]);
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("routes tool execution through the injected executor", async () => {
+    mockCreate
+      .mockResolvedValueOnce(functionCallResponse([{ name: "getAirQuality", args: {} }]))
+      .mockResolvedValueOnce(stopResponse());
+    mockExec.mockResolvedValue(JSON.stringify({ ok: true, pm25: 10 }));
+
+    await runAgent({
+      contents: [{ role: "user", parts: [{ text: "air?" }] }],
+      systemInstruction: undefined,
+      model: "test-model",
+      execTool: executeLocalTool,
+    });
+
+    expect(mockExec).toHaveBeenCalledTimes(1);
+    expect(mockExec.mock.calls[0][0]).toBe("getAirQuality");
   });
 });
