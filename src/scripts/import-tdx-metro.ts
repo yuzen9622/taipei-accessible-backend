@@ -8,10 +8,12 @@
 
 import "dotenv/config";
 import mongoose from "mongoose";
+import type { AnyBulkWriteOperation } from "mongoose";
 import MetroStationModel from "../model/metro-station.model";
 import { metroUrl } from "../config/transit";
 import { tdxFetch } from "../config/fetch";
 import { TdxMetroStation, TdxMetroStationOfLine } from "../types/transit";
+import type { ITdxMetroStation } from "../types";
 
 const DELAY_MS = 60000;
 const CHUNK = 500;
@@ -56,7 +58,7 @@ async function importSystem(railSystem: string): Promise<number> {
     }
   }
 
-  const ops = stations
+  const ops: AnyBulkWriteOperation<ITdxMetroStation>[] = stations
     .filter(
       (s) =>
         s.StationUID &&

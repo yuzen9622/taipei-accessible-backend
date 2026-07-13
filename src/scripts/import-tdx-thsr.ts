@@ -7,10 +7,12 @@
 
 import "dotenv/config";
 import mongoose from "mongoose";
+import type { AnyBulkWriteOperation } from "mongoose";
 import TrainStationModel from "../model/train-station.model";
 import { thsrUrl } from "../config/transit";
 import { tdxFetch } from "../config/fetch";
 import { TdxThsrStation } from "../types/transit";
+import type { ITdxTrainStation } from "../types";
 
 const CHUNK = 500;
 
@@ -36,7 +38,7 @@ async function main() {
   }
   console.log(`  Fetched ${stations.length} stations from TDX`);
 
-  const ops = stations
+  const ops: AnyBulkWriteOperation<ITdxTrainStation>[] = stations
     .filter(
       (s) =>
         s.StationUID &&

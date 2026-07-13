@@ -10,11 +10,13 @@
 
 import "dotenv/config";
 import mongoose from "mongoose";
+import type { AnyBulkWriteOperation } from "mongoose";
 import BusStopModel from "../model/bus-stop.model";
 import { busUrl } from "../config/transit";
 import { tdxFetch } from "../config/fetch";
 import { TaiwanCityEn } from "../types/transit";
 import { BusRoute } from "../types/transit";
+import type { ITdxBusStop } from "../types";
 
 const DELAY_MS = 60000;
 const TOP = 10000;
@@ -86,7 +88,7 @@ async function importCity(city: string): Promise<number> {
 
   if (!stopMap.size) return 0;
 
-  const ops = [...stopMap.entries()].map(([stopUid, info]) => ({
+  const ops: AnyBulkWriteOperation<ITdxBusStop>[] = [...stopMap.entries()].map(([stopUid, info]) => ({
     updateOne: {
       filter: { stopUid },
       update: {
