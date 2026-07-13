@@ -121,6 +121,36 @@ export interface GooglePlace {
   formatted_address: string;
   rating?: number;
   location: { latitude: number; longitude: number };
+  distanceMeters?: number;
+}
+
+function haversineDistanceMeters(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number },
+): number {
+  const earthRadiusM = 6_371_000;
+  const toRadians = (degrees: number): number => degrees * Math.PI / 180;
+  const deltaLat = toRadians(to.latitude - from.latitude);
+  const deltaLng = toRadians(to.longitude - from.longitude);
+  const fromLat = toRadians(from.latitude);
+  const toLat = toRadians(to.latitude);
+  const a = Math.sin(deltaLat / 2) ** 2
+    + Math.cos(fromLat) * Math.cos(toLat) * Math.sin(deltaLng / 2) ** 2;
+  return 2 * earthRadiusM * Math.asin(Math.sqrt(Math.min(1, Math.max(0, a))));
+}
+
+function hasValidLocation(
+  place: GooglePlace,
+): place is GooglePlace & { location: { latitude: number; longitude: number } } {
+  const { latitude, longitude } = place.location ?? {};
+  return typeof latitude === "number"
+    && Number.isFinite(latitude)
+    && latitude >= -90
+    && latitude <= 90
+    && typeof longitude === "number"
+    && Number.isFinite(longitude)
+    && longitude >= -180
+    && longitude <= 180;
 }
 
 /**
@@ -133,7 +163,12 @@ export interface GooglePlace {
  */
 export async function searchPlaces(
   query: string,
-  opts: { latitude?: number; longitude?: number; maxResults?: number } = {},
+  opts: {
+    latitude?: number;
+    longitude?: number;
+    maxResults?: number;
+    sortByDistance?: boolean;
+  } = {},
 ): Promise<GooglePlace[]> {
   const key = MAPS_KEY();
   if (!key) return [];
@@ -141,7 +176,7 @@ export async function searchPlaces(
   const body: Record<string, unknown> = {
     textQuery: query,
     languageCode: "zh-TW",
-    maxResultCount: opts.maxResults ?? 3,
+    maxResultCount: opts.sortByDistance ? 10 : opts.maxResults ?? 3,
   };
   if (opts.latitude !== undefined && opts.longitude !== undefined) {
     body.locationBias = {
@@ -164,13 +199,25 @@ export async function searchPlaces(
     );
     const { places } = response.data;
     if (!places?.length) return [];
-    return places.map((p: any) => ({
+    const mapped: GooglePlace[] = places.map((p: any) => ({
       name: p.displayName?.text ?? "未知名稱",
       place_id: p.id,
       formatted_address: p.formattedAddress,
       rating: p.rating,
       location: p.location,
     }));
+    if (opts.sortByDistance && opts.latitude !== undefined && opts.longitude !== undefined) {
+      const origin = { latitude: opts.latitude, longitude: opts.longitude };
+      return mapped
+        .filter(hasValidLocation)
+        .map((place) => ({
+          ...place,
+          distanceMeters: Math.round(haversineDistanceMeters(origin, place.location)),
+        }))
+        .sort((a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity))
+        .slice(0, opts.maxResults ?? 3);
+    }
+    return mapped;
   } catch {
     return [];
   }
