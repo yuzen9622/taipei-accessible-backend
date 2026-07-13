@@ -12,7 +12,7 @@ follows; new code must look like the existing code.
   - dev: `npm run dev`
   - build / typecheck: `npm run build` (runs `lint:arch` then `tsc`)
   - boundary check only: `npm run lint:arch`
-  - There is **no test framework** configured.
+  - tests: `npm test` (`vitest run`) · watch: `npm run test:watch`; specs live beside code as `*.test.ts`.
 
 ## 1) Mandatory read order before any edit
 
