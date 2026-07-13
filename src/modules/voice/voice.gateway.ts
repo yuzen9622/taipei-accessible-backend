@@ -44,6 +44,9 @@ function parseUserLocation(
   const { latitude, longitude } = value as Record<string, unknown>;
   if (typeof latitude !== "number" || typeof longitude !== "number") return undefined;
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return undefined;
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    return undefined;
+  }
   return { latitude, longitude };
 }
 
