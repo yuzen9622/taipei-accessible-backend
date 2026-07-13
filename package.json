@@ -37,7 +37,8 @@
         "import:knowledge": "npx dotenvx run -- ts-node src/scripts/import-knowledge.ts",
         "import:taichung-disability-rag": "npx dotenvx run -- ts-node src/scripts/import-taichung-disability-rag.ts",
         "import:visual-a11y": "npx dotenvx run -- ts-node src/scripts/import-visual-a11y.ts",
-        "eval:routing": "npx dotenvx run -- ts-node src/scripts/eval-tool-routing.ts"
+        "eval:routing": "npx dotenvx run -- ts-node src/scripts/eval-tool-routing.ts",
+        "capture:rail-fixtures": "npx dotenvx run -- ts-node src/scripts/capture-rail-station-fixtures.ts"
     },
     "keywords": [
         "express",

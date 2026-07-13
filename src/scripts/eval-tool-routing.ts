@@ -11,9 +11,11 @@ import fs from "fs";
 import path from "path";
 import type { Content } from "@google/genai";
 import { model } from "../config/ai";
-import { CHAT_SYSTEM_PROMPT, withUserLocation } from "../config/ai/chat-prompt";
+import { CHAT_SYSTEM_PROMPT, withUserLocation, withCurrentDate } from "../config/ai/chat-prompt";
+import { taipeiYmdDash } from "../config/taipei-time";
 import { routeOnce, runToolLoop } from "../modules/ai/ai-chat.service";
 import { agentCases, type AgentCase } from "./agent-cases";
+import { extractCalls, gradeArgs } from "./eval-grade";
 
 const N = Number(process.env.EVAL_RUNS ?? 3);
 const NONE = "__none__";
@@ -28,6 +30,7 @@ interface Outcome {
   errors: number;
   passes: number;
   verdict: Verdict;
+  argFails: string[];
 }
 
 function gradeRun(c: AgentCase, called: string[]): boolean {
@@ -39,32 +42,38 @@ function gradeRun(c: AgentCase, called: string[]): boolean {
 }
 
 async function evalCase(c: AgentCase): Promise<Outcome> {
-  const sys = withUserLocation(CHAT_SYSTEM_PROMPT, c.userLocation);
+  const sys = withCurrentDate(withUserLocation(CHAT_SYSTEM_PROMPT, c.userLocation));
+  const ctx = { today: taipeiYmdDash() };
   const userId = c.loggedIn ? "eval-user" : undefined; // only toggles tool catalogue; never hits DB
   const runs: string[][] = [];
+  const argFails: string[] = [];
   let errors = 0;
+  let passes = 0;
 
   for (let i = 0; i < N; i++) {
     try {
-      const { calledTools } = await routeOnce(c.query, sys, {
+      const { calledTools, raw } = await routeOnce(c.query, sys, {
         userLocation: c.userLocation,
         userId,
       });
       runs.push(calledTools);
+      const namePass = gradeRun(c, calledTools);
+      const argResult = gradeArgs(extractCalls(raw), c, ctx);
+      if (!argResult.pass && argResult.reason) argFails.push(argResult.reason);
+      if (namePass && argResult.pass) passes++;
     } catch (e: any) {
       errors++;
       runs.push([`__error__:${e?.message ?? "unknown"}`]);
     }
   }
 
-  const passes = runs.filter((r) => gradeRun(c, r)).length;
   let verdict: Verdict;
   if (errors === N) verdict = "ERROR";
   else if (passes === N) verdict = "PASS";
   else if (passes === 0) verdict = "FAIL";
   else verdict = "FLAKY";
 
-  return { id: c.id, query: c.query, expectTool: c.expectTool, runs, errors, passes, verdict };
+  return { id: c.id, query: c.query, expectTool: c.expectTool, runs, errors, passes, verdict, argFails };
 }
 
 function pad(s: string, n: number): string {
@@ -177,7 +186,8 @@ async function main(): Promise<void> {
     const o = await evalCase(c);
     outcomes.push(o);
     const got = o.verdict === "PASS" ? "" : `  got: ${JSON.stringify(o.runs)}`;
-    console.log(`${pad(o.verdict, 5)} ${pad(o.id, 16)} ${pad(o.expectTool, 24)} ${o.passes}/${N}${got}`);
+    const argNote = o.argFails.length ? `  argFail: ${o.argFails[0]}` : "";
+    console.log(`${pad(o.verdict, 5)} ${pad(o.id, 16)} ${pad(o.expectTool, 24)} ${o.passes}/${N}${got}${argNote}`);
   }
 
   const total = outcomes.length;
