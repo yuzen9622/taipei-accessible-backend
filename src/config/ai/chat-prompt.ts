@@ -9,6 +9,7 @@ import {
   ANSWER_FACT_RULE,
   ANSWER_UNCERTAINTY_RULE,
 } from "./agent-prompt-shared";
+import { taipeiYmdDash, taipeiWeekday } from "../taipei-time";
 
 export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 用使用者的語言回覆、稱呼「您」，把工具回傳的 JSON 整理成自然、簡潔的話，不要把原始 JSON 丟給使用者。
@@ -31,6 +32,8 @@ export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 - getBusArrival：回傳某條路線在某站牌的即時到站時間（還有幾分鐘）。
 - getBusRouteDetail：一次回傳某路線的所有站點＋各站到站時間＋班表（像公車 App 的完整動態）。
 - getBusTimetable：回傳某路線的首末班車與今日發車時刻。
+- getTrainTimetable：回傳台鐵/高鐵某日「兩站間」的直達班次時刻表（車次、車種、出發/抵達）。「幾點的火車」填 departAfter、「幾點前要到」填 arriveBy；台鐵/火車→TRA、高鐵→THSR；相對日期先換算成 YYYY-MM-DD。缺起站或訖站時先追問，不要猜；需要轉乘的行程改用 planAccessibleRoute。
+- getStationTimetable：回傳「某車站」接下來的發車時刻（單站看板，不需目的地）。使用者只講一個站、問「最近的火車」時用它；兩站間班次用 getTrainTimetable。
 - trackBuses：回傳某路線目前在線車輛的即時位置與**是否低底盤/有無斜坡板**。**不需要車牌**，會自動取得在線車輛。
 - getEnvironmentInfo：回傳某地點的天氣＋空品＋附近 CCTV（出行環境三合一）。
 - getAirQuality：只回傳 PM2.5 數值與分級；若還問天氣/出門建議/CCTV 用 getEnvironmentInfo。
@@ -71,4 +74,21 @@ export function withUserLocation(
   return loc
     ? `${prompt}\n\n【使用者目前位置】緯度 ${loc.latitude}，經度 ${loc.longitude}`
     : prompt;
+}
+
+const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
+
+/**
+ * Append the current Asia/Taipei date and weekday to a base prompt, with the
+ * rule for resolving relative dates. Injected at every agent entry point so
+ * date-dependent tools (train timetables) resolve "明天/週五" consistently.
+ *
+ * @param prompt Base system prompt
+ * @param now Reference instant (defaults to now)
+ * @returns The prompt with a current-date block appended
+ */
+export function withCurrentDate(prompt: string, now: Date = new Date()): string {
+  const date = taipeiYmdDash(now);
+  const weekday = WEEKDAY_ZH[taipeiWeekday(now)];
+  return `${prompt}\n\n【今天日期】${date}（Asia/Taipei，週${weekday}）。相對日期（明天、後天、週五）一律以此換算成 YYYY-MM-DD；「週X」指最近的未來該日，若今天就是週X 則指今天。`;
 }

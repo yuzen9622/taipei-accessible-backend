@@ -68,6 +68,8 @@ export const thsrUrl = {
   dailyTimetableUrl: `${RAIL_BASE}/THSR/DailyTrainTimetable/Today`,
   dailyTimetableOdUrl: (from: string, to: string, date: string) =>
     `${RAIL_BASE}/THSR/DailyTimetable/OD/${from}/to/${to}/${date}`,
+  dailyTimetableStationUrl: (stationId: string, date: string) =>
+    `${RAIL_BASE}/THSR/DailyTimetable/Station/${stationId}/${date}`,
   stationFacilityUrl: `${RAIL_BASE}/THSR/StationFacility`,
 };
 
@@ -77,5 +79,7 @@ export const traUrl = {
   dailyTimetableUrl: `${RAIL_BASE}/TRA/DailyTrainTimetable/Today`,
   dailyTimetableOdUrl: (from: string, to: string, date: string) =>
     `${RAIL_BASE}/TRA/DailyTimetable/OD/${from}/to/${to}/${date}`,
+  dailyTimetableStationUrl: (stationId: string, date: string) =>
+    `${RAIL_BASE}/TRA/DailyTimetable/Station/${stationId}/${date}`,
   stationFacilityUrl: `${RAIL_BASE}/TRA/StationFacility`,
 };

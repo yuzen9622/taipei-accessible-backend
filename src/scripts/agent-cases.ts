@@ -15,7 +15,19 @@ export interface AgentCase {
   acceptAlso?: string[];
   /** When true, the memory tools are in the catalogue (logged-in user). */
   loggedIn?: boolean;
+  /**
+   * Optional argument assertion for the expected tool's first call. Returns
+   * null to pass, or a failure reason string. `ctx.today` is today's Taipei
+   * date (YYYY-MM-DD) for relative-date checks.
+   */
+  expectArgs?: (args: any, ctx: { today: string }) => string | null;
   notes?: string;
+}
+
+function ymdPlusDays(today: string, n: number): string {
+  const d = new Date(`${today}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
 const TAIPEI_STATION = { latitude: 25.0478, longitude: 121.517 };
@@ -74,4 +86,90 @@ export const agentCases: AgentCase[] = [
   // H. mixed-intent / no-tool-expected
   { id: "mixed-1", query: "從台北車站到台北101怎麼走，那邊天氣如何", expectTool: "planAccessibleRoute", notes: "model may parallel-call; pass if expected tool present" },
   { id: "chitchat", query: "你好，你可以做什麼", expectTool: "__none__", notes: "must not spuriously route a greeting" },
+
+  // I. train (getTrainTimetable / getStationTimetable) vs plan/bus
+  {
+    id: "train-1",
+    query: "明天早上9點以後從台北到台中的火車有哪些",
+    expectTool: "getTrainTimetable",
+    mustNotCall: ["planAccessibleRoute", "getBusTimetable"],
+    expectArgs: (a, ctx) => {
+      if (!hhmmEq(a?.departAfter, "09:00")) return `departAfter=${a?.departAfter}`;
+      if (a?.arriveBy != null) return `arriveBy should be absent, got ${a.arriveBy}`;
+      if (a?.date !== ymdPlusDays(ctx.today, 1)) return `date=${a?.date}`;
+      if (!hasStation(a?.originStation, "北")) return `originStation=${a?.originStation}`;
+      if (!hasStation(a?.destinationStation, "中")) return `destinationStation=${a?.destinationStation}`;
+      return null;
+    },
+  },
+  {
+    id: "train-2",
+    query: "我週五中午12點前要從台北到左營，高鐵可以搭幾點的",
+    expectTool: "getTrainTimetable",
+    expectArgs: (a) => {
+      if (!hhmmEq(a?.arriveBy, "12:00")) return `arriveBy=${a?.arriveBy}`;
+      if (a?.departAfter != null) return `departAfter should be absent, got ${a.departAfter}`;
+      if (a?.railSystem !== "THSR") return `railSystem=${a?.railSystem}`;
+      if (!isFriday(a?.date)) return `date not a valid Friday: ${a?.date}`;
+      return null;
+    },
+  },
+  { id: "train-3", query: "我想知道9點的火車有哪些", expectTool: "__none__", mustNotCall: ["getTrainTimetable", "getStationTimetable"], notes: "沒有任何車站，應追問不猜" },
+  {
+    id: "train-3b",
+    query: "我明天要從台北出發，9點以後的火車有哪些",
+    expectTool: "getStationTimetable",
+    acceptAlso: ["getTrainTimetable"],
+    notes: "只給一站+時間＝發車看板；destination 未知時不應硬湊 OD",
+    expectArgs: (a) => {
+      if (a?.station != null && !hasStation(a?.station, "北")) return `station=${a?.station}`;
+      if (a?.originStation != null && !hasStation(a?.originStation, "北")) return `originStation=${a?.originStation}`;
+      return null;
+    },
+  },
+  { id: "train-3c", query: "我想坐火車去台中，12點前要到", expectTool: "__none__", acceptAlso: ["getTrainTimetable"], mustNotCall: ["getStationTimetable"], notes: "只有訖站無起站；問到達導向，應追問起站或走 OD，不應誤用發車看板" },
+  { id: "train-4", query: "坐火車從台北到台中要怎麼去、怎麼轉車", expectTool: "planAccessibleRoute", acceptAlso: ["getTrainTimetable"], notes: "轉乘行程界線" },
+  {
+    id: "station-1",
+    query: "台中車站最近的火車有哪些",
+    expectTool: "getStationTimetable",
+    mustNotCall: ["getTrainTimetable", "planAccessibleRoute"],
+    expectArgs: (a) => (hasStation(a?.station, "中") ? null : `station=${a?.station}`),
+  },
+  {
+    id: "station-2",
+    query: "高鐵左營站接下來幾點有車",
+    expectTool: "getStationTimetable",
+    expectArgs: (a) => {
+      if (a?.railSystem !== "THSR") return `railSystem=${a?.railSystem}`;
+      if (!hasStation(a?.station, "左營")) return `station=${a?.station}`;
+      return null;
+    },
+  },
+  {
+    id: "station-3",
+    query: "台北車站明天早上6點以後有哪些火車",
+    expectTool: "getStationTimetable",
+    expectArgs: (a, ctx) => {
+      if (a?.date !== ymdPlusDays(ctx.today, 1)) return `date=${a?.date}`;
+      if (!hhmmEq(a?.departAfter, "06:00")) return `departAfter=${a?.departAfter}`;
+      return null;
+    },
+  },
 ];
+
+function hhmmEq(value: unknown, expected: string): boolean {
+  if (typeof value !== "string") return false;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!m) return false;
+  return `${m[1].padStart(2, "0")}:${m[2]}` === expected;
+}
+
+function hasStation(value: unknown, needle: string): boolean {
+  return typeof value === "string" && value.replace(/台/g, "臺").includes(needle.replace(/台/g, "臺"));
+}
+
+function isFriday(value: unknown): boolean {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  return new Date(`${value}T00:00:00Z`).getUTCDay() === 5;
+}

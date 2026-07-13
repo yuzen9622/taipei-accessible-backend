@@ -1,0 +1,1870 @@
+{
+  "capturedAt": "2026-07-13T15:13:56.379Z",
+  "date": "2026-07-13",
+  "sourceTra": "https://tdx.transportdata.tw/api/basic/v2/Rail/TRA/DailyTimetable/Station/1000/2026-07-13",
+  "sourceThsr": "https://tdx.transportdata.tw/api/basic/v2/Rail/THSR/DailyTimetable/Station/1000/2026-07-13",
+  "tra": [
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "152",
+      "Direction": 0,
+      "TripLine": 1,
+      "TrainTypeID": "1108",
+      "TrainTypeCode": "3",
+      "TrainTypeName": {
+        "Zh_tw": "自強(推拉式自強號且無自行車車廂)",
+        "En": "Tze-Chiang Express"
+      },
+      "StartingStationID": "5050",
+      "StartingStationName": {
+        "Zh_tw": "潮州",
+        "En": "Chaozhou"
+      },
+      "EndingStationID": "0960",
+      "EndingStationName": {
+        "Zh_tw": "汐止",
+        "En": "Xizhi"
+      },
+      "ArrivalTime": "00:02",
+      "DepartureTime": "00:05",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "4041",
+      "Direction": 1,
+      "TripLine": 0,
+      "TrainTypeID": "1132",
+      "TrainTypeCode": "10",
+      "TrainTypeName": {
+        "Zh_tw": "區間快",
+        "En": "Fast Local Train"
+      },
+      "StartingStationID": "6000",
+      "StartingStationName": {
+        "Zh_tw": "臺東",
+        "En": "Taitung"
+      },
+      "EndingStationID": "1040",
+      "EndingStationName": {
+        "Zh_tw": "樹林",
+        "En": "Shulin"
+      },
+      "ArrivalTime": "00:08",
+      "DepartureTime": "00:09",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "447",
+      "Direction": 1,
+      "TripLine": 0,
+      "TrainTypeID": "1107",
+      "TrainTypeCode": "2",
+      "TrainTypeName": {
+        "Zh_tw": "普悠瑪(普悠瑪)",
+        "En": "Puyuma Express"
+      },
+      "StartingStationID": "6000",
+      "StartingStationName": {
+        "Zh_tw": "臺東",
+        "En": "Taitung"
+      },
+      "EndingStationID": "1040",
+      "EndingStationName": {
+        "Zh_tw": "樹林",
+        "En": "Shulin"
+      },
+      "ArrivalTime": "00:15",
+      "DepartureTime": "00:18",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "2005",
+      "Direction": 1,
+      "TripLine": 1,
+      "TrainTypeID": "1132",
+      "TrainTypeCode": "10",
+      "TrainTypeName": {
+        "Zh_tw": "區間快",
+        "En": "Fast Local Train"
+      },
+      "StartingStationID": "0930",
+      "StartingStationName": {
+        "Zh_tw": "七堵",
+        "En": "Qidu"
+      },
+      "EndingStationID": "3360",
+      "EndingStationName": {
+        "Zh_tw": "彰化",
+        "En": "Changhua"
+      },
+      "ArrivalTime": "05:22",
+      "DepartureTime": "05:24",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "4128",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "樹林",
+        "En": "Shulin"
+      },
+      "EndingStationID": "7120",
+      "EndingStationName": {
+        "Zh_tw": "蘇澳",
+        "En": "Su'ao"
+      },
+      "ArrivalTime": "05:24",
+      "DepartureTime": "05:26",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1107",
+      "Direction": 1,
+      "TripLine": 1,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "0930",
+      "StartingStationName": {
+        "Zh_tw": "七堵",
+        "En": "Qidu"
+      },
+      "EndingStationID": "3160",
+      "EndingStationName": {
+        "Zh_tw": "苗栗",
+        "En": "Miaoli"
+      },
+      "ArrivalTime": "05:31",
+      "DepartureTime": "05:32",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "2133",
+      "Direction": 1,
+      "TripLine": 1,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "0900",
+      "StartingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "EndingStationID": "4080",
+      "EndingStationName": {
+        "Zh_tw": "嘉義",
+        "En": "Chiayi"
+      },
+      "ArrivalTime": "05:43",
+      "DepartureTime": "05:44",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1106",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "樹林",
+        "En": "Shulin"
+      },
+      "EndingStationID": "0900",
+      "EndingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "ArrivalTime": "05:43",
+      "DepartureTime": "05:45",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "161",
+      "Direction": 1,
+      "TripLine": 1,
+      "TrainTypeID": "110G",
+      "TrainTypeCode": "11",
+      "TrainTypeName": {
+        "Zh_tw": "自強(3000)(EMU3000 型電車)",
+        "En": "Tze-Chiang 3000 Express "
+      },
+      "StartingStationID": "0980",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang"
+      },
+      "EndingStationID": "6000",
+      "EndingStationName": {
+        "Zh_tw": "臺東",
+        "En": "Taitung"
+      },
+      "ArrivalTime": "05:57",
+      "DepartureTime": "05:59",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "402",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "1107",
+      "TrainTypeCode": "2",
+      "TrainTypeName": {
+        "Zh_tw": "普悠瑪(普悠瑪)",
+        "En": "Puyuma Express"
+      },
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "樹林",
+        "En": "Shulin"
+      },
+      "EndingStationID": "5230",
+      "EndingStationName": {
+        "Zh_tw": "知本",
+        "En": "Zhiben"
+      },
+      "ArrivalTime": "06:02",
+      "DepartureTime": "06:05",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "4138",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "1100",
+      "StartingStationName": {
+        "Zh_tw": "中壢",
+        "En": "Zhongli_Taoyuan"
+      },
+      "EndingStationID": "7120",
+      "EndingStationName": {
+        "Zh_tw": "蘇澳",
+        "En": "Su'ao"
+      },
+      "ArrivalTime": "06:08",
+      "DepartureTime": "06:09",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1117",
+      "Direction": 1,
+      "TripLine": 1,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "0900",
+      "StartingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "EndingStationID": "3160",
+      "EndingStationName": {
+        "Zh_tw": "苗栗",
+        "En": "Miaoli"
+      },
+      "ArrivalTime": "06:09",
+      "DepartureTime": "06:10",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1",
+      "Direction": 1,
+      "TripLine": 1,
+      "TrainTypeID": "1106",
+      "TrainTypeCode": "3",
+      "TrainTypeName": {
+        "Zh_tw": "自強(商務專開列車)",
+        "En": "Tze-Chiang Express"
+      },
+      "StartingStationID": "1000",
+      "StartingStationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "EndingStationID": "1001",
+      "EndingStationName": {
+        "Zh_tw": "臺北-環島",
+        "En": "Taipei Surround Island"
+      },
+      "ArrivalTime": "06:22",
+      "DepartureTime": "06:22",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "4006",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "1132",
+      "TrainTypeCode": "10",
+      "TrainTypeName": {
+        "Zh_tw": "區間快",
+        "En": "Fast Local Train"
+      },
+      "StartingStationID": "1080",
+      "StartingStationName": {
+        "Zh_tw": "桃園",
+        "En": "Taoyuan"
+      },
+      "EndingStationID": "7060",
+      "EndingStationName": {
+        "Zh_tw": "和平",
+        "En": "Heping"
+      },
+      "ArrivalTime": "06:22",
+      "DepartureTime": "06:25",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "103",
+      "Direction": 1,
+      "TripLine": 2,
+      "TrainTypeID": "1108",
+      "TrainTypeCode": "3",
+      "TrainTypeName": {
+        "Zh_tw": "自強(推拉式自強號且無自行車車廂)",
+        "En": "Tze-Chiang Express"
+      },
+      "StartingStationID": "0960",
+      "StartingStationName": {
+        "Zh_tw": "汐止",
+        "En": "Xizhi"
+      },
+      "EndingStationID": "5050",
+      "EndingStationName": {
+        "Zh_tw": "潮州",
+        "En": "Chaozhou"
+      },
+      "ArrivalTime": "06:22",
+      "DepartureTime": "06:27",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "406",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "110G",
+      "TrainTypeCode": "11",
+      "TrainTypeName": {
+        "Zh_tw": "自強(3000)(EMU3000 型電車)",
+        "En": "Tze-Chiang 3000 Express "
+      },
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "樹林",
+        "En": "Shulin"
+      },
+      "EndingStationID": "6000",
+      "EndingStationName": {
+        "Zh_tw": "臺東",
+        "En": "Taitung"
+      },
+      "ArrivalTime": "06:27",
+      "DepartureTime": "06:30",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1123",
+      "Direction": 1,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "0900",
+      "StartingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "EndingStationID": "1210",
+      "EndingStationName": {
+        "Zh_tw": "新竹",
+        "En": "Hsinchu"
+      },
+      "ArrivalTime": "06:33",
+      "DepartureTime": "06:34",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1112",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "1210",
+      "StartingStationName": {
+        "Zh_tw": "新竹",
+        "En": "Hsinchu"
+      },
+      "EndingStationID": "0900",
+      "EndingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "ArrivalTime": "06:37",
+      "DepartureTime": "06:39",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "4144",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "樹林",
+        "En": "Shulin"
+      },
+      "EndingStationID": "7360",
+      "EndingStationName": {
+        "Zh_tw": "瑞芳",
+        "En": "Ruifang"
+      },
+      "ArrivalTime": "06:42",
+      "DepartureTime": "06:44",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "4103",
+      "Direction": 1,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "7190",
+      "StartingStationName": {
+        "Zh_tw": "宜蘭",
+        "En": "Yilan"
+      },
+      "EndingStationID": "1150",
+      "EndingStationName": {
+        "Zh_tw": "北湖",
+        "En": "Beihu"
+      },
+      "ArrivalTime": "06:44",
+      "DepartureTime": "06:45",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1120",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "1150",
+      "StartingStationName": {
+        "Zh_tw": "北湖",
+        "En": "Beihu"
+      },
+      "EndingStationID": "0900",
+      "EndingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "ArrivalTime": "06:55",
+      "DepartureTime": "06:59",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "105",
+      "Direction": 1,
+      "TripLine": 1,
+      "TrainTypeID": "1108",
+      "TrainTypeCode": "3",
+      "TrainTypeName": {
+        "Zh_tw": "自強(推拉式自強號且無自行車車廂)",
+        "En": "Tze-Chiang Express"
+      },
+      "StartingStationID": "0900",
+      "StartingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "EndingStationID": "5050",
+      "EndingStationName": {
+        "Zh_tw": "潮州",
+        "En": "Chaozhou"
+      },
+      "ArrivalTime": "06:57",
+      "DepartureTime": "06:59",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1121",
+      "Direction": 1,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "0900",
+      "StartingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "EndingStationID": "1210",
+      "EndingStationName": {
+        "Zh_tw": "新竹",
+        "En": "Hsinchu"
+      },
+      "ArrivalTime": "07:02",
+      "DepartureTime": "07:03",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1007",
+      "Direction": 1,
+      "TripLine": 0,
+      "TrainTypeID": "1132",
+      "TrainTypeCode": "10",
+      "TrainTypeName": {
+        "Zh_tw": "區間快",
+        "En": "Fast Local Train"
+      },
+      "StartingStationID": "0900",
+      "StartingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "鶯歌",
+        "En": "Yingge"
+      },
+      "ArrivalTime": "07:07",
+      "DepartureTime": "07:10",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "1122",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "1210",
+      "StartingStationName": {
+        "Zh_tw": "新竹",
+        "En": "Hsinchu"
+      },
+      "EndingStationID": "0900",
+      "EndingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "ArrivalTime": "07:09",
+      "DepartureTime": "07:12",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "107",
+      "Direction": 1,
+      "TripLine": 1,
+      "TrainTypeID": "1107",
+      "TrainTypeCode": "2",
+      "TrainTypeName": {
+        "Zh_tw": "普悠瑪(普悠瑪)",
+        "En": "Puyuma Express"
+      },
+      "StartingStationID": "0980",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang"
+      },
+      "EndingStationID": "5050",
+      "EndingStationName": {
+        "Zh_tw": "潮州",
+        "En": "Chaozhou"
+      },
+      "ArrivalTime": "07:12",
+      "DepartureTime": "07:15",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "4107",
+      "Direction": 1,
+      "TripLine": 0,
+      "TrainTypeID": "1131",
+      "TrainTypeCode": "6",
+      "TrainTypeName": {
+        "Zh_tw": "區間",
+        "En": "Local Train"
+      },
+      "StartingStationID": "7160",
+      "StartingStationName": {
+        "Zh_tw": "羅東",
+        "En": "Luodong"
+      },
+      "EndingStationID": "1040",
+      "EndingStationName": {
+        "Zh_tw": "樹林",
+        "En": "Shulin"
+      },
+      "ArrivalTime": "07:16",
+      "DepartureTime": "07:18",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "408",
+      "Direction": 0,
+      "TripLine": 0,
+      "TrainTypeID": "110G",
+      "TrainTypeCode": "11",
+      "TrainTypeName": {
+        "Zh_tw": "自強(3000)(EMU3000 型電車)",
+        "En": "Tze-Chiang 3000 Express "
+      },
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "樹林",
+        "En": "Shulin"
+      },
+      "EndingStationID": "6000",
+      "EndingStationName": {
+        "Zh_tw": "臺東",
+        "En": "Taitung"
+      },
+      "ArrivalTime": "07:13",
+      "DepartureTime": "07:20",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "272",
+      "Direction": 0,
+      "TripLine": 1,
+      "TrainTypeID": "1108",
+      "TrainTypeCode": "3",
+      "TrainTypeName": {
+        "Zh_tw": "自強(推拉式自強號且無自行車車廂)",
+        "En": "Tze-Chiang Express"
+      },
+      "StartingStationID": "3160",
+      "StartingStationName": {
+        "Zh_tw": "苗栗",
+        "En": "Miaoli"
+      },
+      "EndingStationID": "7000",
+      "EndingStationName": {
+        "Zh_tw": "花蓮",
+        "En": "Hualien"
+      },
+      "ArrivalTime": "07:20",
+      "DepartureTime": "07:24",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "臺北",
+        "En": "Taipei"
+      },
+      "TrainNo": "2007",
+      "Direction": 1,
+      "TripLine": 2,
+      "TrainTypeID": "1132",
+      "TrainTypeCode": "10",
+      "TrainTypeName": {
+        "Zh_tw": "區間快",
+        "En": "Fast Local Train"
+      },
+      "StartingStationID": "0900",
+      "StartingStationName": {
+        "Zh_tw": "基隆",
+        "En": "Keelung"
+      },
+      "EndingStationID": "3430",
+      "EndingStationName": {
+        "Zh_tw": "二水",
+        "En": "Ershui"
+      },
+      "ArrivalTime": "07:21",
+      "DepartureTime": "07:25",
+      "SuspendedFlag": 0,
+      "UpdateTime": "2026-07-11T08:27:10+08:00",
+      "VersionID": 15
+    }
+  ],
+  "thsr": [
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0803",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "06:23",
+      "DepartureTime": "06:26",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0203",
+      "Direction": 0,
+      "StartingStationID": "1000",
+      "StartingStationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "06:30",
+      "DepartureTime": "06:30",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1103",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "06:43",
+      "DepartureTime": "06:46",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0603",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "06:48",
+      "DepartureTime": "06:51",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0805",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "07:08",
+      "DepartureTime": "07:11",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0502",
+      "Direction": 1,
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "台中",
+        "En": "Taichung",
+        "Ja": "台中",
+        "Ko": "타이중"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "07:09",
+      "DepartureTime": "07:12",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0109",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "07:28",
+      "DepartureTime": "07:31",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1505",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1040",
+      "EndingStationName": {
+        "Zh_tw": "台中",
+        "En": "Taichung",
+        "Ja": "台中",
+        "Ko": "타이중"
+      },
+      "ArrivalTime": "07:33",
+      "DepartureTime": "07:36",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1504",
+      "Direction": 1,
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "台中",
+        "En": "Taichung",
+        "Ja": "台中",
+        "Ko": "타이중"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "07:34",
+      "DepartureTime": "07:37",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0609",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "07:43",
+      "DepartureTime": "07:46",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0300",
+      "Direction": 1,
+      "StartingStationID": "1070",
+      "StartingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "07:44",
+      "DepartureTime": "07:47",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0205",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "07:48",
+      "DepartureTime": "07:51",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1305",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "07:58",
+      "DepartureTime": "08:01",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0508",
+      "Direction": 1,
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "台中",
+        "En": "Taichung",
+        "Ja": "台中",
+        "Ko": "타이중"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "07:58",
+      "DepartureTime": "08:01",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1202",
+      "Direction": 1,
+      "StartingStationID": "1070",
+      "StartingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "08:04",
+      "DepartureTime": "08:07",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0809",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "08:08",
+      "DepartureTime": "08:11",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0613",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "08:18",
+      "DepartureTime": "08:21",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1510",
+      "Direction": 1,
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "台中",
+        "En": "Taichung",
+        "Ja": "台中",
+        "Ko": "타이중"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "08:18",
+      "DepartureTime": "08:21",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0207",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "08:28",
+      "DepartureTime": "08:31",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0802",
+      "Direction": 1,
+      "StartingStationID": "1070",
+      "StartingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "08:29",
+      "DepartureTime": "08:32",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0204",
+      "Direction": 1,
+      "StartingStationID": "1070",
+      "StartingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "08:34",
+      "DepartureTime": "08:37",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1602",
+      "Direction": 1,
+      "StartingStationID": "1070",
+      "StartingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "08:39",
+      "DepartureTime": "08:42",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0615",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "08:43",
+      "DepartureTime": "08:46",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1302",
+      "Direction": 1,
+      "StartingStationID": "1070",
+      "StartingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "08:44",
+      "DepartureTime": "08:47",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1209",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "08:48",
+      "DepartureTime": "08:51",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0206",
+      "Direction": 1,
+      "StartingStationID": "1070",
+      "StartingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "08:54",
+      "DepartureTime": "08:57",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0606",
+      "Direction": 1,
+      "StartingStationID": "1070",
+      "StartingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "08:59",
+      "DepartureTime": "09:02",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0813",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "09:08",
+      "DepartureTime": "09:11",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "1514",
+      "Direction": 1,
+      "StartingStationID": "1040",
+      "StartingStationName": {
+        "Zh_tw": "台中",
+        "En": "Taichung",
+        "Ja": "台中",
+        "Ko": "타이중"
+      },
+      "EndingStationID": "0990",
+      "EndingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "ArrivalTime": "09:13",
+      "DepartureTime": "09:16",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    },
+    {
+      "TrainDate": "2026-07-13",
+      "StationID": "1000",
+      "StationName": {
+        "Zh_tw": "台北",
+        "En": "Taipei",
+        "Ja": "台北",
+        "Ko": "타이페이"
+      },
+      "TrainNo": "0619",
+      "Direction": 0,
+      "StartingStationID": "0990",
+      "StartingStationName": {
+        "Zh_tw": "南港",
+        "En": "Nangang",
+        "Ja": "南港",
+        "Ko": "난강"
+      },
+      "EndingStationID": "1070",
+      "EndingStationName": {
+        "Zh_tw": "左營",
+        "En": "Zuoying",
+        "Ja": "左營",
+        "Ko": "쭤잉"
+      },
+      "ArrivalTime": "09:18",
+      "DepartureTime": "09:21",
+      "UpdateTime": "2026-06-15T03:44:42+08:00",
+      "VersionID": 1
+    }
+  ]
+}

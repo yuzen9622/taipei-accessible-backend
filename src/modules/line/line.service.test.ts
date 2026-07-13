@@ -47,6 +47,7 @@ vi.mock("../accessible-route/accessible-route.service", () => ({
 import { getRoutePreview, handleEvents } from "./line.service";
 import { replyAgentResult, replyText } from "../../adapters/line.adapter";
 import { runToolLoop } from "../agent/agent-manager.service";
+import { toGeminiHistory } from "../agent/history-adapter";
 import EmergencyContact from "../../model/emergency-contact.model";
 import SosSession from "../../model/sos-session.model";
 import User from "../../model/user.model";
@@ -108,6 +109,16 @@ describe("line.service — message", () => {
 
     expect(vi.mocked(runToolLoop)).toHaveBeenCalled();
     expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith("r1", "agent reply", null);
+  });
+
+  it("injects the current date into the system prompt (F23)", async () => {
+    await handleEvents([textEvent("明天九點的火車")]);
+    const messages = vi.mocked(toGeminiHistory).mock.calls.at(-1)![0] as Array<{
+      role: string;
+      content: string;
+    }>;
+    const system = messages.find((m) => m.role === "system");
+    expect(system?.content).toContain("【今天日期】");
   });
 
   it("turns structured route_card JSON into a text reply plus route card payload", async () => {

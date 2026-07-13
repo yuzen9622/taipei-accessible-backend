@@ -1,0 +1,18 @@
+[
+  {
+    "DailyTrainInfo": {
+      "TrainNo": "9001",
+      "TrainTypeName": { "Zh_tw": "自強", "En": "Tze-Chiang" }
+    },
+    "OriginStopTime": { "DepartureTime": "23:50" },
+    "DestinationStopTime": { "ArrivalTime": "00:40" }
+  },
+  {
+    "DailyTrainInfo": {
+      "TrainNo": "9002",
+      "TrainTypeName": { "Zh_tw": "區間", "En": "Local" }
+    },
+    "OriginStopTime": { "DepartureTime": "06:00" },
+    "DestinationStopTime": { "ArrivalTime": "06:55" }
+  }
+]

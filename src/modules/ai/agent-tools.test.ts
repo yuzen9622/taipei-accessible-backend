@@ -12,6 +12,10 @@ vi.mock("../transit/bus.service", () => ({
   getBusTimetable: vi.fn(),
   getBusRealtimeOnRoute: vi.fn(),
 }));
+vi.mock("../transit/train.service", () => ({
+  getTrainTimetable: vi.fn(),
+  getStationTimetable: vi.fn(),
+}));
 vi.mock("../air/air.service", () => ({
   getAirData: vi.fn(),
   classifyPm25: vi.fn(),
@@ -115,6 +119,7 @@ import {
   bindEmergencyContactCode,
   bindLineAccountCode,
 } from "./agent-tools";
+import * as trainService from "../transit/train.service";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<typeof vi.fn>;
 const mockSearchPlaces = searchPlaces as unknown as ReturnType<typeof vi.fn>;
