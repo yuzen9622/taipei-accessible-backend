@@ -4,6 +4,7 @@ import { executeLocalTool } from "../ai/agent-tools";
 import { toGeminiHistory, runToolLoop } from "../ai/ai-chat.service";
 import { lineFamilyTools } from "../../config/ai/tool";
 import { LINE_FAMILY_SYSTEM_PROMPT } from "../../config/ai/line-family-prompt";
+import { withCurrentDate } from "../../config/ai/chat-prompt";
 import EmergencyContact from "../../model/emergency-contact.model";
 import {
   replyAgentResult,
@@ -227,7 +228,7 @@ async function handleTextMessage(
 ): Promise<void> {
   try {
     const { systemInstruction, contents } = toGeminiHistory([
-      { role: "system", content: LINE_FAMILY_SYSTEM_PROMPT },
+      { role: "system", content: withCurrentDate(LINE_FAMILY_SYSTEM_PROMPT) },
       { role: "user", content: text },
     ]);
 

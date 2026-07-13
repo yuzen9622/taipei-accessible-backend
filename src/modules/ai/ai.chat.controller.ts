@@ -6,7 +6,7 @@ import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import { verifyAccessToken } from "../../config/jwt";
 import { runToolLoop, toGeminiHistory, type OAIMessage } from "./ai-chat.service";
 import { getMemorySettings, searchMemoriesForPrompt } from "./memory.service";
-import { CHAT_SYSTEM_PROMPT, withUserLocation } from "../../config/ai/chat-prompt";
+import { CHAT_SYSTEM_PROMPT, withUserLocation, withCurrentDate } from "../../config/ai/chat-prompt";
 import type { IUser } from "../../types";
 
 function sendSse(res: Response, event: string, data: unknown): void {
@@ -64,7 +64,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   const userId = authUser ? String(authUser._id) : undefined;
   const latestText = latestUserText(rawMessages);
 
-  let systemPrompt = withUserLocation(CHAT_SYSTEM_PROMPT, userLocation);
+  let systemPrompt = withCurrentDate(withUserLocation(CHAT_SYSTEM_PROMPT, userLocation));
   let memoryEnabled = false;
   let memoryToolsEnabled = false;
   let allowMemoryWrite = false;
