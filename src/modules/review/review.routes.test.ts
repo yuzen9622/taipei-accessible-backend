@@ -12,7 +12,7 @@ vi.mock("./review.service", async (orig) => ({
   getAiSummary: vi.fn(),
 }));
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../test/test-helpers";
+import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
 import * as service from "./review.service";
 
 const app = buildTestApp();

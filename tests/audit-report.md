@@ -1,6 +1,13 @@
-# 台北無障礙 API 回傳資訊合理性與多餘欄位審計報告
+# 無障礙智慧地圖 API 回傳資訊合理性與多餘欄位審計報告
 
-本報告針對整個 API 路由回傳資訊的合理性進行審計，整理並標出所有多餘、重複的欄位，同時將自動化測試腳本寫於 [api.test.ts](file:///Users/yuen/project/taipei-accessible-backend/tests/api.test.ts)。
+> **狀態更新 (2026-07-12)**
+> ✅ **已完成優化**：所有在報告中指出的多餘與重複欄位已全面修復。
+> * Mongoose 的 `__v` 欄位已在 `sendResponse` 全域處理與 JWT 簽發中被自動剔除。
+> * 當 API 回傳 GeoJSON 的 `location` 欄位時，平鋪的冗餘經緯度座標（`經度`/`緯度` 與 `latitude`/`longitude`）亦已被全域剔除。
+> * 專案內的 TypeScript 定義檔與 Zod Schema 均已同步完成更新。
+> * 自動化測試通過（20/20，Redundancies 檢測結果全數為 None detected）。
+
+本報告針對整個 API 路由回傳資訊的合理性進行審計，整理並標出所有多餘、重複的欄位，同時將自動化測試腳本寫於 [api.test.ts](file:///Users/yuen/project/taipei-accessible-backend/tests/e2e/api.test.ts)。
 
 ---
 
@@ -95,5 +102,5 @@ Mongoose 在建立 Document 時，預設會為每個 Document 加入 `__v`（Ver
 
 ```bash
 # 確保 backend 容器已啟動 (或本地 API 已啟動於 port 8000)
-npx dotenvx run -- ts-node tests/api.test.ts
+npx dotenvx run -- ts-node tests/e2e/api.test.ts
 ```

@@ -5,13 +5,19 @@ import jwt, {
 } from "jsonwebtoken";
 import { IUser } from "../types/index";
 const createAccessToken = (user: IUser): string => {
-  return jwt.sign({ user }, process.env.JWT_ACCESS_SECRET ?? "", {
+  const userObj = JSON.parse(JSON.stringify(user));
+  delete userObj.__v;
+
+  return jwt.sign({ user: userObj }, process.env.JWT_ACCESS_SECRET ?? "", {
     expiresIn: "60m",
   });
 };
 
 const createRefreshToken = (user: IUser): string => {
-  return jwt.sign({ user }, process.env.JWT_REFRESH_SECRET ?? "", {
+  const userObj = JSON.parse(JSON.stringify(user));
+  delete userObj.__v;
+
+  return jwt.sign({ user: userObj }, process.env.JWT_REFRESH_SECRET ?? "", {
     expiresIn: "1d",
   });
 };

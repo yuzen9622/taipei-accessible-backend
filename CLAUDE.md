@@ -15,8 +15,8 @@ npm run test:watch # Vitest in watch mode
 
 Tests use **vitest**; specs live next to the code as `*.test.ts` (e.g. `src/modules/accessible-route/scoring.test.ts`).
 We support unit tests and route-level integration tests. The integration test harness uses **supertest** to drive the Express application:
-- `buildTestApp()` (from `test/test-helpers.ts`) returns the real Express app instance (from `src/app.ts`) without starting the HTTP server or connecting to MongoDB.
-- `buildAuthorizationHeader(user?)` (from `test/test-helpers.ts`) signs a JWT token and returns a Bearer header string for authenticated routes.
+- `buildTestApp()` (from `tests/helpers/test-helpers.ts`) returns the real Express app instance (from `src/app.ts`) without starting the HTTP server or connecting to MongoDB.
+- `buildAuthorizationHeader(user?)` (from `tests/helpers/test-helpers.ts`) signs a JWT token and returns a Bearer header string for authenticated routes.
 - Mock the service layer with `vi.mock` in test files so that the request exercises router + middleware + validation + controller + envelope without touching the network or DB.
 
 Data-import scripts run via dotenvx + ts-node and populate MongoDB from TDX / GTFS / OSM sources — e.g. `npm run import:gtfs-all`, `npm run import:tdx-tra`, `npm run import:osm`. See `package.json` for the full list (`src/scripts/*`).
@@ -30,6 +30,9 @@ Copy `.env.example` to `.env`. Required variables:
 | `PORT` | Server port (default 5000) |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 | `GOOGLE_MAPS_API_KEY` | Google Maps reverse geocoding + Places Text Search |
+| `VALHALLA_BASE_URL` | Self-hosted Valhalla — drive / motorcycle / walk route planning |
+| `VALHALLA_DATA_DIR` | Host directory containing versioned Valhalla tile releases |
+| `VALHALLA_PBF_PATH` | Host path to the Taiwan OSM PBF used for tile builds |
 | `GEMINI_API_KEY` | Google Gemini AI (auto-read by `@google/genai` SDK) |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | JWT signing |
 | `DATABASE_URL` | MongoDB connection URI |
@@ -66,7 +69,7 @@ Each module exposes a `createXRouter()` factory via its `index.ts` (the single r
 | `src/modules/<feature>/*.schema.ts` | Zod request schemas (edge validation); registered to OpenAPI |
 | `src/modules/<feature>/*.controller.ts` | Thin handler: read `req.validated` / identity, call one service, `sendResponse` |
 | `src/modules/<feature>/*.service.ts` | Business logic + orchestration; no framework objects |
-| `src/adapters/*.adapter.ts` | External I/O clients (`google.adapter.ts`, `tdx.adapter.ts`) — one source per file |
+| `src/adapters/*.adapter.ts` | External I/O clients (`google.adapter.ts` geocoding/Places, `valhalla.adapter.ts` road routing, `tdx.adapter.ts`) — one source per file |
 | `src/model/*.model.ts` | Mongoose models |
 | `src/constants/messages.ts` | Shared message strings (no magic literals) |
 | `src/config/*` | Shared infra: `lib.ts` (envelope), `jwt.ts`, `redis.ts`, `fetch.ts`, `taipei-time.ts`, `transit.ts`, `ai.ts`, `ai/` |

@@ -8,7 +8,7 @@ extendZodWithOpenApi(z);
 const CoordSchema = z.object({
   lat: z.number().openapi({ description: "緯度" }),
   lng: z.number().openapi({ description: "經度" }),
-});
+}).strict();
 
 const PointSchema = z.union([
   z.string().openapi({ description: "待地理編碼的地點名稱" }),
@@ -17,6 +17,7 @@ const PointSchema = z.union([
       latitude: z.number(),
       longitude: z.number(),
     })
+    .strict()
     .openapi({ description: "明確的經緯度座標" }),
 ]);
 
@@ -85,7 +86,7 @@ export const AccessibleRouteBodySchema = z
       .default("transit")
       .openapi({
         description:
-          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸，走 OTP 規劃）、drive（開車）、motorcycle（騎車）、walk（步行）；開車／騎車／步行走 Google Routes API，可依 departureTime 推算塞車。",
+          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸，走 OTP 規劃）、drive（開車）、motorcycle（騎車）、walk（步行）；道路模式走自架 Valhalla，時間為自由流估計，不含即時路況。",
         example: "drive",
       }),
     waypoints: z
@@ -130,7 +131,7 @@ const OsmA11ySchema = z
           .openapi({ example: [121.567, 25.041] }),
       })
       .openapi({ description: "GeoJSON 點位 [lng, lat]" }),
-  })
+  }).strict()
   .openapi("SlimOsmA11y");
 
 const A11yRefsSchema = z
@@ -157,6 +158,21 @@ const WalkLegSchema = z
       ],
     }),
     a11yFacilities: z.array(OsmA11ySchema),
+    steps: z
+      .array(
+        z.object({
+          instruction: z.string().optional(),
+          maneuver: z.string().optional(),
+          relativeDirection: z.string(),
+          absoluteDirection: z.string().nullable(),
+          streetName: z.string(),
+          bogusName: z.boolean(),
+          area: z.boolean(),
+          distanceM: z.number(),
+          location: z.tuple([z.number(), z.number()]),
+        }).strict().openapi("WalkStep"),
+      )
+      .optional(),
     exitInfo: z
       .object({
         exitName: z.string(),
@@ -164,13 +180,14 @@ const WalkLegSchema = z
         type: z.enum(["elevator", "ramp"]),
         coords: z.tuple([z.number(), z.number()]),
       })
+      .strict()
       .nullable()
       .optional()
       .openapi({
         description:
           "此步行端點使用的北捷出口（電梯／坡道），僅轉乘路線會設定",
       }),
-  })
+  }).strict()
   .openapi("WalkLeg");
 
 const WaitInfoSchema = z
@@ -189,7 +206,7 @@ const WaitInfoSchema = z
       description:
         "realtime = TDX 即時 ETA, schedule = 班表, unavailable = 末班已過/未營運",
     }),
-  })
+  }).strict()
   .openapi("WaitInfo");
 
 const IntermediateStopSchema = z
@@ -199,7 +216,7 @@ const IntermediateStopSchema = z
     location: z.tuple([z.number(), z.number()]).optional().openapi({
       example: [121.5, 25.0],
     }),
-  })
+  }).strict()
   .openapi("IntermediateStop");
 
 const BusLegSchema = z
@@ -217,6 +234,10 @@ const BusLegSchema = z
     arrivalStopId: z.string().optional().openapi({
       example: "TXG3917",
       description: "含系統前綴的 GTFS 站牌 id（僅 GTFS 路徑）",
+    }),
+    cityCode: z.string().optional().openapi({
+      example: "TPE",
+      description: "路段所屬城市代碼",
     }),
     departureTime: z.string().optional().openapi({
       example: "21:05",
@@ -249,7 +270,7 @@ const BusLegSchema = z
         "（tdxCity + routeName + direction）做持續追蹤；公路客運（THB）無城市路徑、省略此欄。",
     }),
     intermediateStops: z.array(IntermediateStopSchema).optional(),
-  })
+  }).strict()
   .openapi("BusLeg");
 
 const MetroLegSchema = z
@@ -292,7 +313,7 @@ const MetroLegSchema = z
       .array(z.string())
       .openapi({ example: ["乘車站有電梯", "下車站有無障礙廁所"] }),
     intermediateStops: z.array(IntermediateStopSchema).optional(),
-  })
+  }).strict()
   .openapi("MetroLeg");
 
 const ThsrLegSchema = z
@@ -322,7 +343,7 @@ const ThsrLegSchema = z
       .array(z.string())
       .openapi({ example: ["高鐵站設有無障礙設施", "列車備有無障礙座位及輪椅空間"] }),
     intermediateStops: z.array(IntermediateStopSchema).optional(),
-  })
+  }).strict()
   .openapi("ThsrLeg");
 
 const TraLegSchema = z
@@ -356,7 +377,7 @@ const TraLegSchema = z
       .array(z.string())
       .openapi({ example: ["臺鐵自強 列車", "乘車站附近有電梯"] }),
     intermediateStops: z.array(IntermediateStopSchema).optional(),
-  })
+  }).strict()
   .openapi("TraLeg");
 
 const DriveStepSchema = z
@@ -371,7 +392,7 @@ const DriveStepSchema = z
       ],
     }),
     maneuver: z.string().optional().openapi({ example: "TURN_LEFT" }),
-  })
+  }).strict()
   .openapi("DriveStep");
 
 const DriveLegSchema = z
@@ -382,7 +403,7 @@ const DriveLegSchema = z
     distanceM: z.number().openapi({ example: 5200 }),
     durationMin: z.number().openapi({
       example: 14,
-      description: "自由流行駛時間（Routes API staticDuration）",
+      description: "Valhalla 自由流行駛時間；不含即時路況",
     }),
     durationInTrafficMin: z.number().optional().openapi({
       example: 21,
@@ -411,7 +432,7 @@ const DriveLegSchema = z
         description:
           "僅騎車模式：該地區不支援 TWO_WHEELER 時，改用開車路線的標記",
       }),
-  })
+  }).strict()
   .openapi("DriveLeg");
 
 const MotorcycleLegSchema = DriveLegSchema.extend({
@@ -439,10 +460,10 @@ const ScoreComponentsSchema = z
       description:
         "依模式扣分的步行距離懲罰（0 至模式上限；輪椅 35、長者 30、視障 25、一般 15）",
     }),
-  })
+  }).strict()
   .openapi("ScoreComponents");
 
-const AccessibleRouteSchema = z
+export const AccessibleRouteSchema = z
   .object({
     routeId: z.string().openapi({ example: "route-001" }),
     routeName: z.string().openapi({ example: "信義幹線" }),
@@ -513,7 +534,12 @@ const AccessibleRouteSchema = z
         description:
           "僅 compact 格式：以 osmId 為鍵、去重後的設施字典；各段透過 a11yRefs 參照。",
       }),
+    attribution: z.string().optional().openapi({
+      example: "© OpenStreetMap contributors",
+      description: "道路路線資料來源標示；前端應顯示",
+    }),
   })
+  .strict()
   .openapi("AccessibleRoute");
 
 export const AccessibleRouteDataSchema = z
@@ -569,7 +595,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵；drive／motorcycle／walk 走 Google Routes API（開車／騎車可依 departureTime 推算塞車）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。",
+    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵；drive／motorcycle／walk 走自架 Valhalla（OSM 幾何、自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。",
   request: {
     body: {
       content: { "application/json": { schema: AccessibleRouteBodySchema } },
@@ -598,7 +624,7 @@ registry.registerPath({
     },
     503: {
       description:
-        "路線規劃服務暫時忙線（OTP 斷路器開啟或 Google Routes API 上游錯誤）",
+        "路線規劃服務暫時忙線（OTP 斷路器開啟或 Valhalla 上游錯誤）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

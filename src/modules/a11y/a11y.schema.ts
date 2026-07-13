@@ -64,8 +64,6 @@ export const A11ySchema = z
     "出入口電梯/無障礙坡道名稱": z
       .string()
       .openapi({ example: "台北車站 M8 出口電梯" }),
-    經度: z.number().openapi({ example: 121.5170 }),
-    緯度: z.number().openapi({ example: 25.0478 }),
     location: GeoPointSchema,
     source: z
       .enum(["metro", "osm"])
@@ -95,8 +93,7 @@ export const BathroomSchema = z
     name: z.string().openapi({ example: "台北車站無障礙廁所" }),
     address: z.string().openapi({ example: "臺北市中正區忠孝西路一段49號" }),
     administration: z.string().openapi({ example: "臺北市政府" }),
-    latitude: z.number().openapi({ example: 25.0478 }),
-    longitude: z.number().openapi({ example: 121.5170 }),
+    location: GeoPointSchema,
     grade: z.string().openapi({ example: "特優級" }),
     type2: z.string().openapi({ example: "公共場所" }),
     type: z.string().openapi({ example: "無障礙廁所" }),
@@ -137,8 +134,6 @@ export const DisabledParkingSchema = z
     chargeType: z.string().optional().openapi({ example: "假日計時收費" }),
     spaceLabel: z.string().optional().openapi({ example: "身汽1" }),
     isMarked: z.boolean().openapi({ example: true }),
-    latitude: z.number().openapi({ example: 25.1043 }),
-    longitude: z.number().openapi({ example: 121.4011 }),
     location: GeoPointSchema,
     importedAt: z.string().openapi({ example: "2026-06-24T00:00:00.000Z" }),
   })

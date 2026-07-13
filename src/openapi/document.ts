@@ -20,10 +20,10 @@ export function generateOpenAPIDocument() {
   return generator.generateDocument({
     openapi: "3.0.0",
     info: {
-      title: "台北無障礙 API",
+      title: "無障礙智慧地圖 API",
       version: "1.0.0",
       description:
-        "台北無障礙專案後端 API：無障礙地點、AI 聊天機器人、交通資料與使用者管理。",
+        "無障礙智慧地圖專案後端 API：無障礙地點、AI 聊天機器人、交通資料與使用者管理。",
     },
     servers: [{ url: "/api/v1", description: "目前環境" }],
   });

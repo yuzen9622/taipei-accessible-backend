@@ -15,7 +15,9 @@ import mongoose from "mongoose";
 import BusVehicleModel from "../model/bus-vehicle.model";
 import { busUrl } from "../config/transit";
 import { tdxFetch } from "../config/fetch";
-import { SIX_CITIES } from "../constants/bus";
+import { TaiwanCityEn } from "../types/transit";
+
+const ALL_CITIES = [...Object.values(TaiwanCityEn), "InterCity"];
 
 const CITY_DELAY_MS = 1000;
 const PAGE_DELAY_MS = 1500;
@@ -40,7 +42,9 @@ function sleep(ms: number) {
 async function importCity(city: string): Promise<number> {
   const all: V2Vehicle[] = [];
   for (let skip = 0; ; skip += TOP) {
-    const url = `${busUrl.cityVehicleUrl}/${city}?$format=JSON&$top=${TOP}&$skip=${skip}`;
+    const url = city === "InterCity"
+      ? `https://tdx.transportdata.tw/api/basic/v2/Bus/Vehicle/InterCity?$format=JSON&$top=${TOP}&$skip=${skip}`
+      : `${busUrl.cityVehicleUrl}/${city}?$format=JSON&$top=${TOP}&$skip=${skip}`;
     const resp = await tdxFetch(url);
     if (!resp.ok) {
       const body = await resp.text();
@@ -103,7 +107,7 @@ async function main() {
   const cityArg = process.argv
     .find((a) => a.startsWith("--city="))
     ?.split("=")[1];
-  const cities = cityArg ? [cityArg] : SIX_CITIES;
+  const cities = cityArg ? [cityArg] : ALL_CITIES;
 
   let total = 0;
   for (const city of cities) {

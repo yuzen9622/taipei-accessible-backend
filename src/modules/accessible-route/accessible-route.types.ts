@@ -57,7 +57,7 @@ export interface RouteAccessibilityScore {
 
 export type LatLng = { lat: number; lng: number };
 
-/** Transport modes served by the Google Routes API path (not OTP transit). */
+/** Transport modes served by the Valhalla road-routing path (not OTP transit). */
 export type RoadTravelMode = Exclude<TravelMode, "transit">;
 
 export interface FindAccessibleRoutesOptions {
@@ -68,7 +68,7 @@ export interface FindAccessibleRoutesOptions {
   waypoints?: LatLng[];
 }
 
-export interface PlanGoogleRouteOptions {
+export interface PlanRoadRouteOptions {
   travelMode: RoadTravelMode;
   waypoints?: LatLng[];
   departureTime?: Date;

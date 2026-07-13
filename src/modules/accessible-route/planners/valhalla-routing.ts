@@ -1,0 +1,204 @@
+import { decode } from "@googlemaps/polyline-codec";
+import {
+  computeValhallaRoutes,
+  type NormalizedValhallaLeg,
+  type NormalizedValhallaManeuver,
+  type NormalizedValhallaTrip,
+  type ValhallaCosting,
+} from "../../../adapters/valhalla.adapter";
+import { VALHALLA_OSM_ATTRIBUTION } from "../../../config/valhalla";
+import type { AccessibleRoute, DriveLeg, DriveStep, WalkLeg, WalkStep } from "../../../types/route";
+import type { LatLng, PlanRoadRouteOptions, RoadTravelMode } from "../accessible-route.types";
+import { ValhallaRoutingError } from "./valhalla-routing.types";
+
+export { ValhallaRoutingError } from "./valhalla-routing.types";
+
+const COSTING: Record<RoadTravelMode, ValhallaCosting> = {
+  drive: "auto",
+  motorcycle: "motorcycle",
+  walk: "pedestrian",
+};
+
+const ROUTE_LABEL: Record<RoadTravelMode, string> = {
+  drive: "開車",
+  motorcycle: "騎車",
+  walk: "步行",
+};
+
+const MANEUVER_BY_TYPE: Record<number, string> = {
+  1: "DEPART", 2: "DEPART", 3: "DEPART", 4: "ARRIVE", 5: "ARRIVE", 6: "ARRIVE",
+  7: "STRAIGHT", 8: "STRAIGHT", 9: "TURN_SLIGHT_RIGHT", 10: "TURN_RIGHT",
+  11: "TURN_SHARP_RIGHT", 12: "UTURN_RIGHT", 13: "UTURN_LEFT", 14: "TURN_SHARP_LEFT",
+  15: "TURN_LEFT", 16: "TURN_SLIGHT_LEFT", 17: "RAMP_STRAIGHT", 18: "RAMP_RIGHT",
+  19: "RAMP_LEFT", 20: "EXIT_RIGHT", 21: "EXIT_LEFT", 22: "STRAIGHT", 23: "KEEP_RIGHT",
+  24: "KEEP_LEFT", 25: "MERGE", 26: "ROUNDABOUT_ENTER", 27: "ROUNDABOUT_EXIT",
+  28: "FERRY_ENTER", 29: "FERRY_EXIT", 37: "MERGE_RIGHT", 38: "MERGE_LEFT",
+  39: "ELEVATOR", 40: "STAIRS", 41: "ESCALATOR", 42: "ENTER_STATION", 43: "EXIT_STATION",
+};
+
+const WALK_DIRECTION: Record<string, string> = {
+  DEPART: "DEPART", STRAIGHT: "STRAIGHT", TURN_LEFT: "LEFT", TURN_RIGHT: "RIGHT",
+  TURN_SHARP_LEFT: "HARD_LEFT", TURN_SHARP_RIGHT: "HARD_RIGHT",
+  TURN_SLIGHT_LEFT: "SLIGHTLY_LEFT", TURN_SLIGHT_RIGHT: "SLIGHTLY_RIGHT",
+  KEEP_LEFT: "SLIGHTLY_LEFT", KEEP_RIGHT: "SLIGHTLY_RIGHT", UTURN_LEFT: "UTURN_LEFT",
+  UTURN_RIGHT: "UTURN_RIGHT", ROUNDABOUT_ENTER: "CIRCLE_CLOCKWISE",
+  ROUNDABOUT_EXIT: "CIRCLE_CLOCKWISE", ELEVATOR: "ELEVATOR",
+  ENTER_STATION: "ENTER_STATION", EXIT_STATION: "EXIT_STATION",
+};
+
+function minutes(seconds: number): number {
+  return Math.round(seconds / 60);
+}
+
+export function decodeValhallaShape(shape: string): [number, number][] {
+  const points = decode(shape, 6).map(([lat, lng]) => [lng, lat] as [number, number]);
+  if (
+    points.length < 2 ||
+    points.some(([lng, lat]) => !Number.isFinite(lng) || !Number.isFinite(lat) || lng < -180 || lng > 180 || lat < -90 || lat > 90)
+  ) throw new Error("Invalid Valhalla polyline");
+  return points;
+}
+
+function guidanceFits(maneuvers: NormalizedValhallaManeuver[] | undefined, points: [number, number][]): boolean {
+  return !!maneuvers?.length && maneuvers.every((m) => m.beginShapeIndex < points.length && m.endShapeIndex < points.length);
+}
+
+function maneuverCode(maneuver: NormalizedValhallaManeuver): string {
+  return MANEUVER_BY_TYPE[maneuver.type] ?? "CONTINUE";
+}
+
+function localizedInstruction(
+  maneuver: NormalizedValhallaManeuver,
+  code: string,
+): string {
+  const street = maneuver.streetNames?.[0]?.trim();
+  const onto = street ? `進入「${street}」` : "";
+  const along = street ? `沿「${street}」` : "沿目前道路";
+  switch (code) {
+    case "DEPART": return `${along}出發`;
+    case "ARRIVE": return "抵達目的地";
+    case "TURN_LEFT": return `向左轉${onto}`;
+    case "TURN_RIGHT": return `向右轉${onto}`;
+    case "TURN_SLIGHT_LEFT": return `稍向左轉${onto}`;
+    case "TURN_SLIGHT_RIGHT": return `稍向右轉${onto}`;
+    case "TURN_SHARP_LEFT": return `大幅向左轉${onto}`;
+    case "TURN_SHARP_RIGHT": return `大幅向右轉${onto}`;
+    case "KEEP_LEFT": return "靠左行進";
+    case "KEEP_RIGHT": return "靠右行進";
+    case "UTURN_LEFT":
+    case "UTURN_RIGHT": return "請迴轉";
+    case "RAMP_LEFT": return "從左側匝道行進";
+    case "RAMP_RIGHT": return "從右側匝道行進";
+    case "RAMP_STRAIGHT": return "繼續沿匝道直行";
+    case "EXIT_LEFT": return "從左側出口駛出";
+    case "EXIT_RIGHT": return "從右側出口駛出";
+    case "MERGE_LEFT": return "向左併入道路";
+    case "MERGE_RIGHT": return "向右併入道路";
+    case "MERGE": return "併入道路";
+    case "ROUNDABOUT_ENTER": return "進入圓環並依指示行進";
+    case "ROUNDABOUT_EXIT": return `駛出圓環${onto}`;
+    case "FERRY_ENTER": return "前往渡輪乘船處";
+    case "FERRY_EXIT": return "離開渡輪";
+    case "ELEVATOR": return "搭乘電梯";
+    case "STAIRS": return "走樓梯繼續前進";
+    case "ESCALATOR": return "搭乘手扶梯";
+    case "ENTER_STATION": return "進入建築或車站";
+    case "EXIT_STATION": return "離開建築或車站";
+    case "STRAIGHT":
+    case "CONTINUE":
+    default: return `${along}繼續直行`;
+  }
+}
+
+function driveSteps(leg: NormalizedValhallaLeg, points: [number, number][]): DriveStep[] | undefined {
+  if (!guidanceFits(leg.maneuvers, points)) return undefined;
+  return leg.maneuvers!.filter((m) => maneuverCode(m) !== "ARRIVE").map((m) => {
+    const maneuver = maneuverCode(m);
+    return {
+      instruction: localizedInstruction(m, maneuver),
+      maneuver,
+      distanceM: Math.round(m.lengthKm * 1000),
+      durationMin: minutes(m.timeSec),
+      polyline: points.slice(m.beginShapeIndex, m.endShapeIndex + 1),
+    };
+  });
+}
+
+function walkSteps(leg: NormalizedValhallaLeg, points: [number, number][]): WalkStep[] | undefined {
+  if (!guidanceFits(leg.maneuvers, points)) return undefined;
+  return leg.maneuvers!.filter((m) => maneuverCode(m) !== "ARRIVE").map((m) => {
+    const maneuver = maneuverCode(m);
+    const streetName = m.streetNames?.[0] ?? "";
+    return {
+      instruction: localizedInstruction(m, maneuver),
+      maneuver,
+      relativeDirection: WALK_DIRECTION[maneuver] ?? "CONTINUE",
+      absoluteDirection: null,
+      streetName,
+      bogusName: streetName.length === 0,
+      area: false,
+      distanceM: Math.round(m.lengthKm * 1000),
+      location: points[m.beginShapeIndex],
+    };
+  });
+}
+
+function labels(index: number, count: number): [string, string] {
+  return [index === 0 ? "起點" : `中途點 ${index}`, index === count - 1 ? "終點" : `中途點 ${index + 1}`];
+}
+
+function mapTrip(trip: NormalizedValhallaTrip, mode: RoadTravelMode, index: number): AccessibleRoute {
+  const mappedLegs = trip.legs.map((leg, legIndex): DriveLeg | WalkLeg => {
+    const points = decodeValhallaShape(leg.shapePolyline6);
+    if (mode === "walk") {
+      const [from, to] = labels(legIndex, trip.legs.length);
+      return {
+        type: "WALK", from, to,
+        distanceM: Math.round(leg.summary.lengthKm * 1000),
+        minutesEst: minutes(leg.summary.timeSec),
+        polyline: points, a11yFacilities: [],
+        ...(walkSteps(leg, points) ? { steps: walkSteps(leg, points) } : {}),
+      };
+    }
+    return {
+      type: mode === "motorcycle" ? "MOTORCYCLE" : "DRIVE",
+      from: { lat: points[0][1], lng: points[0][0] },
+      to: { lat: points.at(-1)![1], lng: points.at(-1)![0] },
+      distanceM: Math.round(leg.summary.lengthKm * 1000),
+      durationMin: minutes(leg.summary.timeSec),
+      polyline: points,
+      ...(driveSteps(leg, points) ? { steps: driveSteps(leg, points) } : {}),
+    };
+  });
+  return {
+    routeId: `${mode}-${index}`,
+    routeName: ROUTE_LABEL[mode],
+    totalMinutes: minutes(trip.summary.timeSec),
+    transferCount: 0,
+    legs: mappedLegs,
+    accessibilityHighlights: [],
+    totalWalkDistanceM: mode === "walk" ? mappedLegs.reduce((sum, leg) => sum + leg.distanceM, 0) : 0,
+    attribution: VALHALLA_OSM_ATTRIBUTION,
+  };
+}
+
+export async function planValhallaRoute(
+  origin: LatLng,
+  destination: LatLng,
+  opts: PlanRoadRouteOptions,
+): Promise<AccessibleRoute[]> {
+  const result = await computeValhallaRoutes({
+    origin, destination, waypoints: opts.waypoints,
+    costing: COSTING[opts.travelMode], computeAlternatives: true,
+  });
+  if (result.status === "NO_ROUTE") return [];
+  if (result.status === "UPSTREAM_ERROR") {
+    throw new ValhallaRoutingError("Valhalla routing upstream error", result.httpStatus);
+  }
+  try {
+    return result.trips.map((trip, index) => mapTrip(trip, opts.travelMode, index));
+  } catch (error) {
+    if (error instanceof ValhallaRoutingError) throw error;
+    throw new ValhallaRoutingError("Malformed Valhalla response");
+  }
+}

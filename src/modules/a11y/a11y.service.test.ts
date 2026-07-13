@@ -44,8 +44,6 @@ function makeMetroDoc(): Omit<IA11y, "_id"> {
   return {
     項次: "1",
     "出入口電梯/無障礙坡道名稱": "台北車站 M8 出口電梯",
-    經度: 121.517,
-    緯度: 25.0478,
     location: { type: "Point", coordinates: [121.517, 25.0478] },
   };
 }
@@ -56,8 +54,6 @@ describe("osmToA11yPlace", () => {
     expect(place).toMatchObject({
       項次: "12342946149",
       "出入口電梯/無障礙坡道名稱": "市府轉運站電梯",
-      經度: 121.5662,
-      緯度: 25.0412,
       source: "osm",
       osmId: "12342946149",
       wheelchair: "yes",
@@ -128,8 +124,7 @@ describe("campusToA11yPlace", () => {
     expect(place).toMatchObject({
       項次: "fac-001",
       "出入口電梯/無障礙坡道名稱": "行政大樓電梯",
-      經度: 120.684,
-      緯度: 24.152,
+      location: { type: "Point", coordinates: [120.684, 24.152] },
       source: "campus",
       campusId: 1234,
       schoolName: "國立臺中科技大學",

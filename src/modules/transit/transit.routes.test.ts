@@ -17,7 +17,7 @@ vi.mock("./bus.service", async (orig) => ({
   getNearbyStops: vi.fn(),
 }));
 
-import { buildTestApp } from "../../../test/test-helpers";
+import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import * as busService from "./bus.service";
 import { ResponseCode } from "../../types/code";
 import { MSG } from "../../constants/messages";

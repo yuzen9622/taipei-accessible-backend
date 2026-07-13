@@ -8,7 +8,7 @@ vi.mock("./sos.service", () => ({
   getPublicById: vi.fn(),
 }));
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../test/test-helpers";
+import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
 import * as service from "./sos.service";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_REASON } from "../../constants/messages";

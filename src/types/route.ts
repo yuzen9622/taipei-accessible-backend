@@ -17,7 +17,7 @@ export type AccessibilityMode =
 
 /**
  * Transport mode requested by the client — orthogonal to AccessibilityMode.
- * "transit" plans via OTP (bus/metro/rail); the rest plan via Google Routes API.
+ * "transit" plans via OTP (bus/metro/rail); the rest plan via the road router.
  */
 export type TravelMode = "transit" | "drive" | "motorcycle" | "walk";
 
@@ -36,6 +36,10 @@ export interface WaitInfo {
 }
 
 export interface WalkStep {
+  /** Upstream turn-by-turn text when the planner already provides localized guidance. */
+  instruction?: string;
+  /** Normalized maneuver code when supplied by the road planner. */
+  maneuver?: string;
   relativeDirection: string;
   absoluteDirection: string | null;
   streetName: string;
@@ -165,9 +169,9 @@ export interface DriveStep {
 }
 
 /**
- * A road-driving leg (car or motorcycle) produced by the Google Routes API.
- * `durationMin` is free-flow (staticDuration); `durationInTrafficMin` is the
- * traffic-aware estimate when a future departure time was supplied.
+ * A road-driving leg (car or motorcycle) produced by the road router.
+ * `durationMin` is free-flow; `durationInTrafficMin` is the traffic-aware
+ * estimate when a future departure time was supplied.
  */
 export interface DriveLeg {
   type: "DRIVE" | "MOTORCYCLE";
@@ -203,4 +207,5 @@ export interface AccessibleRoute {
     criticalFeatureScore: number;
     walkPenalty: number;
   };
+  attribution?: string;
 }

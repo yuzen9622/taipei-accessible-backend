@@ -7,7 +7,7 @@ vi.mock("./emergency-contact.service", () => ({
   deleteContact: vi.fn(),
 }));
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../test/test-helpers";
+import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
 import * as service from "./emergency-contact.service";
 import { ResponseCode } from "../../types/code";
 import { CONTACT_MSG, CONTACT_REASON } from "../../constants/messages";

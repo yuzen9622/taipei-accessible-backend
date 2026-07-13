@@ -1,4 +1,4 @@
-# AGENTS Operating Rules — taipei-accessible-backend
+# AGENTS Operating Rules — accessible-smart-map-backend
 
 Highest-priority rulebook for any agent (or human) editing this repo. Read it in
 full before changing code. It encodes the architecture the codebase already
