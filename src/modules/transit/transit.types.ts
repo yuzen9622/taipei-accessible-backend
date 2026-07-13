@@ -8,7 +8,7 @@ import type { TaiwanCityEn } from "../../types/transit";
 export type Lang = "Zh_tw" | "En";
 
 export type BusEtaResult =
-  | { ok: true; routeId: string; direction: number; city: TaiwanCityEn; etaData: any }
+  | { ok: true; routeId: string; direction: number; city: TaiwanCityEn | "InterCity"; etaData: any }
   | { ok: false; error: string; status: 400 | 500 };
 
 
@@ -20,6 +20,7 @@ export type BusPositionResult =
 export type BusServiceError = { ok: false; error: string; status: 400 | 404 | 500 };
 
 export type BusRouteDirection = {
+  subRouteUid?: string;
   direction: number;
   directionLabel: string;
   from: string;
@@ -32,7 +33,7 @@ export type BusRouteInfoResult =
   | {
       ok: true;
       routeName: string;
-      city: TaiwanCityEn;
+      city: TaiwanCityEn | "InterCity";
       source: "db" | "tdx";
       operators: string[];
       directions: BusRouteDirection[];
@@ -49,6 +50,7 @@ export type BusRouteDetailStop = {
 };
 
 export type BusRouteDetailDirection = {
+  subRouteUid?: string;
   direction: number;
   directionLabel: string;
   from: string;
@@ -61,7 +63,7 @@ export type BusRouteDetailResult =
   | {
       ok: true;
       routeName: string;
-      city: TaiwanCityEn;
+      city: TaiwanCityEn | "InterCity";
       operators: string[];
       schedules?: BusScheduleByDirection[];
       directions: BusRouteDetailDirection[];
@@ -78,7 +80,7 @@ export type BusArrival = {
 };
 
 export type BusArrivalResult =
-  | { ok: true; routeName: string; city: TaiwanCityEn; stopName: string; arrivals: BusArrival[] }
+  | { ok: true; routeName: string; city: TaiwanCityEn | "InterCity"; stopName: string; arrivals: BusArrival[] }
   | BusServiceError;
 
 export type BusFrequency = {
@@ -87,6 +89,7 @@ export type BusFrequency = {
   minHeadwayMins?: number;
   maxHeadwayMins?: number;
   serviceDays: string;
+  stopTimes?: { seq: number; stopName: string; arrivalTime: string }[];
 };
 
 export type BusScheduleByDirection = {
@@ -101,7 +104,7 @@ export type BusTimetableResult =
   | {
       ok: true;
       routeName: string;
-      city: TaiwanCityEn;
+      city: TaiwanCityEn | "InterCity";
       schedules: BusScheduleByDirection[];
     }
   | BusServiceError;
@@ -124,7 +127,7 @@ export type BusRealtimeOnRouteResult =
   | {
       ok: true;
       routeName: string;
-      city: TaiwanCityEn;
+      city: TaiwanCityEn | "InterCity";
       count: number;
       lowFloorCount: number;
       buses: BusOnRoad[];

@@ -36,6 +36,10 @@ export interface WaitInfo {
 }
 
 export interface WalkStep {
+  /** Upstream turn-by-turn text when the planner already provides localized guidance. */
+  instruction?: string;
+  /** Normalized maneuver code when supplied by the road planner. */
+  maneuver?: string;
   relativeDirection: string;
   absoluteDirection: string | null;
   streetName: string;
@@ -203,4 +207,5 @@ export interface AccessibleRoute {
     criticalFeatureScore: number;
     walkPenalty: number;
   };
+  attribution?: string;
 }

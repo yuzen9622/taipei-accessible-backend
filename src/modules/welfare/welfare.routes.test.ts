@@ -7,7 +7,7 @@ vi.mock("./welfare.service", () => ({
   findById: vi.fn(),
 }));
 
-import { buildTestApp } from "../../../test/test-helpers";
+import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import * as service from "./welfare.service";
 
 const app = buildTestApp();

@@ -7,7 +7,7 @@ vi.mock("./environment.service", () => ({
   getEnvironmentInfo: vi.fn(),
 }));
 
-import { buildTestApp } from "../../../test/test-helpers";
+import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import * as service from "./environment.service";
 import { ResponseCode } from "../../types/code";
 import { ENV_MSG, ERROR_MESSAGE } from "../../constants/messages";

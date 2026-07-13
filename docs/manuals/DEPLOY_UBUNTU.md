@@ -102,8 +102,8 @@ sudo systemctl restart mongod
 ```bash
 sudo mkdir -p /opt && sudo chown deploy:deploy /opt
 cd /opt
-git clone <你的 repo url> taipei-accessible-backend
-cd taipei-accessible-backend
+git clone <你的 repo url> accessible-smart-map-backend
+cd accessible-smart-map-backend
 git checkout feat/hybrid-transit-routing    # 含本次捷運修正的分支
 cp .env.example .env
 nano .env
@@ -128,7 +128,7 @@ TDX_CLIENT_SECRET=...
 OTP_BASE_URL=http://localhost:8080
 
 # 給 docker compose 用（OTP 資料目錄）
-OTP_DATA_DIR=/opt/taipei-accessible-backend/otp-data
+OTP_DATA_DIR=/opt/accessible-smart-map-backend/otp-data
 OTP_SERVE_XMX=8g          # 125GB RAM，給足
 ```
 
@@ -139,7 +139,7 @@ OTP_SERVE_XMX=8g          # 125GB RAM，給足
 ## Phase 3 — 安裝依賴 + 編譯
 
 ```bash
-cd /opt/taipei-accessible-backend
+cd /opt/accessible-smart-map-backend
 npm ci            # 含 devDependencies；postinstall 會自動跑 npm run build → dist/
 ls dist/server.js # 確認編譯產物存在
 ```
@@ -172,7 +172,7 @@ mongorestore --uri="$DATABASE_URL" --drop /tmp/mongo-dump/<原db名>
 ### 路徑 B：在伺服器重新灌（會打 TDX/Overpass）
 
 ```bash
-cd /home/nutcai/1111131042/taipei-accessible-backend
+cd /home/nutcai/1111131042/accessible-smart-map-backend
 npm run import:osm          # OSM 無障礙設施
 npm run import:tdx-stops    # 公車站
 npm run import:tdx-metro    # 捷運站
@@ -196,12 +196,12 @@ OTP 容器只需要 `otp-data/`（內含 `graph.obj` + 3 個 config）。`graph.
 
 ```bash
 # 本機 → 伺服器（~2GB，含 graph.obj + feed + osm + configs）
-rsync -avz --progress otp-data/ deploy@<伺服器>:/home/nutcai/1111131042/taipei-accessible-backend/otp-data/
+rsync -avz --progress otp-data/ deploy@<伺服器>:/home/nutcai/1111131042/accessible-smart-map-backend/otp-data/
 ```
 
 ```bash
 # 伺服器啟動（compose 已把 8080 綁 127.0.0.1，不對外）
-cd /home/nutcai/1111131042/taipei-accessible-backend
+cd /home/nutcai/1111131042/accessible-smart-map-backend
 docker compose up -d otp
 docker logs otp --tail 20          # 看 "Graph loaded" / "Started listener"
 # 健康檢查（載入 graph 約需 30–60 秒）
@@ -214,7 +214,7 @@ curl -s http://localhost:8080/otp/gtfs/v1 -X POST -H 'Content-Type: application/
 需要 `otp-data/` 裡有 `taiwan-gtfs.zip` + `taiwan-otp.osm.pbf`（先 rsync 這兩個，或讓 `build-otp-graph.sh` 重抓）。
 
 ```bash
-cd /opt/taipei-accessible-backend
+cd /opt/accessible-smart-map-backend
 export OTP_DATA_DIR="$PWD/otp-data"
 export OTP_GTFS_URLS="<全國 GTFS zip 下載 URL>"   # 見 OTP_OPERATIONS.md §2.1 的注意事項
 # 這台 RAM 125GB，建圖(12g) 與服務(8g) 同時跑不會 OOM，不必先停容器
@@ -238,7 +238,7 @@ Wants=network-online.target mongod.service
 [Service]
 Type=simple
 User=nutcai
-WorkingDirectory=/home/nutcai/1111131042/taipei-accessible-backend
+WorkingDirectory=/home/nutcai/1111131042/accessible-smart-map-backend
 # -r dotenv/config 會從 WorkingDirectory 載入 .env（dotenv 是正式依賴）
 ExecStart=/usr/bin/node -r dotenv/config dist/server.js
 Restart=on-failure
@@ -255,7 +255,7 @@ sudo systemctl status accessible-backend --no-pager
 journalctl -u accessible-backend -f      # 看 log
 ```
 
-開機自動：`mongod`（systemd enable）、`otp`（compose `restart: unless-stopped` + docker 服務開機啟動）、`taipei-backend`（systemd enable）都會自動回來。
+開機自動：`mongod`（systemd enable）、`otp`（compose `restart: unless-stopped` + docker 服務開機啟動）、`accessible-backend`（systemd enable）都會自動回來。
 
 ---
 
@@ -291,9 +291,9 @@ curl -s -X POST http://localhost:8000/api/v1/a11y/accessible-route \
 
 | 工作           | 指令                                                          |
 | -------------- | ------------------------------------------------------------- |
-| 看 API log     | `journalctl -u taipei-backend -f`                             |
-| 重啟 API       | `sudo systemctl restart taipei-backend`                       |
-| 更新程式碼     | `git pull && npm ci && sudo systemctl restart taipei-backend` |
+| 看 API log     | `journalctl -u accessible-backend -f`                         |
+| 重啟 API       | `sudo systemctl restart accessible-backend`                   |
+| 更新程式碼     | `git pull && npm ci && sudo systemctl restart accessible-backend` |
 | OTP 啟停       | `docker compose up -d otp` / `docker stop otp`                |
 | OTP log        | `docker logs otp --tail 30`                                   |
 | 每週重建 graph | cron：`0 4 * * 0`，見下                                       |
@@ -303,7 +303,7 @@ curl -s -X POST http://localhost:8000/api/v1/a11y/accessible-route \
 ```bash
 crontab -e
 # 加入（OTP_GTFS_URLS 確認後再啟用整段；先用「沿用現有 feed」版本見 OTP_OPERATIONS.md §2.2）
-0 4 * * 0 cd /opt/taipei-accessible-backend && OTP_DATA_DIR=$PWD/otp-data OTP_GTFS_URLS="<url>" bash src/scripts/build-otp-graph.sh >> /var/log/otp-build.log 2>&1
+0 4 * * 0 cd /opt/accessible-smart-map-backend && OTP_DATA_DIR=$PWD/otp-data OTP_GTFS_URLS="<url>" bash src/scripts/build-otp-graph.sh >> /var/log/otp-build.log 2>&1
 ```
 
 ## 疑難排解

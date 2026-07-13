@@ -1,19 +1,17 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import { AccessibleRouteSchema } from "../accessible-route/accessible-route.schema";
 
 extendZodWithOpenApi(z);
 
 export const NavInstructionsRequestSchema = z
   .object({
     route: z
-      .object({
-        routeId: z.string().optional(),
-        legs: z.array(z.any()),
-      })
+      .lazy(() => AccessibleRouteSchema)
       .openapi({
         description:
-          "由 /accessible-route 回傳的路線物件（前端 passthrough）。僅需含 legs 陣列。",
+          "由 /accessible-route 回傳的路線物件（前端 passthrough）。支援 WALK、DRIVE、MOTORCYCLE、BUS、METRO、THSR、TRA legs。",
       }),
     userHeading: z
       .number()
@@ -29,6 +27,7 @@ export const NavInstructionsRequestSchema = z
       description: "輸出語言（預留，目前僅支援 zh-TW）。",
     }),
   })
+  .strict()
   .openapi("NavInstructionsRequest");
 
 const RelativeDirectionEnum = z
@@ -50,7 +49,15 @@ const NavInstructionSchema = z
     relativeDirection: RelativeDirectionEnum.nullable(),
     distanceM: z.number().nullable(),
     streetName: z.string().nullable(),
-    legType: z.enum(["WALK", "BUS", "METRO", "THSR", "TRA"]),
+    legType: z.enum([
+      "WALK",
+      "DRIVE",
+      "MOTORCYCLE",
+      "BUS",
+      "METRO",
+      "THSR",
+      "TRA",
+    ]),
     polylineIndex: z.number().nullable(),
   })
   .openapi("NavInstruction");
@@ -60,7 +67,11 @@ const NavInstructionsDataSchema = z
     instructions: z.array(NavInstructionSchema),
     initialBearing: z.number(),
     totalSteps: z.number(),
-    warnings: z.array(z.string()),
+    warnings: z.array(z.enum([
+      "WALK_STEPS_UNAVAILABLE",
+      "ORS_STEPS_UNAVAILABLE",
+      "ROAD_STEPS_UNAVAILABLE",
+    ])),
   })
   .openapi("NavInstructionsData");
 
@@ -90,7 +101,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "路線逐步導航指引產生",
   description:
-    "將 /accessible-route 回傳的路線攤平為可語音朗讀的逐步指引陣列，並提供起始與每步方位角；提供 userHeading 時附帶八方位相對方向。",
+    "將 /accessible-route 回傳的完整路線原樣轉為可語音朗讀的逐步指引。支援 Valhalla 步行、汽車與機車 guidance；若缺少 steps 仍回傳 200 概略指引。WALK 過渡期同時回 WALK_STEPS_UNAVAILABLE 與 legacy ORS_STEPS_UNAVAILABLE，車行回 ROAD_STEPS_UNAVAILABLE。",
   request: {
     body: {
       content: { "application/json": { schema: NavInstructionsRequestSchema } },
@@ -105,7 +116,7 @@ registry.registerPath({
       },
     },
     400: {
-      description: "route.legs 為空或含未支援的 leg 型別",
+      description: "route.legs 為空或含未支援的 leg 型別（例如 FERRY）",
       content: { "application/json": { schema: NavErrorResponseSchema } },
     },
     500: {

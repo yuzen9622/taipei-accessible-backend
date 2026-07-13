@@ -1,12 +1,12 @@
 # 即時語音對話 POC 評估報告（Phase 0 — Gemini Live API）
 
-> 狀態：**待實測**。本文件為骨架，手動 POC 驗證由使用者以真人麥克風執行後填入。
+> 狀態：**已實測，定案**。2026-07-10 由使用者以真人麥克風完成手動 POC 驗證。
 
 ## 測試環境
 
 | 項目 | 值 |
 |---|---|
-| 實測日期 | （待填） |
+| 實測日期 | 2026-07-10 |
 | 模型（`GEMINI_LIVE_MODEL`） | `gemini-3.1-flash-live-preview`（實測當日以伺服器 log 為準） |
 | `@google/genai` SDK 版本 | 1.22.0 |
 | 測試方式 | `VOICE_POC_ENABLED=true npm run dev`，瀏覽器開 `http://localhost:<PORT>/api/v1/voice/poc` |
@@ -36,6 +36,8 @@
 | 2 | | | | | | |
 | 3 | | | | | | |
 
+> 註：以上三張量測表格逐輪細項（音質評分、首音延遲、沉默秒數等）**未逐項記錄**，實測以整體主觀結論定案，未填入表格不代表未測試。
+
 ## 路線定案標準
 
 - 音質可接受（無明顯外國腔、zh-TW 穩定不飄簡中發音）**且**工具情境轉接成功率 100% → 採 Live API proxy 路線。
@@ -44,4 +46,9 @@
 
 ## 結論
 
-（待實測後填寫：採用路線、關鍵觀察、風險備註）
+**2026-07-10 使用者實測：繁中音質可接受、工具轉接（公車到站、路線規劃）正常 → 定案採 Gemini Live API proxy 路線。**
+
+- 對照 §路線定案標準，「音質可接受」與「工具情境轉接成功率 100%」兩項條件皆滿足，不需啟動自建管線（Phase 1–4）。
+- WS gateway（`voice.gateway.ts`）與協議設計維持現狀沿用；`live-bridge.ts` 作為 Gemini Live 轉接層繼續使用（非規劃文件所述的「可拋棄」情境，因未走自建路線）。
+- 前端串接規格書見 `docs/specs/VOICE_WS_PROTOCOL.md`。
+- 已知風險與待驗證事項（詳見 `VOICE_WS_PROTOCOL.md` §8）：session resumption 未實作（~10 分鐘連線上限到期需前端重新連線）、gateway 尚未做 Origin 檢查、Cloudflare Tunnel 的 wss:// upgrade 放行尚未驗證。

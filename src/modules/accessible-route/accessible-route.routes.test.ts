@@ -9,7 +9,7 @@ vi.mock("./accessible-route.service", async (importActual) => {
   return { ...actual, planAccessibleRouteFromRequest: vi.fn() };
 });
 
-import { buildTestApp } from "../../../test/test-helpers";
+import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import * as service from "./accessible-route.service";
 
 const app = buildTestApp();

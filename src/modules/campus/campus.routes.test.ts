@@ -8,7 +8,7 @@ vi.mock("./campus.service", () => ({
   listSchools: vi.fn(),
 }));
 
-import { buildTestApp } from "../../../test/test-helpers";
+import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import * as service from "./campus.service";
 
 const app = buildTestApp();

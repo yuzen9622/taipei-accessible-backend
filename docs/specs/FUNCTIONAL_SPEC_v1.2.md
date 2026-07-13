@@ -688,7 +688,7 @@ GTFS 是 v1.3 起所有公共運輸路由決策的主要資料來源，取代原
 GTFS 資料為**單一 flat 目錄**，所有交通系統（公車、捷運、台鐵、高鐵、渡輪、航空）合併在同一份 feed。
 
 ```
-taipei-accessible-backend/
+accessible-smart-map-backend/
 └── data/
     └── gtfs/                  ← 單一 flat 目錄（加入 .gitignore）
         ├── agency.txt

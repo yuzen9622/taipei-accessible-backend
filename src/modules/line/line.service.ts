@@ -1,7 +1,8 @@
 import { webhook } from "@line/bot-sdk";
 import { Types } from "mongoose";
 import { executeLocalTool } from "../ai/agent-tools";
-import { toGeminiHistory, runToolLoop } from "../ai/ai-chat.service";
+import { toGeminiHistory } from "../agent/history-adapter";
+import { runToolLoop } from "../agent/agent-manager.service";
 import { lineFamilyTools } from "../../config/ai/tool";
 import { LINE_FAMILY_SYSTEM_PROMPT } from "../../config/ai/line-family-prompt";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
@@ -22,7 +23,7 @@ import type {
   LineRoutePreviewData,
   LineServiceResult,
 } from "./line.types";
-import type { RunToolLoopResult } from "../ai/ai-chat.service";
+import type { RunToolLoopResult } from "../../types/agent";
 import type { AccessibilityMode, TravelMode } from "../../types/route";
 
 function getUserId(event: LineEvent): string | undefined {

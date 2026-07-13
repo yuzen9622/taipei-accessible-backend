@@ -31,13 +31,10 @@ const OSM_CATEGORY_FALLBACK_NAME: Record<string, string> = {
  * shape so both sources render through the same frontend layer.
  */
 export function osmToA11yPlace(doc: IOsmA11y): A11yPlace {
-  const [lng, lat] = doc.location.coordinates;
   return {
     項次: doc.osmId,
     "出入口電梯/無障礙坡道名稱":
       doc.name ?? OSM_CATEGORY_FALLBACK_NAME[doc.category] ?? doc.category,
-    經度: lng,
-    緯度: lat,
     location: doc.location,
     source: "osm",
     osmId: doc.osmId,
@@ -51,12 +48,9 @@ export function osmToA11yPlace(doc: IOsmA11y): A11yPlace {
  * so campus facilities render through the same frontend layer as metro/OSM.
  */
 export function campusToA11yPlace(f: CampusFacilityPlace): A11yPlace {
-  const [lng, lat] = f.location.coordinates;
   return {
     項次: f.facUid,
     "出入口電梯/無障礙坡道名稱": f.name ?? f.facType ?? "校園無障礙設施",
-    經度: lng,
-    緯度: lat,
     location: f.location,
     source: "campus",
     campusId: f.campusId,

@@ -25,8 +25,8 @@ export interface IA11y {
   _id: string;
   項次: string;
   "出入口電梯/無障礙坡道名稱": string;
-  經度: number;
-  緯度: number;
+  經度?: number;
+  緯度?: number;
   location: { type: "Point"; coordinates: [number, number] };
 }
 
@@ -39,8 +39,8 @@ export interface IBathroom {
   name: string;
   address: string;
   administration: string;
-  latitude: number;
-  longitude: number;
+  latitude?: number;
+  longitude?: number;
   location: { type: "Point"; coordinates: [number, number] };
   grade: string;
   type2: string;
@@ -59,8 +59,8 @@ export interface IDisabledParking {
   chargeType: string;
   spaceLabel: string;
   isMarked: boolean;
-  latitude: number;
-  longitude: number;
+  latitude?: number;
+  longitude?: number;
   location: { type: "Point"; coordinates: [number, number] };
   importedAt: Date;
 }
@@ -320,8 +320,8 @@ export interface IEmergencyContact {
   name: string;
   lineUserId: string | null;
   bindStatus: "pending" | "bound";
-  bindCode: string | null;
-  bindCodeExpiresAt: Date | null;
+  bindCode?: string | null;
+  bindCodeExpiresAt?: Date | null;
   lastLineLat?: number | null;
   lastLineLng?: number | null;
   lastLineLocationUpdatedAt?: Date | null;

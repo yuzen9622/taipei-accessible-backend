@@ -33,11 +33,25 @@ export async function findGooglePlaces(args: {
   query: string;
   latitude?: number;
   longitude?: number;
+  userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
   try {
+    const hasValidPair =
+      typeof args.latitude === "number"
+      && Number.isFinite(args.latitude)
+      && args.latitude >= -90
+      && args.latitude <= 90
+      && typeof args.longitude === "number"
+      && Number.isFinite(args.longitude)
+      && args.longitude >= -180
+      && args.longitude <= 180;
+    const location = hasValidPair
+      ? { latitude: args.latitude!, longitude: args.longitude! }
+      : args.userLocation;
     const places = await searchPlaces(args.query, {
-      latitude: args.latitude,
-      longitude: args.longitude,
+      latitude: location?.latitude,
+      longitude: location?.longitude,
+      sortByDistance: Boolean(location),
     });
     if (!places.length)
       return JSON.stringify({ status: "ZERO_RESULTS", places: [] });
@@ -496,7 +510,7 @@ export async function planAccessibleRoute(args: {
 async function resolveBusCityOrError(
   city: string | undefined,
   userLocation?: { latitude: number; longitude: number },
-): Promise<TaiwanCityEn | { error: string }> {
+): Promise<TaiwanCityEn | "InterCity" | { error: string }> {
   const resolved = await busService.resolveBusCity(city, userLocation);
   if (!resolved) {
     return {
@@ -941,8 +955,8 @@ export async function bindEmergencyContactCode(args: {
 
     contact.bindStatus = "bound";
     contact.lineUserId = lineUserId;
-    contact.bindCode = null;
-    contact.bindCodeExpiresAt = null;
+    contact.bindCode = undefined;
+    contact.bindCodeExpiresAt = undefined;
     await contact.save();
 
     return JSON.stringify({
@@ -1437,7 +1451,10 @@ export async function executeLocalTool(
 ): Promise<string> {
   switch (name) {
     case "findGooglePlaces":
-      return findGooglePlaces(args as Parameters<typeof findGooglePlaces>[0]);
+      return findGooglePlaces({
+        ...(args as Parameters<typeof findGooglePlaces>[0]),
+        userLocation,
+      });
 
     case "findA11yPlaces":
       return findA11yPlaces({

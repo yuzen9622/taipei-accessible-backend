@@ -11,9 +11,8 @@ import fs from "fs";
 import path from "path";
 import type { Content } from "@google/genai";
 import { model } from "../config/ai";
-import { CHAT_SYSTEM_PROMPT, withUserLocation, withCurrentDate } from "../config/ai/chat-prompt";
-import { taipeiYmdDash } from "../config/taipei-time";
-import { routeOnce, runToolLoop } from "../modules/ai/ai-chat.service";
+import { CHAT_SYSTEM_PROMPT, withUserLocation } from "../config/ai/chat-prompt";
+import { routeOnce, runToolLoop } from "../modules/agent/agent-manager.service";
 import { agentCases, type AgentCase } from "./agent-cases";
 import { extractCalls, gradeArgs } from "./eval-grade";
 

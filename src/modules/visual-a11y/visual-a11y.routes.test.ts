@@ -6,7 +6,7 @@ vi.mock("./visual-a11y.service", () => ({
   syncFromOverpass: vi.fn(),
 }));
 
-import { buildTestApp } from "../../../test/test-helpers";
+import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import * as service from "./visual-a11y.service";
 
 const app = buildTestApp();

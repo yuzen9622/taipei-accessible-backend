@@ -1,6 +1,7 @@
 import { ResponseCode } from "../../types/code";
 import type {
   BusLeg,
+  DriveLeg,
   MetroLeg,
   ThsrLeg,
   TraLeg,
@@ -16,6 +17,7 @@ import type {
   NavInstructionsResult,
   NavRouteInput,
   GenerateNavResult,
+  NavWarningCode,
 } from "./nav-instructions.types";
 
 export type {
@@ -26,12 +28,21 @@ export type {
   NavInstructionsResult,
   NavRouteInput,
   GenerateNavResult,
+  NavWarningCode,
 };
 
 export const WARN_STEPS_UNAVAILABLE = "ORS_STEPS_UNAVAILABLE";
+export const WARN_WALK_STEPS_UNAVAILABLE = "WALK_STEPS_UNAVAILABLE";
+export const WARN_ROAD_STEPS_UNAVAILABLE = "ROAD_STEPS_UNAVAILABLE";
+
+function pushWarning(warnings: NavWarningCode[], warning: NavWarningCode): void {
+  if (!warnings.includes(warning)) warnings.push(warning);
+}
 
 const KNOWN_LEG_TYPES = new Set<NavLegType>([
   "WALK",
+  "DRIVE",
+  "MOTORCYCLE",
   "BUS",
   "METRO",
   "THSR",
@@ -170,6 +181,8 @@ function stepType(relativeDirection: string): NavInstructionType {
 }
 
 function walkStepText(step: WalkStep, bearing: number | null): string {
+  const upstreamText = step.instruction?.trim();
+  if (upstreamText) return upstreamText;
   const street = step.streetName?.trim() ?? "";
   const named = hasStreetName(step);
   const dir = (step.relativeDirection ?? "CONTINUE").toUpperCase();
@@ -211,6 +224,55 @@ function walkStepText(step: WalkStep, bearing: number | null): string {
   }
 }
 
+function roadStepType(maneuver: string | undefined): NavInstructionType {
+  return maneuver?.toUpperCase() === "DEPART" ? "depart" : "turn";
+}
+
+function roadLegToInstructions(
+  leg: DriveLeg,
+  isFirstLeg: boolean,
+  warnings: NavWarningCode[],
+): NavInstruction[] {
+  const steps = leg.steps ?? [];
+  if (!steps.length) {
+    pushWarning(warnings, WARN_ROAD_STEPS_UNAVAILABLE);
+    const bearing =
+      leg.polyline.length >= 2
+        ? Math.round(calcBearing(leg.polyline[0], leg.polyline[1]))
+        : null;
+    return [{
+      text: isFirstLeg ? "請沿道路出發，前往目的地" : "請沿道路繼續前往目的地",
+      type: isFirstLeg ? "depart" : "turn",
+      bearing,
+      relativeDirection: null,
+      distanceM: leg.distanceM,
+      streetName: null,
+      legType: leg.type,
+      polylineIndex: bearing === null ? null : 0,
+    }];
+  }
+
+  return steps.map((step) => {
+    const bearing =
+      step.polyline.length >= 2
+        ? Math.round(calcBearing(step.polyline[0], step.polyline[1]))
+        : null;
+    return {
+      text: step.instruction.trim() || "請沿道路繼續前行",
+      type: roadStepType(step.maneuver),
+      bearing,
+      relativeDirection: null,
+      distanceM: step.distanceM,
+      streetName: null,
+      legType: leg.type,
+      polylineIndex:
+        step.polyline[0] && leg.polyline.length
+          ? nearestPolylineIndex(leg.polyline, step.polyline[0])
+          : null,
+    };
+  });
+}
+
 function exitInfoInstruction(
   exitInfo: NonNullable<WalkLeg["exitInfo"]>,
 ): NavInstruction {
@@ -234,7 +296,7 @@ function exitInfoInstruction(
 function walkLegToInstructions(
   leg: WalkLeg,
   isFirstLeg: boolean,
-  warnings: string[],
+  warnings: NavWarningCode[],
 ): NavInstruction[] {
   const out: NavInstruction[] = [];
   const polyline = leg.polyline ?? [];
@@ -271,9 +333,8 @@ function walkLegToInstructions(
       legType: "WALK",
       polylineIndex: bearing !== null ? 0 : null,
     });
-    if (!warnings.includes(WARN_STEPS_UNAVAILABLE)) {
-      warnings.push(WARN_STEPS_UNAVAILABLE);
-    }
+    pushWarning(warnings, WARN_WALK_STEPS_UNAVAILABLE);
+    pushWarning(warnings, WARN_STEPS_UNAVAILABLE);
   }
 
   if (leg.exitInfo) {
@@ -404,15 +465,27 @@ export function generateNavInstructions(
     }
   }
 
-  const warnings: string[] = [];
+  const warnings: NavWarningCode[] = [];
   const instructions: NavInstruction[] = [];
 
   legs.forEach((rawLeg) => {
-    const leg = rawLeg as WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg;
+    const leg = rawLeg as
+      | WalkLeg
+      | DriveLeg
+      | BusLeg
+      | MetroLeg
+      | ThsrLeg
+      | TraLeg;
     switch (leg.type) {
       case "WALK":
         instructions.push(
           ...walkLegToInstructions(leg, instructions.length === 0, warnings),
+        );
+        break;
+      case "DRIVE":
+      case "MOTORCYCLE":
+        instructions.push(
+          ...roadLegToInstructions(leg, instructions.length === 0, warnings),
         );
         break;
       case "BUS":

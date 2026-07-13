@@ -5,9 +5,12 @@ vi.mock("../../adapters/line.adapter", () => ({
   replyText: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../ai/ai-chat.service", () => ({
-  runToolLoop: vi.fn().mockResolvedValue({ text: "agent reply" }),
+vi.mock("../agent/history-adapter", () => ({
   toGeminiHistory: vi.fn(() => ({ systemInstruction: "sys", contents: [] })),
+}));
+
+vi.mock("../agent/agent-manager.service", () => ({
+  runToolLoop: vi.fn().mockResolvedValue({ text: "agent reply" }),
 }));
 
 vi.mock("../../config/ai", () => ({
@@ -43,7 +46,7 @@ vi.mock("../accessible-route/accessible-route.service", () => ({
 
 import { getRoutePreview, handleEvents } from "./line.service";
 import { replyAgentResult, replyText } from "../../adapters/line.adapter";
-import { runToolLoop, toGeminiHistory } from "../ai/ai-chat.service";
+import { runToolLoop } from "../agent/agent-manager.service";
 import EmergencyContact from "../../model/emergency-contact.model";
 import SosSession from "../../model/sos-session.model";
 import User from "../../model/user.model";

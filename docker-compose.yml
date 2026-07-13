@@ -17,6 +17,7 @@ services:
     env_file: .env
     environment:
       OTP_BASE_URL: http://otp:8080
+      VALHALLA_BASE_URL: http://valhalla:8002
       DATABASE_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin
       # .env's CHROMA_URL is host-centric (localhost:8100); inside the container
       # localhost is the container itself, so reach the chroma service by name.
@@ -34,6 +35,8 @@ services:
       mongo:
         condition: service_healthy
       otp:
+        condition: service_started
+      valhalla:
         condition: service_started
     restart: unless-stopped
 
@@ -86,6 +89,36 @@ services:
       retries: 3
       start_period: 120s
     restart: unless-stopped
+
+  valhalla:
+    image: ghcr.io/valhalla/valhalla:3.8.2@sha256:a4eae918af15ffb392a6c1434bc64083d28f022d5968a02cba09780ba54cd62d
+    container_name: valhalla
+    command:
+      - bash
+      - -lc
+      - >-
+        test -f /custom_files/active/valhalla.json ||
+        { echo 'Valhalla config missing: run npm run build:valhalla-tiles first' >&2; exit 78; };
+        exec valhalla_service /custom_files/active/valhalla.json ${VALHALLA_THREADS:-2}
+    ports:
+      - "127.0.0.1:8002:8002"
+    volumes:
+      - ${VALHALLA_DATA_DIR:-./valhalla-data}:/custom_files
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/8002"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 120s
+    restart: unless-stopped
+
+  valhalla-build:
+    image: ghcr.io/valhalla/valhalla:3.8.2@sha256:a4eae918af15ffb392a6c1434bc64083d28f022d5968a02cba09780ba54cd62d
+    profiles: ["valhalla-build"]
+    entrypoint: ["bash", "-lc"]
+    volumes:
+      - ${VALHALLA_DATA_DIR:-./valhalla-data}:/custom_files
+      - ${VALHALLA_PBF_PATH:-./otp-data/taiwan-latest.osm.pbf}:/data/input.osm.pbf:ro
 
   chroma:
     image: chromadb/chroma:latest

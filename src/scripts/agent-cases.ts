@@ -71,6 +71,9 @@ export const agentCases: AgentCase[] = [
   { id: "guide-3", query: "捷運有哪些無障礙設施", expectTool: "searchAccessibilityGuide", acceptAlso: ["findA11yPlaces"], notes: "soft: knowledge vs place" },
   { id: "places-1", query: "台北車站附近哪裡有好吃的", expectTool: "findGooglePlaces", mustNotCall: ["findA11yPlaces"] },
   { id: "places-2", query: "附近的咖啡廳", userLocation: TAIPEI_STATION, expectTool: "findGooglePlaces" },
+  { id: "places-nearest-train", query: "帶我去最近的火車站", userLocation: TAIPEI_STATION, expectTool: "findGooglePlaces", mustNotCall: ["planAccessibleRoute"], notes: "first round must discover the nearest station before route planning" },
+  { id: "places-nearest-metro", query: "最近的捷運站怎麼走", userLocation: TAIPEI_STATION, expectTool: "findGooglePlaces", mustNotCall: ["planAccessibleRoute"], notes: "first round must discover the nearest station before route planning" },
+  { id: "places-explore-cafes", query: "附近有哪些咖啡廳", userLocation: TAIPEI_STATION, expectTool: "findGooglePlaces", mustNotCall: ["planAccessibleRoute"] },
 
   // F. English
   { id: "en-a11y", query: "Is there an accessible toilet at Taipei Main Station?", expectTool: "findA11yPlaces" },

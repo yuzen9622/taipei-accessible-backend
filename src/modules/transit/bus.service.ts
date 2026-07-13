@@ -16,6 +16,7 @@ import { detectBusApiType, equalStopName } from "../../utils/transit-text";
 import { busUrl } from "../../config/transit";
 import { tdxFetch } from "../../config/fetch";
 import { getCity } from "../../adapters/google.adapter";
+import { taipeiHHmm } from "../../config/taipei-time";
 import BusRouteModel from "../../model/bus-route.model";
 import BusVehicleModel from "../../model/bus-vehicle.model";
 import BusStopModel from "../../model/bus-stop.model";
@@ -60,7 +61,8 @@ import type {
 export async function resolveBusCity(
   cityInput?: string,
   userLoc?: { latitude: number; longitude: number },
-): Promise<TaiwanCityEn | null> {
+): Promise<TaiwanCityEn | "InterCity" | null> {
+  if (cityInput === "InterCity") return "InterCity";
   const direct = cityFromAlias(cityInput);
   if (direct) return direct;
   if (userLoc) {
@@ -97,6 +99,7 @@ async function lowFloorMap(
 }
 
 type NormalizedRoute = {
+  subRouteUid: string;
   direction: number;
   operators: string[];
   stops: { seq: number; name: string; lat?: number; lng?: number }[];
@@ -114,6 +117,7 @@ function buildDirections(records: NormalizedRoute[]): BusRouteDirection[] {
     .map((r) => {
       const stops = [...r.stops].sort((a, b) => a.seq - b.seq);
       return {
+        subRouteUid: r.subRouteUid,
         direction: r.direction,
         directionLabel: dirLabel(r.direction),
         from: stops[0]?.name ?? "",
@@ -130,19 +134,27 @@ function buildDirections(records: NormalizedRoute[]): BusRouteDirection[] {
  */
 export async function getBusRouteInfo(params: {
   routeName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
 }): Promise<BusRouteInfoResult> {
   const { city } = params;
   const { type, routeId } = detectBusApiType(params.routeName);
 
   try {
-    const docs = await BusRouteModel.find({
-      city,
-      "routeName.Zh_tw": routeId,
-    }).lean();
+    const query = type === "InterCity"
+      ? { "routeName.Zh_tw": routeId }
+      : { city, "routeName.Zh_tw": routeId };
+    let docs = await BusRouteModel.find(query).lean();
+
+    if (!docs.length && params.routeName !== routeId) {
+      const fallbackQuery = type === "InterCity"
+        ? { "routeName.Zh_tw": params.routeName }
+        : { city, "routeName.Zh_tw": params.routeName };
+      docs = await BusRouteModel.find(fallbackQuery).lean();
+    }
 
     if (docs.length) {
       const normalized: NormalizedRoute[] = docs.map((d) => ({
+        subRouteUid: d.subRouteUid,
         direction: d.direction,
         operators: (d.operators ?? []).map((o) => o.name).filter(Boolean) as string[],
         stops: (d.stops ?? []).map((s) => ({
@@ -154,7 +166,7 @@ export async function getBusRouteInfo(params: {
       }));
       return {
         ok: true,
-        routeName: routeId,
+        routeName: docs[0].routeName?.Zh_tw || routeId,
         city,
         source: "db",
         operators: [...new Set(normalized.flatMap((n) => n.operators))],
@@ -167,11 +179,19 @@ export async function getBusRouteInfo(params: {
       type === "City"
         ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${routeId}'`
         : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${routeId}'`;
-    const live = await fetchTdxArray(url);
+    let live = await fetchTdxArray(url);
+    if (!live.length && params.routeName !== routeId) {
+      const fallbackUrl =
+        type === "City"
+          ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'`
+          : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'`;
+      live = await fetchTdxArray(fallbackUrl);
+    }
     if (!live.length) {
       return { ok: false, error: `找不到路線「${params.routeName}」的站序資料`, status: 404 };
     }
     const normalized: NormalizedRoute[] = live.map((r: any) => ({
+      subRouteUid: r.SubRouteUID,
       direction: r.Direction,
       operators: (r.Operators ?? [])
         .map((o: any) => o.OperatorName?.Zh_tw)
@@ -204,7 +224,7 @@ export async function getBusRouteInfo(params: {
 export async function getBusArrivalAtStop(params: {
   routeName: string;
   stopName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
   direction?: number;
 }): Promise<BusArrivalResult> {
   const { city, stopName, direction } = params;
@@ -220,7 +240,14 @@ export async function getBusArrivalAtStop(params: {
         ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${routeId}?$format=JSON${dirFilter}`
         : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${routeId}?$format=JSON${dirFilter}`;
 
-    const records = await fetchTdxArray(url);
+    let records = await fetchTdxArray(url);
+    if (!records.length && params.routeName !== routeId) {
+      const fallbackUrl =
+        type === "City"
+          ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${params.routeName}?$format=JSON${dirFilter}`
+          : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${params.routeName}?$format=JSON${dirFilter}`;
+      records = await fetchTdxArray(fallbackUrl);
+    }
     const matched = records.filter((r: any) =>
       equalStopName(r.StopName?.Zh_tw, stopName),
     );
@@ -259,13 +286,56 @@ export async function getBusArrivalAtStop(params: {
   }
 }
 
+function getNextDepartureForStop(
+  frequencies: any[],
+  nowHHmm: string,
+  stopName: string,
+  isFirstStop: boolean,
+): string | null {
+  // 1. Get all schedules (trips) that have start times
+  const validTrips = frequencies
+    .filter((f) => f.start && /^\d{2}:\d{2}$/.test(f.start));
+
+  if (!validTrips.length) return null;
+
+  // 2. Sort trips by start time ascending
+  validTrips.sort((a, b) => a.start.localeCompare(b.start));
+
+  // 3. Find the next trip today (start >= nowHHmm)
+  let nextTrip = validTrips.find((t) => t.start >= nowHHmm);
+  let isTomorrow = false;
+  if (!nextTrip) {
+    // If no trip left today, fallback to first trip (which will be tomorrow)
+    nextTrip = validTrips[0];
+    isTomorrow = true;
+  }
+
+  if (!nextTrip) return null;
+
+  // 4. Check if the next trip has stop-level scheduled arrival time for this stop
+  if (nextTrip.stopTimes && nextTrip.stopTimes.length > 1) {
+    const matchedStop = nextTrip.stopTimes.find((st: any) =>
+      equalStopName(st.stopName, stopName),
+    );
+    if (matchedStop && matchedStop.arrivalTime) {
+      const prefix = isTomorrow ? "明日 " : "";
+      return `${prefix}${matchedStop.arrivalTime}`;
+    }
+  }
+
+  // 5. If no stop-level scheduled arrival time is available, fallback to starting station time + "起點發車" suffix
+  const prefix = isTomorrow ? "明日 " : "";
+  const baseTime = `${prefix}${nextTrip.start}`;
+  return isFirstStop ? baseTime : `${baseTime} 起點發車`;
+}
+
 /**
  * Get full route details: stops, ETA for all stops, and timetables.
  * Ideal for a full bus route view in an app.
  */
 export async function getBusRouteDetail(params: {
   routeName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
 }): Promise<BusRouteDetailResult> {
   const { city, routeName } = params;
   const { type, routeId } = detectBusApiType(routeName);
@@ -287,37 +357,63 @@ export async function getBusRouteDetail(params: {
     let etaRecords: any[] = [];
     try {
       etaRecords = await fetchTdxArray(etaUrl);
+      if (!etaRecords.length && params.routeName !== routeId) {
+        const fallbackEtaUrl =
+          type === "City"
+            ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${params.routeName}?$format=JSON`
+            : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${params.routeName}?$format=JSON`;
+        etaRecords = await fetchTdxArray(fallbackEtaUrl);
+      }
     } catch (e) {
       console.error("Failed to fetch ETA in getBusRouteDetail", e);
     }
 
-    const etaMap = new Map<number, Map<string, { estimateMinutes: number | null; statusLabel: string }>>();
+    const etaMap = new Map<string, Map<string, { estimateMinutes: number | null; statusLabel: string; nextBusTime: string | null }>>();
     for (const r of etaRecords) {
+      const subRouteUid = r.SubRouteUID;
       const dir = r.Direction;
       const stopName = r.StopName?.Zh_tw;
-      if (dir == null || !stopName) continue;
+      if (subRouteUid == null || dir == null || !stopName) continue;
       
-      let dirMap = etaMap.get(dir);
+      const key = `${subRouteUid}_${dir}`;
+      let dirMap = etaMap.get(key);
       if (!dirMap) {
         dirMap = new Map();
-        etaMap.set(dir, dirMap);
+        etaMap.set(key, dirMap);
       }
       
       const est: number | null =
         typeof r.EstimateTime === "number" && r.EstimateTime >= 0
           ? Math.round(r.EstimateTime / 60)
           : null;
+
+      const nextBusTimeStr = r.NextBusTime;
+      let nextBusHHmm: string | null = null;
+      if (nextBusTimeStr) {
+        const dObj = new Date(nextBusTimeStr);
+        if (!isNaN(dObj.getTime())) {
+          nextBusHHmm = taipeiHHmm(dObj);
+        }
+      }
           
       dirMap.set(stopName, {
         estimateMinutes: est,
         statusLabel: STOP_STATUS_LABEL[r.StopStatus] ?? "正常",
+        nextBusTime: nextBusHHmm,
       });
     }
 
     const directions: BusRouteDetailDirection[] = routeInfoRes.directions.map((d) => {
-      const dirMap = etaMap.get(d.direction);
-      const stops: BusRouteDetailStop[] = d.stops.map((s) => {
-        let etaData = { estimateMinutes: null as number | null, statusLabel: "未發車" };
+      const dirKey = `${d.subRouteUid}_${d.direction}`;
+      const dirMap = etaMap.get(dirKey);
+      const dirSchedule = timetableRes.ok 
+        ? timetableRes.schedules.find((sched) => sched.direction === d.direction)
+        : null;
+      const frequencies = dirSchedule?.frequencies || [];
+      const nowHHmm = taipeiHHmm();
+
+      const stops: BusRouteDetailStop[] = d.stops.map((s, index) => {
+        let etaData = { estimateMinutes: null as number | null, statusLabel: "尚未發車", nextBusTime: null as string | null };
         if (dirMap) {
           for (const [key, value] of dirMap.entries()) {
             if (equalStopName(key, s.name)) {
@@ -326,10 +422,26 @@ export async function getBusRouteDetail(params: {
             }
           }
         }
+
+        let statusLabel = etaData.statusLabel;
+        if (statusLabel === "尚未發車" || !statusLabel) {
+          if (etaData.nextBusTime) {
+            statusLabel = etaData.nextBusTime;
+          } else {
+            const isFirstStop = index === 0;
+            const nextDepText = frequencies.length
+              ? getNextDepartureForStop(frequencies, nowHHmm, s.name, isFirstStop)
+              : null;
+            if (nextDepText) {
+              statusLabel = nextDepText;
+            }
+          }
+        }
+
         return {
           ...s,
           estimateMinutes: etaData.estimateMinutes,
-          statusLabel: etaData.statusLabel,
+          statusLabel,
         };
       });
       return {
@@ -386,7 +498,7 @@ function serviceDayLabel(sd?: Record<string, number>): string {
  */
 export async function getBusTimetable(params: {
   routeName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
 }): Promise<BusTimetableResult> {
   const { city } = params;
   const { type, routeId } = detectBusApiType(params.routeName);
@@ -397,7 +509,14 @@ export async function getBusTimetable(params: {
         ? `${busUrl.cityScheduleUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${routeId}'`
         : `${busUrl.cityScheduleUrl.replace("/City", "/InterCity")}?$format=JSON&$filter=RouteName/Zh_tw eq '${routeId}'`;
 
-    const records = await fetchTdxArray(url);
+    let records = await fetchTdxArray(url);
+    if (!records.length && params.routeName !== routeId) {
+      const fallbackUrl =
+        type === "City"
+          ? `${busUrl.cityScheduleUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'`
+          : `${busUrl.cityScheduleUrl.replace("/City", "/InterCity")}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'`;
+      records = await fetchTdxArray(fallbackUrl);
+    }
     if (!records.length) {
       return { ok: false, error: `找不到路線「${params.routeName}」的時刻表`, status: 404 };
     }
@@ -417,7 +536,22 @@ export async function getBusTimetable(params: {
       // Some operators publish Timetables (explicit trips) instead of Frequencys.
       for (const t of r.Timetables ?? []) {
         const dep = t.StopTimes?.[0]?.DepartureTime;
-        if (dep) list.push({ start: dep, end: dep, serviceDays: serviceDayLabel(t.ServiceDay) });
+        if (dep) {
+          const stopTimes = (t.StopTimes ?? [])
+            .map((st: any) => ({
+              seq: st.StopSequence,
+              stopName: st.StopName?.Zh_tw ?? "",
+              arrivalTime: st.ArrivalTime || st.DepartureTime || "",
+            }))
+            .filter((st: any) => st.arrivalTime);
+
+          list.push({
+            start: dep,
+            end: dep,
+            serviceDays: serviceDayLabel(t.ServiceDay),
+            stopTimes,
+          });
+        }
       }
       byDir.set(r.Direction, list);
     }
@@ -449,7 +583,7 @@ export async function getBusTimetable(params: {
  */
 export async function getBusRealtimeOnRoute(params: {
   routeName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
   direction?: number;
 }): Promise<BusRealtimeOnRouteResult> {
   const { city, direction } = params;
@@ -465,7 +599,16 @@ export async function getBusRealtimeOnRoute(params: {
             direction === 0 || direction === 1 ? ` and Direction eq ${direction}` : ""
           }`;
 
-    const records = await fetchTdxArray(url);
+    let records = await fetchTdxArray(url);
+    if (!records.length && params.routeName !== routeId) {
+      const fallbackUrl =
+        type === "City"
+          ? `${busUrl.cityRealtimeByFrequencyUrl}/${city}/${params.routeName}?$format=JSON${dirFilter}`
+          : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${params.routeName}'${
+              direction === 0 || direction === 1 ? ` and Direction eq ${direction}` : ""
+            }`;
+      records = await fetchTdxArray(fallbackUrl);
+    }
     if (!records.length) {
       return {
         ok: false,

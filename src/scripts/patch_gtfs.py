@@ -11,17 +11,18 @@ import urllib.parse
 import time
 
 # Script to patch a GTFS static feed zip file with Taiwan City + InterCity bus
-# GeneralTimetable (定期班表) data. The regular timetable carries per-trip
-# ServiceDay week flags, so patched trips are written as weekly calendar.txt
-# services valid for CALENDAR_VALID_DAYS — unlike the former DailyTimetable
-# patch whose single-date calendar expired the day after the graph was built.
-# Some cities (Taichung, Taoyuan, …) publish origin-departure-only general
-# timetables (a single StopTime per trip); for those the city's DailyTimetable
-# is fetched as well and its per-stop travel-time profile is grafted onto the
-# general timetable's origin time + ServiceDay to synthesise full stop_times.
+# GeneralTimetable (定期班表) data and shape geometry. The regular timetable
+# carries per-trip ServiceDay week flags, so patched trips are written as weekly
+# calendar.txt services valid for CALENDAR_VALID_DAYS. Some cities (Taichung,
+# Taoyuan, …) publish origin-departure-only general timetables (a single StopTime
+# per trip); for those the city's DailyTimetable is fetched as well and its
+# per-stop travel-time profile is grafted onto the general timetable's origin
+# time + ServiceDay to synthesise full stop_times. Also, shape geometry is fetched
+# from the TDX Bus Shape API to populate shapes.txt for routes missing shapes.
 # Preserves non-bus (TRA, THSR, Metro) schedules by matching route_type != 3.
 
 CITIES = [
+    "Taipei", "NewTaipei", "Tainan", "KinmenCounty", "LienchiangCounty",
     "Taichung", "Taoyuan", "Keelung", "Hsinchu", "HsinchuCounty", "MiaoliCounty",
     "ChanghuaCounty", "NantouCounty", "YunlinCounty", "ChiayiCounty", "Chiayi",
     "PingtungCounty", "YilanCounty", "HualienCounty", "TaitungCounty", "Kaohsiung",
@@ -59,7 +60,23 @@ def fetch_paginated_api(token, url_template):
     skip = 0
 
     while True:
-        url = f"{url_template}&%24top={top}&%24skip={skip}"
+        parsed_url = urllib.parse.urlparse(url_template)
+        encoded_path = urllib.parse.quote(parsed_url.path)
+        query_parts = urllib.parse.parse_qsl(parsed_url.query)
+        query_map = dict(query_parts)
+        query_map["$top"] = str(top)
+        query_map["$skip"] = str(skip)
+        encoded_query = urllib.parse.urlencode(query_map, safe="=&?$")
+        
+        url = urllib.parse.urlunparse((
+            parsed_url.scheme,
+            parsed_url.netloc,
+            encoded_path,
+            parsed_url.params,
+            encoded_query,
+            parsed_url.fragment
+        ))
+        
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "accept": "application/json"})
 
         success = False
@@ -182,6 +199,44 @@ def build_daily_profiles(daily_records):
             profiles.setdefault((key_uid, direction), []).append({"origin": origin, "stops": stops})
     return profiles
 
+def parse_linestring(geom):
+    """Parse LINESTRING (lon lat, lon lat, ...) into a list of (lat, lon) coordinates."""
+    if not geom or not geom.startswith("LINESTRING"):
+        return []
+    try:
+        start_idx = geom.find("(")
+        end_idx = geom.rfind(")")
+        if start_idx == -1 or end_idx == -1:
+            return []
+        content = geom[start_idx + 1:end_idx]
+        pts = []
+        for pair in content.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            parts = pair.split()
+            if len(parts) >= 2:
+                # TDX coordinates are [longitude, latitude]
+                lon = float(parts[0])
+                lat = float(parts[1])
+                pts.append((lat, lon))
+        return pts
+    except Exception:
+        return []
+
+def build_shape_index(shape_records):
+    """Index shape records by (RouteUID, Direction) -> [(lat, lon), ...]."""
+    index = {}
+    for r in shape_records:
+        ruid = r.get("RouteUID")
+        direction = r.get("Direction", 0)
+        geom = r.get("Geometry")
+        if ruid and geom:
+            pts = parse_linestring(geom)
+            if pts:
+                index[(ruid, direction)] = pts
+    return index
+
 def synthesize_stop_rows(trip_id, timetable, key_uids, direction, daily_profiles):
     entries = valid_stop_entries(timetable)
     if len(entries) != 1:
@@ -209,7 +264,7 @@ def synthesize_stop_rows(trip_id, timetable, key_uids, direction, daily_profiles
         })
     return rows
 
-def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles, route_shape_by_route):
+def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles, route_shape_by_route, tdx_shapes, new_shapes):
     for route in records:
         route_uid = route.get("RouteUID")
         sub_route_uid = route.get("SubRouteUID")
@@ -303,9 +358,31 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_tr
 
             seen_trips.add(trip_id)
             service_patterns.add(pattern)
+            
+            # Hybrid shape selection:
+            # 1. Inherit from original static GTFS if it exists
             shape_id = route_shape_by_route.get(matched_id, "")
+            
+            # 2. Otherwise lookup in our newly fetched TDX shape index
             if not shape_id:
-                stats["missing_shape"] += 1
+                pts = None
+                for key_uid in (sub_route_uid, route_uid):
+                    if key_uid:
+                        # Direct match
+                        if (key_uid, direction) in tdx_shapes:
+                            pts = tdx_shapes[(key_uid, direction)]
+                            break
+                        # Opposite direction fallback (reversed)
+                        opp_dir = 1 - direction
+                        if (key_uid, opp_dir) in tdx_shapes:
+                            pts = tdx_shapes[(key_uid, opp_dir)][::-1]
+                            break
+                if pts:
+                    shape_id = f"patched_shp_{matched_id}"
+                    new_shapes[shape_id] = pts
+                else:
+                    stats["missing_shape"] += 1
+
             new_trips.append({
                 "route_id": matched_id,
                 "service_id": service_id_for_pattern(pattern),
@@ -315,7 +392,7 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_tr
             })
             new_stop_times.extend(stop_rows)
 
-def patch_gtfs_zip(zip_path, schedule_records, daily_records, start_date):
+def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, start_date):
     cal_start = start_date.strftime("%Y%m%d")
     cal_end = (start_date + datetime.timedelta(days=CALENDAR_VALID_DAYS)).strftime("%Y%m%d")
 
@@ -398,18 +475,25 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, start_date):
 
     print(f"Preserved {len(kept_trips)} non-bus trips and {len(kept_stop_times)} non-bus stop times.")
 
-    # 6. Parse schedule records into weekly-service trips
+    # 6. Parse schedule records into weekly-service trips & map shape geometries
     new_trips = []
     new_stop_times = []
     seen_trips = set()
     service_patterns = set()
     stats = {"freq_only": 0, "no_service_day": 0, "dup_trip": 0, "short_trip": 0, "synthesized": 0, "missing_shape": 0}
     daily_profiles = build_daily_profiles(daily_records)
-    process_schedule_records_to_gtfs(schedule_records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles, route_shape_by_route)
+    new_shapes = {}
+    
+    process_schedule_records_to_gtfs(
+        schedule_records, new_trips, new_stop_times, seen_trips,
+        route_list, route_ids_set, service_patterns, stats, daily_profiles,
+        route_shape_by_route, tdx_shapes, new_shapes
+    )
+    
     print(f"Generated {len(new_trips)} new bus trips and {len(new_stop_times)} new stop times "
           f"({len(service_patterns)} weekly service patterns, valid {cal_start}–{cal_end}; "
           f"{stats['synthesized']} trips synthesized from daily travel-time profiles; "
-          f"{stats['missing_shape']} trips without original shape_id).")
+          f"{stats['missing_shape']} trips without original or fetched shape).")
     print(f"Skipped: {stats['freq_only']} frequency-only subroutes (no StopTimes), "
           f"{stats['no_service_day']} timetables with no service day, "
           f"{stats['dup_trip']} duplicate trips, {stats['short_trip']} trips with < 2 stops and no daily profile.")
@@ -428,8 +512,9 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, start_date):
     # 8. Rewrite Zip
     with zipfile.ZipFile(zip_path, "r") as zin:
         with zipfile.ZipFile(temp_zip_path, "w", zipfile.ZIP_DEFLATED) as zout:
+            # Copy all entries except those we overwrite
             for item in zin.infolist():
-                if item.filename in ("trips.txt", "stop_times.txt", "calendar.txt", "calendar_dates.txt"):
+                if item.filename in ("trips.txt", "stop_times.txt", "calendar.txt", "calendar_dates.txt", "shapes.txt"):
                     continue
                 zout.writestr(item, zin.read(item.filename))
 
@@ -461,8 +546,27 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, start_date):
             cd_writer.writerows(kept_calendar_dates)
             zout.writestr("calendar_dates.txt", cd_out.getvalue())
 
+            # Overwrite shapes.txt with memory-efficient streaming copy + append
+            print(f"Writing shapes.txt (injecting {len(new_shapes)} new bus route shapes)...")
+            with zout.open("shapes.txt", "w") as f:
+                wrapper = io.TextIOWrapper(f, encoding="utf-8")
+                wrapper.write("shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n")
+                
+                # Copy existing shapes
+                if "shapes.txt" in zin.namelist():
+                    with zin.open("shapes.txt") as in_f:
+                        in_wrapper = io.TextIOWrapper(in_f, encoding="utf-8-sig")
+                        in_wrapper.readline() # skip original header
+                        for line in in_wrapper:
+                            wrapper.write(line.strip() + "\n")
+                
+                # Append new shapes
+                for shape_id, points in sorted(new_shapes.items()):
+                    for seq, (lat, lon) in enumerate(points, start=1):
+                        wrapper.write(f"{shape_id},{lat},{lon},{seq}\n")
+
     os.replace(temp_zip_path, zip_path)
-    print("GTFS zip successfully patched with general (weekly) timetables!")
+    print("GTFS zip successfully patched with general timetables and shape geometry!")
 
 def main():
     client_id = os.environ.get("TDX_CLIENT_ID")
@@ -488,37 +592,97 @@ def main():
 
     schedule_records = []
     daily_records = []
+    shape_records = []
 
-    def fetch_source(label, schedule_url, daily_url):
+    def fetch_source(label, schedule_url, daily_url, shape_url=None):
         records = fetch_paginated_api(token, schedule_url)
         schedule_records.extend(records)
         if needs_daily_fallback(records):
             print(f"  {label}: origin-only general timetables detected — fetching Daily Timetable fallback...")
-            daily_records.extend(fetch_paginated_api(token, daily_url))
+            try:
+                daily_records.extend(fetch_paginated_api(token, daily_url))
+            except Exception as e:
+                print(f"  {label}: Daily Timetable failed ({e}). Fetching StopOfRoute to build synthetic profiles...")
+                stop_of_route_url = schedule_url.replace("/Schedule/", "/StopOfRoute/")
+                try:
+                    sor_records = fetch_paginated_api(token, stop_of_route_url)
+                    synthetic_count = 0
+                    for r in sor_records:
+                        ruid = r.get("RouteUID")
+                        sub_route_uid = r.get("SubRouteUID") or ruid
+                        direction = r.get("Direction", 0)
+                        stops = r.get("Stops", [])
+                        if ruid and stops:
+                            def seq_key(s):
+                                try:
+                                    return int(s.get("StopSequence", 0))
+                                except (TypeError, ValueError):
+                                    return 0
+                            sorted_stops = sorted(stops, key=seq_key)
+                            
+                            stop_times = []
+                            for i, s in enumerate(sorted_stops):
+                                stop_id = s.get("StopUID") or s.get("StopID")
+                                seq = s.get("StopSequence", i + 1)
+                                if stop_id:
+                                    offset_min = i * 2
+                                    h = offset_min // 60
+                                    m = offset_min % 60
+                                    time_str = f"{h:02d}:{m:02d}"
+                                    stop_times.append({
+                                        "StopUID": stop_id,
+                                        "StopSequence": seq,
+                                        "ArrivalTime": time_str,
+                                        "DepartureTime": time_str
+                                    })
+                            if stop_times:
+                                daily_records.append({
+                                    "RouteUID": ruid,
+                                    "SubRouteUID": sub_route_uid,
+                                    "Direction": direction,
+                                    "TimeTables": [
+                                        {
+                                            "StopTimes": stop_times
+                                        }
+                                    ]
+                                })
+                                synthetic_count += 1
+                    print(f"  {label}: generated {synthetic_count} synthetic stop-sequence profiles from StopOfRoute.")
+                except Exception as sor_e:
+                    print(f"  {label}: StopOfRoute fetch failed ({sor_e}). Skipping daily fallback.")
+            time.sleep(0.5)
+        if shape_url:
+            print(f"  {label}: fetching Shape geometry...")
+            shape_records.extend(fetch_paginated_api(token, shape_url))
             time.sleep(0.5)
 
     # 1. Fetch InterCity (公路客運)
-    print("\nStep 2: Fetching InterCity (公路客運) General Timetable...")
+    print("\nStep 2: Fetching InterCity (公路客運) Data...")
     fetch_source(
         "InterCity",
         "https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/InterCity?%24format=JSON",
         "https://tdx.transportdata.tw/api/basic/v2/Bus/DailyTimeTable/InterCity?%24format=JSON",
+        "https://tdx.transportdata.tw/api/basic/v2/Bus/Shape/InterCity?%24format=JSON"
     )
 
     # 2. Fetch City Bus for all 17 supported cities
-    print("\nStep 3: Fetching City Bus (各縣市市區公車) General Timetables...")
+    print("\nStep 3: Fetching City Bus (各縣市市區公車) Data...")
     for city in CITIES:
-        print(f"  Fetching {city} General Timetable...")
+        print(f"  Fetching {city} Data...")
         fetch_source(
             city,
             f"https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/City/{city}?%24format=JSON",
             f"https://tdx.transportdata.tw/api/basic/v2/Bus/DailyTimeTable/City/{city}?%24format=JSON",
+            f"https://tdx.transportdata.tw/api/basic/v2/Bus/Shape/City/{city}?%24format=JSON"
         )
         time.sleep(0.5)
 
-    print(f"\nStep 4: Patching {zip_path} with {len(schedule_records)} schedule records "
-          f"(+ {len(daily_records)} daily fallback records)...")
-    patch_gtfs_zip(zip_path, schedule_records, daily_records, today)
+    print(f"\nStep 4: Parsing Shape records (downloaded {len(shape_records)} shapes)...")
+    tdx_shapes = build_shape_index(shape_records)
+    print(f"Parsed {len(tdx_shapes)} unique Route+Direction shape profiles.")
+
+    print(f"\nStep 5: Patching {zip_path} with {len(schedule_records)} schedule records...")
+    patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, today)
 
 if __name__ == "__main__":
     main()
