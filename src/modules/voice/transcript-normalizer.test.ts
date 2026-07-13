@@ -11,4 +11,9 @@ describe("normalizeVoiceTranscript", () => {
     expect(normalizeVoiceTranscript("帶我去臺北車站，ETA 5 min"))
       .toBe("帶我去臺北車站，ETA 5 min");
   });
+
+  it("converts Mainland vocabulary to Taiwan vocabulary (twp phrase level)", () => {
+    expect(normalizeVoiceTranscript("帮我查网络上的出租车信息"))
+      .toBe("幫我查網路上的計程車資訊");
+  });
 });

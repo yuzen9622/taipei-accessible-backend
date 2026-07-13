@@ -1,6 +1,6 @@
 import OpenCC from "opencc-js";
 
-const toTaiwanTraditional = OpenCC.Converter({ from: "cn", to: "tw" });
+const toTaiwanTraditional = OpenCC.Converter({ from: "cn", to: "twp" });
 
 /**
  * Normalizes Gemini Live transcripts to Taiwan Traditional Chinese without
