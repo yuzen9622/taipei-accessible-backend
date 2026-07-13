@@ -4,7 +4,7 @@ import { sendResponse } from "../../config/lib";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import { verifyAccessToken } from "../../config/jwt";
-import { runToolLoop, toGeminiHistory, type OAIMessage } from "./ai-chat.service";
+import { runChatAgent, toGeminiHistory, type OAIMessage } from "./ai-chat.service";
 import { getMemorySettings, searchMemoriesForPrompt } from "./memory.service";
 import { CHAT_SYSTEM_PROMPT, withUserLocation } from "../../config/ai/chat-prompt";
 import type { IUser } from "../../types";
@@ -118,18 +118,18 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     res.flushHeaders();
 
     try {
-      const loopResult = await runToolLoop(
+      const loopResult = await runChatAgent({
         contents,
         systemInstruction,
         model,
         userLocation,
-        (name, args) => sendSse(res, "tool_call", { name, args }),
-        (name, result) => sendSse(res, "tool_result", { name, result }),
+        onToolCall: (name, args) => sendSse(res, "tool_call", { name, args }),
+        onToolResult: (name, result) => sendSse(res, "tool_result", { name, result }),
         userId,
         memoryToolsEnabled,
         allowMemoryWrite,
         explicitMemoryRequest,
-      );
+      });
 
       sendSse(res, "token", { text: loopResult.text ?? "" });
       res.write("event: done\ndata: done\n\n");
@@ -147,18 +147,16 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   }
 
   try {
-    const loopResult = await runToolLoop(
+    const loopResult = await runChatAgent({
       contents,
       systemInstruction,
       model,
       userLocation,
-      undefined,
-      undefined,
       userId,
       memoryToolsEnabled,
       allowMemoryWrite,
       explicitMemoryRequest,
-    );
+    });
 
     const text = loopResult.text ?? "";
     sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, {

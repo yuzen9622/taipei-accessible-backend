@@ -87,7 +87,7 @@ import * as a11yService from "../a11y/a11y.service";
 import * as campusService from "../campus/campus.service";
 import * as hazardService from "../hazard-report/hazard-report.service";
 import { getEnvironmentInfo as fetchEnvironment } from "../environment/environment.service";
-import { getCoordinates } from "../../adapters/google.adapter";
+import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
 import { googleGenAi } from "../../config/ai";
@@ -117,6 +117,7 @@ import {
 } from "./agent-tools";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<typeof vi.fn>;
+const mockSearchPlaces = searchPlaces as unknown as ReturnType<typeof vi.fn>;
 const mockFetchEnvironment = fetchEnvironment as unknown as ReturnType<typeof vi.fn>;
 const mockCampusFindNearby = campusService.findNearby as unknown as ReturnType<typeof vi.fn>;
 const mockCampusFindAll = campusService.findAll as unknown as ReturnType<typeof vi.fn>;
@@ -141,6 +142,68 @@ const mockUserUpdateOne = User.updateOne as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("findGooglePlaces location fallback", () => {
+  it("uses the session GPS as one coordinate pair when model coordinates are absent", async () => {
+    mockSearchPlaces.mockResolvedValue([]);
+
+    await executeLocalTool(
+      "findGooglePlaces",
+      { query: "火車站" },
+      { latitude: 25.0478, longitude: 121.517 },
+    );
+
+    expect(mockSearchPlaces).toHaveBeenCalledWith("火車站", {
+      latitude: 25.0478,
+      longitude: 121.517,
+      sortByDistance: true,
+    });
+  });
+
+  it("prefers a complete valid model coordinate pair over session GPS", async () => {
+    mockSearchPlaces.mockResolvedValue([]);
+
+    await executeLocalTool(
+      "findGooglePlaces",
+      { query: "捷運站", latitude: 25.1, longitude: 121.6 },
+      { latitude: 24.1, longitude: 120.6 },
+    );
+
+    expect(mockSearchPlaces).toHaveBeenCalledWith("捷運站", {
+      latitude: 25.1,
+      longitude: 121.6,
+      sortByDistance: true,
+    });
+  });
+
+  it("does not mix a partial model coordinate with session GPS", async () => {
+    mockSearchPlaces.mockResolvedValue([]);
+
+    await executeLocalTool(
+      "findGooglePlaces",
+      { query: "火車站", latitude: 25.1 },
+      { latitude: 24.1, longitude: 120.6 },
+    );
+
+    expect(mockSearchPlaces).toHaveBeenCalledWith("火車站", {
+      latitude: 24.1,
+      longitude: 120.6,
+      sortByDistance: true,
+    });
+  });
+
+  it("keeps an unlocated search unlocated when no valid coordinate pair exists", async () => {
+    mockSearchPlaces.mockResolvedValue([]);
+
+    await executeLocalTool("findGooglePlaces", { query: "火車站", latitude: 999 });
+
+    expect(mockSearchPlaces).toHaveBeenCalledWith("火車站", {
+      latitude: undefined,
+      longitude: undefined,
+      sortByDistance: false,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

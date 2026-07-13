@@ -12,7 +12,7 @@ import path from "path";
 import type { Content } from "@google/genai";
 import { model } from "../config/ai";
 import { CHAT_SYSTEM_PROMPT, withUserLocation } from "../config/ai/chat-prompt";
-import { routeOnce, runToolLoop } from "../modules/ai/ai-chat.service";
+import { routeOnce, runToolLoop } from "../modules/agent/agent-manager.service";
 import { agentCases, type AgentCase } from "./agent-cases";
 
 const N = Number(process.env.EVAL_RUNS ?? 3);

@@ -2,18 +2,52 @@ import { WebSocket } from "ws";
 import {
   FunctionCall,
   FunctionResponse,
+  LiveConnectConfig,
   LiveServerMessage,
   Modality,
   Session,
 } from "@google/genai";
 import { googleGenAi } from "../../config/ai";
-import { buildGeminiTools } from "../ai/ai-chat.service";
+import { AGENT_TEMPERATURE } from "../../config/ai/config";
+import { buildGeminiTools } from "../agent/tool-catalog";
 import { executeLocalTool } from "../ai/agent-tools";
 import { buildVoiceSystemPrompt } from "./voice-prompt";
+import { normalizeVoiceTranscript } from "./transcript-normalizer";
 
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const ERROR_SUMMARY_MAX_CHARS = 200;
 const INPUT_AUDIO_MIME_TYPE = "audio/pcm;rate=16000";
+
+/**
+ * Resolves the Live session sampling temperature. Defaults to the shared
+ * AGENT_TEMPERATURE (0, matching the text agent) and falls back to it for
+ * empty, non-numeric, or out-of-range GEMINI_LIVE_TEMPERATURE values so a bad
+ * env can never send NaN into the Live connect call.
+ *
+ * @returns A finite temperature in [0, 2].
+ */
+function parseLiveTemperature(): number {
+  const raw = process.env.GEMINI_LIVE_TEMPERATURE;
+  if (raw == null || raw.trim() === "") return AGENT_TEMPERATURE;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 2) return AGENT_TEMPERATURE;
+  return n;
+}
+
+/**
+ * Resolves an optional output-synthesis language code from
+ * GEMINI_LIVE_LANGUAGE_CODE. Returns undefined when unset or when the value
+ * fails a coarse BCP-47 format check, so a typo degrades to "no speechConfig"
+ * (current behavior) rather than a runtime Live connect failure.
+ *
+ * @returns A validated language code, or undefined to omit speechConfig.
+ */
+function parseLiveLanguageCode(): string | undefined {
+  const raw = process.env.GEMINI_LIVE_LANGUAGE_CODE?.trim();
+  if (!raw) return undefined;
+  if (!/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,4})*$/.test(raw)) return undefined;
+  return raw;
+}
 
 export interface LiveBridgeOptions {
   ws: WebSocket;
@@ -164,10 +198,18 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
         if (part.inlineData?.data) forwardAudio(part.inlineData.data);
       }
       if (content.inputTranscription?.text) {
-        sendJson({ type: "transcript", role: "user", text: content.inputTranscription.text });
+        sendJson({
+          type: "transcript",
+          role: "user",
+          text: normalizeVoiceTranscript(content.inputTranscription.text),
+        });
       }
       if (content.outputTranscription?.text) {
-        sendJson({ type: "transcript", role: "model", text: content.outputTranscription.text });
+        sendJson({
+          type: "transcript",
+          role: "model",
+          text: normalizeVoiceTranscript(content.outputTranscription.text),
+        });
       }
       if (content.interrupted) sendJson({ type: "interrupted" });
       if (content.turnComplete) sendJson({ type: "turn.complete" });
@@ -181,15 +223,20 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
     }
   };
 
+  const liveConfig: LiveConnectConfig = {
+    responseModalities: [Modality.AUDIO],
+    inputAudioTranscription: {},
+    outputAudioTranscription: {},
+    systemInstruction: buildVoiceSystemPrompt(userLocation),
+    tools: buildGeminiTools(userId, false),
+    temperature: parseLiveTemperature(),
+  };
+  const languageCode = parseLiveLanguageCode();
+  if (languageCode) liveConfig.speechConfig = { languageCode };
+
   session = await googleGenAi.live.connect({
     model: process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview",
-    config: {
-      responseModalities: [Modality.AUDIO],
-      inputAudioTranscription: {},
-      outputAudioTranscription: {},
-      systemInstruction: buildVoiceSystemPrompt(userLocation),
-      tools: buildGeminiTools(userId, false),
-    },
+    config: liveConfig,
     callbacks: {
       onmessage: (message: LiveServerMessage) => {
         handleServerMessage(message).catch((err) => {

@@ -7,6 +7,12 @@ import {
   GenerateContentConfig,
   FunctionCallingConfigMode,
 } from "@google/genai";
+
+/**
+ * Deterministic sampling temperature shared by the text agent's tool loop and
+ * the voice Live session, so both surfaces route tools with the same rigor.
+ */
+export const AGENT_TEMPERATURE = 0;
 const agentConfig: GenerateContentConfig = {
   tools: [
     {

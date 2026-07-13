@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
 vi.mock("./ai-chat.service", () => ({
-  runToolLoop: vi.fn(),
+  runChatAgent: vi.fn(),
   toGeminiHistory: vi.fn(() => ({ systemInstruction: undefined, contents: [] })),
 }));
 
 import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import { googleGenAi } from "../../config/ai";
-import { runToolLoop } from "./ai-chat.service";
+import { runChatAgent } from "./ai-chat.service";
 
 const app = buildTestApp();
 const URL = "/api/v1/ai/chat";
@@ -17,9 +17,9 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("POST /api/v1/ai/chat 不再走舊 fallback，直接用 runToolLoop 的文字", () => {
+describe("POST /api/v1/ai/chat 不再走舊 fallback，直接用 runChatAgent 的文字", () => {
   it("T4：non-streaming 回傳 loopResult.text，且不呼叫 fallback generateContent", async () => {
-    vi.mocked(runToolLoop).mockResolvedValue({ text: "測試答案" });
+    vi.mocked(runChatAgent).mockResolvedValue({ text: "測試答案" });
     const genSpy = vi.spyOn(googleGenAi.models, "generateContent");
 
     const res = await request(app)
@@ -32,7 +32,7 @@ describe("POST /api/v1/ai/chat 不再走舊 fallback，直接用 runToolLoop 的
   });
 
   it("T5：streaming 送 event: token + event: done，且不呼叫 fallback generateContentStream", async () => {
-    vi.mocked(runToolLoop).mockResolvedValue({ text: "串流答案" });
+    vi.mocked(runChatAgent).mockResolvedValue({ text: "串流答案" });
     const streamSpy = vi.spyOn(googleGenAi.models, "generateContentStream");
 
     const res = await request(app)

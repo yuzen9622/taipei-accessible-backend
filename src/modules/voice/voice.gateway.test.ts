@@ -10,6 +10,9 @@ vi.mock("./live-bridge", () => ({
 
 import app from "../../app";
 import { attachVoiceWebSocket } from "./voice.gateway";
+import { createLiveBridge } from "./live-bridge";
+
+const mockCreateLiveBridge = createLiveBridge as unknown as ReturnType<typeof vi.fn>;
 
 const AUTH_TIMEOUT_MS = 300;
 
@@ -86,8 +89,12 @@ function waitForJson(ws: WebSocket): Promise<Record<string, unknown>> {
  * @param ws The open WebSocket client.
  * @param userId The user to authenticate as.
  */
-function sendSessionStart(ws: WebSocket, userId: string): void {
-  ws.send(JSON.stringify({ type: "session.start", token: signToken(userId) }));
+function sendSessionStart(
+  ws: WebSocket,
+  userId: string,
+  userLocation?: { latitude: number; longitude: number },
+): void {
+  ws.send(JSON.stringify({ type: "session.start", token: signToken(userId), userLocation }));
 }
 
 beforeAll(async () => {
@@ -140,6 +147,30 @@ describe("voice gateway", () => {
     const message = await ready;
     expect(message).toEqual({ type: "session.ready" });
     expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("forwards a valid GPS pair to the Live bridge", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-location", { latitude: 25.0478, longitude: 121.517 });
+    await ready;
+
+    expect(mockCreateLiveBridge).toHaveBeenCalledWith(expect.objectContaining({
+      userLocation: { latitude: 25.0478, longitude: 121.517 },
+    }));
+  });
+
+  it("drops an out-of-range GPS pair before creating the Live bridge", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-invalid-location", { latitude: 999, longitude: 121.517 });
+    await ready;
+
+    expect(mockCreateLiveBridge).toHaveBeenCalledWith(expect.objectContaining({
+      userLocation: undefined,
+    }));
   });
 
   it("closes the first connection with 4409 when the same user reconnects", async () => {
