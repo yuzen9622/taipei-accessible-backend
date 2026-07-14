@@ -1,9 +1,11 @@
 import { Router } from "express";
 import {
-  getA11yData,
+  getAllFacilities,
+  getBathrooms,
+  getRamps,
+  getElevators,
   nearbyA11y,
   nearbyParking,
-  getBathroomData,
   getA11yPlace,
 } from "./a11y.controller";
 import { validateRequest } from "../../middleware/validate-request.middleware";
@@ -15,8 +17,10 @@ import {
 
 export function createA11yRouter(): Router {
   const router = Router();
-  router.get("/all-places", getA11yData);
-  router.get("/all-bathrooms", getBathroomData);
+  router.get("/all-facilities", getAllFacilities);
+  router.get("/all-bathrooms", getBathrooms);
+  router.get("/all-ramps", getRamps);
+  router.get("/all-elevators", getElevators);
   router.get("/nearby-a11y", validateRequest({ query: NearbyA11yQuerySchema }), nearbyA11y);
   router.get("/parking/nearby", validateRequest({ query: ParkingNearbyQuerySchema }), nearbyParking);
   router.get("/place", validateRequest({ query: A11yPlaceQuerySchema }), getA11yPlace);

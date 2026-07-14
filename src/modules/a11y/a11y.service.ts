@@ -2,7 +2,7 @@ import A11y from "../../model/a11y.model";
 import BathroomModel from "../../model/bathroom.model";
 import OsmA11y from "../../model/osm-a11y.model";
 import DisabledParkingModel from "../../model/disabled-parking.model";
-import { IA11y, IOsmA11y } from "../../types";
+import { IA11y, IOsmA11y, IBathroom, IDisabledParking } from "../../types";
 import * as campusService from "../campus/campus.service";
 import type { CampusFacilityPlace } from "../campus/campus.service";
 
@@ -24,6 +24,9 @@ const OSM_STRUCTURE_CATEGORIES: readonly string[] = ["elevator", "ramp"];
 const OSM_CATEGORY_FALLBACK_NAME: Record<string, string> = {
   elevator: "無障礙電梯",
   ramp: "無障礙坡道",
+  toilet: "無障礙廁所",
+  kerb_cut: "路緣斜坡",
+  wheelchair_accessible: "無障礙設施",
 };
 
 /**
@@ -89,21 +92,256 @@ function makeGeoQuery(lng: number, lat: number, radiusM: number) {
   };
 }
 
-export async function findAll(): Promise<A11yPlace[]> {
-  const [metro, osm, campusFacilities] = await Promise.all([
-    A11y.find().lean(),
-    OsmA11y.find({ category: { $in: OSM_STRUCTURE_CATEGORIES } }).lean(),
-    campusService.findAllFacilities(),
-  ]);
-  return mergeA11yPlaces(
-    metro,
-    osm as IOsmA11y[],
-    campusFacilities.map(campusToA11yPlace)
-  );
+export type A11ySource = "metro" | "osm" | "campus" | "bathroom" | "parking";
+export type A11yCategory = "elevator" | "ramp" | "toilet" | "parking" | "other";
+type A11yGeoPoint = { type: "Point"; coordinates: [number, number] };
+
+interface A11yFacilityBase {
+  _id: string;
+  name: string;
+  location: A11yGeoPoint;
+  category: A11yCategory;
 }
 
-export async function findAllBathrooms() {
-  return BathroomModel.find({ type: "無障礙廁所" });
+/**
+ * A single accessibility facility in the unified, normalized public shape,
+ * discriminated by `source`. Every source guarantees its own fixed fields:
+ * metro carries `exitName`, OSM carries `osmId`/`wheelchair`, campus carries
+ * `schoolName`; bathroom and parking add nothing beyond the base.
+ */
+export type A11yFacility =
+  | (A11yFacilityBase & { source: "metro"; exitName: string | null })
+  | (A11yFacilityBase & {
+      source: "osm";
+      osmId: string;
+      wheelchair: "yes" | "limited" | "no" | null;
+    })
+  | (A11yFacilityBase & { source: "campus"; schoolName: string })
+  | (A11yFacilityBase & { source: "bathroom" })
+  | (A11yFacilityBase & { source: "parking" });
+
+const A11Y_MAX_RESULTS = 20000;
+
+function idOf(doc: unknown): string {
+  return String((doc as { _id?: unknown })._id);
+}
+
+/**
+ * Classifies a metro facility by its combined name string. Elevator takes
+ * precedence over ramp so a "電梯及坡道" entry lands in exactly one bucket and
+ * never appears under both the ramp and elevator routes.
+ * @param name the metro `出入口電梯/無障礙坡道名稱` value
+ * @returns the resolved facility category
+ */
+function classifyMetroCategory(name: string): A11yCategory {
+  if (name.includes("電梯")) return "elevator";
+  if (name.includes("坡道")) return "ramp";
+  return "other";
+}
+
+/**
+ * Best-effort extraction of a metro exit identifier from the facility name.
+ * @param name the metro facility name string
+ * @returns the exit token (e.g. "M8", "3") or null when none can be parsed
+ */
+function extractMetroExitName(name: string): string | null {
+  const patterns = [
+    /([A-Za-z]\d+)\s*號?出/,
+    /\b([A-Za-z]\d+)\b/,
+    /出口\s*(\d+)/,
+    /(\d+)\s*號出口/,
+  ];
+  for (const pattern of patterns) {
+    const match = name.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+function mapOsmCategory(category: IOsmA11y["category"]): A11yCategory {
+  if (category === "elevator" || category === "ramp" || category === "toilet") {
+    return category;
+  }
+  return "other";
+}
+
+function mapCampusCategory(code?: string): A11yCategory {
+  switch (code) {
+    case "ramp":
+      return "ramp";
+    case "elevator":
+      return "elevator";
+    case "accessible_toilet":
+      return "toilet";
+    case "accessible_parking":
+    case "accessible_motorcycle_parking":
+      return "parking";
+    default:
+      return "other";
+  }
+}
+
+function metroToFacility(doc: IA11y): A11yFacility {
+  const name = doc["出入口電梯/無障礙坡道名稱"];
+  return {
+    _id: idOf(doc),
+    name,
+    location: doc.location,
+    category: classifyMetroCategory(name),
+    source: "metro",
+    exitName: extractMetroExitName(name),
+  };
+}
+
+function osmToFacility(doc: IOsmA11y): A11yFacility {
+  return {
+    _id: idOf(doc),
+    name: doc.name ?? OSM_CATEGORY_FALLBACK_NAME[doc.category] ?? doc.category,
+    location: doc.location,
+    category: mapOsmCategory(doc.category),
+    source: "osm",
+    osmId: doc.osmId,
+    wheelchair: doc.wheelchair ?? null,
+  };
+}
+
+function campusToFacility(f: CampusFacilityPlace): A11yFacility {
+  return {
+    _id: f.facUid,
+    name: f.name ?? f.facType ?? "校園無障礙設施",
+    location: f.location,
+    category: mapCampusCategory(f.type),
+    source: "campus",
+    schoolName: f.schoolName,
+  };
+}
+
+function bathroomToFacility(doc: IBathroom): A11yFacility {
+  return {
+    _id: idOf(doc),
+    name: doc.name,
+    location: doc.location,
+    category: "toilet",
+    source: "bathroom",
+  };
+}
+
+function parkingToFacility(doc: IDisabledParking): A11yFacility {
+  return {
+    _id: idOf(doc),
+    name: doc.placeName,
+    location: doc.location,
+    category: "parking",
+    source: "parking",
+  };
+}
+
+/**
+ * All accessibility facilities across every source, normalized into one shape.
+ * Each source query is capped at A11Y_MAX_RESULTS with a stable `_id` sort so a
+ * dataset that ever exceeds the cap still returns a deterministic subset.
+ */
+export async function findAllFacilities(): Promise<A11yFacility[]> {
+  const [metro, osm, campus, bathroom, parking] = await Promise.all([
+    A11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean(),
+    OsmA11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean(),
+    campusService.findAllFacilities(),
+    BathroomModel.find({ type: "無障礙廁所" })
+      .sort({ _id: 1 })
+      .limit(A11Y_MAX_RESULTS)
+      .lean(),
+    DisabledParkingModel.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean(),
+  ]);
+  return [
+    ...metro.map(metroToFacility),
+    ...osm.map(osmToFacility),
+    ...campus.slice(0, A11Y_MAX_RESULTS).map(campusToFacility),
+    ...bathroom.map(bathroomToFacility),
+    ...parking.map(parkingToFacility),
+  ];
+}
+
+/**
+ * Elevator facilities only: metro names containing 電梯, OSM `elevator`, and
+ * campus facilities whose resolved type code is `elevator`.
+ */
+export async function findElevatorFacilities(): Promise<A11yFacility[]> {
+  const [metro, osm, campus] = await Promise.all([
+    A11y.find({ "出入口電梯/無障礙坡道名稱": { $regex: "電梯" } })
+      .sort({ _id: 1 })
+      .limit(A11Y_MAX_RESULTS)
+      .lean(),
+    OsmA11y.find({ category: "elevator" })
+      .sort({ _id: 1 })
+      .limit(A11Y_MAX_RESULTS)
+      .lean(),
+    campusService.findAllFacilities(),
+  ]);
+  return [
+    ...metro.map(metroToFacility),
+    ...osm.map(osmToFacility),
+    ...campus
+      .filter((f) => f.type === "elevator")
+      .slice(0, A11Y_MAX_RESULTS)
+      .map(campusToFacility),
+  ];
+}
+
+/**
+ * Ramp facilities only: metro names containing 坡道 but NOT 電梯 (mutually
+ * exclusive with the elevator route), OSM `ramp`, and campus `ramp`.
+ */
+export async function findRampFacilities(): Promise<A11yFacility[]> {
+  const [metro, osm, campus] = await Promise.all([
+    A11y.find({
+      $and: [
+        { "出入口電梯/無障礙坡道名稱": { $regex: "坡道" } },
+        { "出入口電梯/無障礙坡道名稱": { $not: /電梯/ } },
+      ],
+    })
+      .sort({ _id: 1 })
+      .limit(A11Y_MAX_RESULTS)
+      .lean(),
+    OsmA11y.find({ category: "ramp" })
+      .sort({ _id: 1 })
+      .limit(A11Y_MAX_RESULTS)
+      .lean(),
+    campusService.findAllFacilities(),
+  ]);
+  return [
+    ...metro.map(metroToFacility),
+    ...osm.map(osmToFacility),
+    ...campus
+      .filter((f) => f.type === "ramp")
+      .slice(0, A11Y_MAX_RESULTS)
+      .map(campusToFacility),
+  ];
+}
+
+/**
+ * Accessible bathroom facilities: the bathroom collection, OSM `toilet`, and
+ * campus `accessible_toilet`. Metro has no bathroom data.
+ */
+export async function findBathroomFacilities(): Promise<A11yFacility[]> {
+  const [bathroom, osm, campus] = await Promise.all([
+    BathroomModel.find({ type: "無障礙廁所" })
+      .sort({ _id: 1 })
+      .limit(A11Y_MAX_RESULTS)
+      .lean(),
+    OsmA11y.find({ category: "toilet" })
+      .sort({ _id: 1 })
+      .limit(A11Y_MAX_RESULTS)
+      .lean(),
+    campusService.findAllFacilities(),
+  ]);
+  return [
+    ...bathroom.map(bathroomToFacility),
+    ...osm.map(osmToFacility),
+    ...campus
+      .filter((f) => f.type === "accessible_toilet")
+      .slice(0, A11Y_MAX_RESULTS)
+      .map(campusToFacility),
+  ];
 }
 
 export async function findNearbyParking(lat: number, lng: number, radiusM = 300) {

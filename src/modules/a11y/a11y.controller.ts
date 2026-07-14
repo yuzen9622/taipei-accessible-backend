@@ -4,19 +4,41 @@ import { ApiResponse } from "../../types/response";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import * as a11yService from "./a11y.service";
-import type { A11yPlace } from "./a11y.service";
+import type { A11yFacility } from "./a11y.service";
 
-async function getA11yData(req: Request, res: Response<ApiResponse<A11yPlace[]>>) {
-  const a11y = await a11yService.findAll();
-  return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, a11y);
+async function getAllFacilities(req: Request, res: Response<ApiResponse<A11yFacility[]>>) {
+  try {
+    const data = await a11yService.findAllFacilities();
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+  }
 }
 
-async function getBathroomData(req: Request, res: Response<ApiResponse<any>>) {
+async function getBathrooms(req: Request, res: Response<ApiResponse<A11yFacility[]>>) {
   try {
-    const bathroom = await a11yService.findAllBathrooms();
-    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, bathroom);
-  } catch (error) {
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, (error as string) || ERROR_MESSAGE.INTERNAL);
+    const data = await a11yService.findBathroomFacilities();
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+  }
+}
+
+async function getRamps(req: Request, res: Response<ApiResponse<A11yFacility[]>>) {
+  try {
+    const data = await a11yService.findRampFacilities();
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+  }
+}
+
+async function getElevators(req: Request, res: Response<ApiResponse<A11yFacility[]>>) {
+  try {
+    const data = await a11yService.findElevatorFacilities();
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
   }
 }
 
@@ -62,4 +84,12 @@ async function nearbyParking(req: Request, res: Response<ApiResponse<any>>) {
   }
 }
 
-export { getA11yData, nearbyA11y, nearbyParking, getBathroomData, getA11yPlace };
+export {
+  getAllFacilities,
+  getBathrooms,
+  getRamps,
+  getElevators,
+  nearbyA11y,
+  nearbyParking,
+  getA11yPlace,
+};

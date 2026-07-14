@@ -83,6 +83,72 @@ export const A11ySchema = z
   })
   .openapi("A11y");
 
+const A11yCategoryEnum = z
+  .enum(["elevator", "ramp", "toilet", "parking", "other"])
+  .openapi({ example: "elevator" });
+
+export const A11yFacilitySchema = z
+  .discriminatedUnion("source", [
+    z
+      .object({
+        _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0a1" }),
+        name: z.string().openapi({ example: "台北車站 M8 出口電梯" }),
+        location: GeoPointSchema,
+        category: A11yCategoryEnum,
+        source: z.literal("metro"),
+        exitName: z
+          .string()
+          .nullable()
+          .openapi({ example: "M8", description: "出口代號，無法解析時為 null" }),
+      })
+      .strict(),
+    z
+      .object({
+        _id: z.string(),
+        name: z.string().openapi({ example: "無障礙坡道" }),
+        location: GeoPointSchema,
+        category: A11yCategoryEnum,
+        source: z.literal("osm"),
+        osmId: z
+          .string()
+          .openapi({ example: "12342946149", description: "可用於 /a11y/place 查詳情" }),
+        wheelchair: z
+          .enum(["yes", "limited", "no"])
+          .nullable()
+          .openapi({ example: "yes" }),
+      })
+      .strict(),
+    z
+      .object({
+        _id: z.string(),
+        name: z.string().openapi({ example: "無障礙電梯" }),
+        location: GeoPointSchema,
+        category: A11yCategoryEnum,
+        source: z.literal("campus"),
+        schoolName: z.string().openapi({ example: "國立臺北科技大學" }),
+      })
+      .strict(),
+    z
+      .object({
+        _id: z.string(),
+        name: z.string().openapi({ example: "台北車站無障礙廁所" }),
+        location: GeoPointSchema,
+        category: A11yCategoryEnum,
+        source: z.literal("bathroom"),
+      })
+      .strict(),
+    z
+      .object({
+        _id: z.string(),
+        name: z.string().openapi({ example: "商港八路身障停車格" }),
+        location: GeoPointSchema,
+        category: A11yCategoryEnum,
+        source: z.literal("parking"),
+      })
+      .strict(),
+  ])
+  .openapi("A11yFacility");
+
 export const BathroomSchema = z
   .object({
     _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0b2" }),
@@ -154,14 +220,24 @@ const ApiResponseSchema = <T extends z.ZodTypeAny>(
     })
     .openapi(refName);
 
-export const AllPlacesResponseSchema = ApiResponseSchema(
-  z.array(A11ySchema),
-  "AllPlacesResponse"
+export const AllFacilitiesResponseSchema = ApiResponseSchema(
+  z.array(A11yFacilitySchema),
+  "AllFacilitiesResponse"
 );
 
 export const AllBathroomsResponseSchema = ApiResponseSchema(
-  z.array(BathroomSchema),
+  z.array(A11yFacilitySchema),
   "AllBathroomsResponse"
+);
+
+export const AllRampsResponseSchema = ApiResponseSchema(
+  z.array(A11yFacilitySchema),
+  "AllRampsResponse"
+);
+
+export const AllElevatorsResponseSchema = ApiResponseSchema(
+  z.array(A11yFacilitySchema),
+  "AllElevatorsResponse"
 );
 
 export const NearbyA11yDataSchema = z
@@ -180,15 +256,15 @@ export const NearbyA11yResponseSchema = ApiResponseSchema(
 
 registry.registerPath({
   method: "get",
-  path: "/a11y/all-places",
+  path: "/a11y/all-facilities",
   tags: ["Accessibility"],
-  summary: "所有無障礙地點",
+  summary: "所有無障礙設施",
   description:
-    "回傳資料庫中所有無障礙電梯與坡道資料（北捷官方＋OSM，統一形狀，source 欄位區分來源），不分頁。",
+    "回傳所有無障礙設施（捷運、OSM、校園、廁所、身障停車格聯集），統一正規化形狀，每筆以 source 區分來源、category 區分類別，不分頁。",
   responses: {
     200: {
-      description: "無障礙地點清單",
-      content: { "application/json": { schema: AllPlacesResponseSchema } },
+      description: "無障礙設施清單",
+      content: { "application/json": { schema: AllFacilitiesResponseSchema } },
     },
     500: { description: "伺服器錯誤" },
   },
@@ -199,11 +275,44 @@ registry.registerPath({
   path: "/a11y/all-bathrooms",
   tags: ["Accessibility"],
   summary: "所有無障礙廁所",
-  description: "回傳資料庫中所有無障礙廁所資料，不分頁。",
+  description:
+    "回傳所有無障礙廁所（廁所資料庫＋OSM toilet＋校園無障礙廁所），統一正規化形狀，不分頁。",
   responses: {
     200: {
       description: "無障礙廁所清單",
       content: { "application/json": { schema: AllBathroomsResponseSchema } },
+    },
+    500: { description: "伺服器錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/all-ramps",
+  tags: ["Accessibility"],
+  summary: "所有無障礙坡道",
+  description:
+    "回傳所有無障礙坡道（捷運坡道＋OSM ramp＋校園坡道），統一正規化形狀，不分頁。",
+  responses: {
+    200: {
+      description: "無障礙坡道清單",
+      content: { "application/json": { schema: AllRampsResponseSchema } },
+    },
+    500: { description: "伺服器錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/all-elevators",
+  tags: ["Accessibility"],
+  summary: "所有無障礙電梯",
+  description:
+    "回傳所有無障礙電梯（捷運電梯＋OSM elevator＋校園電梯），統一正規化形狀，不分頁。",
+  responses: {
+    200: {
+      description: "無障礙電梯清單",
+      content: { "application/json": { schema: AllElevatorsResponseSchema } },
     },
     500: { description: "伺服器錯誤" },
   },

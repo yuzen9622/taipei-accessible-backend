@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IA11y, IOsmA11y } from "../../types";
 import type { CampusFacilityPlace } from "../campus/campus.service";
 import {
@@ -142,5 +142,293 @@ describe("campusToA11yPlace", () => {
       makeCampusFacility({ name: undefined, facType: undefined })
     );
     expect(generic["出入口電梯/無障礙坡道名稱"]).toBe("校園無障礙設施");
+  });
+});
+
+vi.mock("../../model/a11y.model", () => ({ default: { find: vi.fn() } }));
+vi.mock("../../model/osm-a11y.model", () => ({ default: { find: vi.fn() } }));
+vi.mock("../../model/bathroom.model", () => ({ default: { find: vi.fn() } }));
+vi.mock("../../model/disabled-parking.model", () => ({
+  default: { find: vi.fn() },
+}));
+vi.mock("../campus/campus.service", () => ({
+  findAllFacilities: vi.fn(),
+  findFacilitiesNearby: vi.fn(),
+}));
+
+import A11y from "../../model/a11y.model";
+import OsmA11y from "../../model/osm-a11y.model";
+import BathroomModel from "../../model/bathroom.model";
+import DisabledParkingModel from "../../model/disabled-parking.model";
+import * as campusService from "../campus/campus.service";
+import {
+  findAllFacilities,
+  findBathroomFacilities,
+  findElevatorFacilities,
+  findRampFacilities,
+} from "./a11y.service";
+import { A11yFacilitySchema } from "./a11y.schema";
+
+const GEO = { type: "Point" as const, coordinates: [121.5, 25.03] as [number, number] };
+
+/**
+ * Builds a chainable Mongoose-query stub whose `.sort().limit().lean()` resolves
+ * to `docs`, exposing each hop as a vi spy so callers can assert invocation.
+ */
+function makeChain(docs: unknown[]) {
+  const lean = vi.fn().mockResolvedValue(docs);
+  const limit = vi.fn().mockReturnValue({ lean });
+  const sort = vi.fn().mockReturnValue({ limit });
+  return { sort, limit, lean };
+}
+
+function metroDoc(id: string, name: string) {
+  return { _id: id, 項次: id, "出入口電梯/無障礙坡道名稱": name, location: GEO };
+}
+
+function osmDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: "osm-doc",
+    osmId: "o1",
+    name: "市府轉運站電梯",
+    category: "elevator",
+    wheelchair: "yes",
+    tags: { highway: "elevator" },
+    location: GEO,
+    importedAt: new Date("2026-06-01T00:00:00Z"),
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.mocked(A11y.find).mockReturnValue(makeChain([]) as never);
+  vi.mocked(OsmA11y.find).mockReturnValue(makeChain([]) as never);
+  vi.mocked(BathroomModel.find).mockReturnValue(makeChain([]) as never);
+  vi.mocked(DisabledParkingModel.find).mockReturnValue(makeChain([]) as never);
+  vi.mocked(campusService.findAllFacilities).mockResolvedValue([]);
+});
+
+describe("findAllFacilities", () => {
+  it("returns items from all five sources with correct source-specific fields", async () => {
+    vi.mocked(A11y.find).mockReturnValue(
+      makeChain([
+        metroDoc("m1", "台北車站 M8 出口電梯"),
+        metroDoc("m2", "市府轉運站電梯"),
+        metroDoc("m3", "xx無障礙坡道"),
+      ]) as never
+    );
+    vi.mocked(OsmA11y.find).mockReturnValue(
+      makeChain([
+        osmDoc({ _id: "od1", osmId: "o1" }),
+        osmDoc({
+          _id: "od2",
+          osmId: "o2",
+          name: undefined,
+          category: "toilet",
+          wheelchair: undefined,
+          tags: {},
+        }),
+      ]) as never
+    );
+    vi.mocked(BathroomModel.find).mockReturnValue(
+      makeChain([{ _id: "b1", name: "台北車站無障礙廁所", location: GEO, type: "無障礙廁所" }]) as never
+    );
+    vi.mocked(DisabledParkingModel.find).mockReturnValue(
+      makeChain([{ _id: "p1", placeName: "商港八路身障停車格", location: GEO }]) as never
+    );
+    vi.mocked(campusService.findAllFacilities).mockResolvedValue([
+      makeCampusFacility({ facUid: "c1", type: "elevator" }),
+    ]);
+
+    const result = await findAllFacilities();
+
+    const sources = result.map((f) => f.source);
+    expect(new Set(sources)).toEqual(
+      new Set(["metro", "osm", "campus", "bathroom", "parking"])
+    );
+    for (const f of result) {
+      expect(f._id).toBeTypeOf("string");
+      expect(f.name).toBeTypeOf("string");
+      expect(f.location).toMatchObject({ type: "Point" });
+      expect(f.category).toBeTypeOf("string");
+    }
+
+    const metroItems = result.filter((f) => f.source === "metro");
+    expect(metroItems).toHaveLength(3);
+    for (const m of metroItems) expect("exitName" in m).toBe(true);
+
+    const osmItems = result.filter((f) => f.source === "osm");
+    for (const o of osmItems) {
+      expect(o).toHaveProperty("osmId");
+      expect(o).toHaveProperty("wheelchair");
+    }
+
+    const campusItem = result.find((f) => f.source === "campus");
+    expect(campusItem).toMatchObject({ source: "campus", schoolName: expect.any(String) });
+  });
+
+  it("classifies metro facilities and extracts exit names", async () => {
+    vi.mocked(A11y.find).mockReturnValue(
+      makeChain([
+        metroDoc("m1", "台北車站 M8 出口電梯"),
+        metroDoc("m2", "市府轉運站電梯"),
+        metroDoc("m3", "xx無障礙坡道"),
+      ]) as never
+    );
+
+    const result = await findAllFacilities();
+    const [m1, m2, m3] = result;
+    expect(m1).toMatchObject({ source: "metro", category: "elevator", exitName: "M8" });
+    expect(m2).toMatchObject({ source: "metro", category: "elevator", exitName: null });
+    expect(m3).toMatchObject({ source: "metro", category: "ramp" });
+  });
+
+  it("normalizes missing OSM wheelchair to null and falls back to a Chinese name for unnamed toilets", async () => {
+    vi.mocked(OsmA11y.find).mockReturnValue(
+      makeChain([
+        osmDoc({
+          _id: "od2",
+          osmId: "o2",
+          name: undefined,
+          category: "toilet",
+          wheelchair: undefined,
+          tags: {},
+        }),
+      ]) as never
+    );
+
+    const [toilet] = await findAllFacilities();
+    expect(toilet).toMatchObject({
+      source: "osm",
+      osmId: "o2",
+      wheelchair: null,
+      name: "無障礙廁所",
+    });
+  });
+
+  it("sorts and limits each model query", async () => {
+    const metroChain = makeChain([]);
+    vi.mocked(A11y.find).mockReturnValue(metroChain as never);
+
+    await findAllFacilities();
+
+    expect(vi.mocked(A11y.find)).toHaveBeenCalled();
+    expect(metroChain.sort).toHaveBeenCalled();
+    expect(metroChain.limit).toHaveBeenCalled();
+  });
+});
+
+describe("findElevatorFacilities", () => {
+  it("returns only elevator-category items and campus facilities of type elevator", async () => {
+    vi.mocked(A11y.find).mockReturnValue(
+      makeChain([metroDoc("m1", "台北車站 M8 出口電梯")]) as never
+    );
+    vi.mocked(OsmA11y.find).mockReturnValue(
+      makeChain([osmDoc({ _id: "od1", osmId: "o1", category: "elevator" })]) as never
+    );
+    vi.mocked(campusService.findAllFacilities).mockResolvedValue([
+      makeCampusFacility({ facUid: "c1", type: "elevator" }),
+      makeCampusFacility({ facUid: "c2", type: "ramp" }),
+      makeCampusFacility({ facUid: "c3", type: "accessible_toilet" }),
+    ]);
+
+    const result = await findElevatorFacilities();
+    expect(result.every((f) => f.category === "elevator")).toBe(true);
+    const campusItems = result.filter((f) => f.source === "campus");
+    expect(campusItems).toHaveLength(1);
+    expect(campusItems[0]._id).toBe("c1");
+  });
+});
+
+describe("findRampFacilities", () => {
+  it("returns campus ramps and OSM ramps only", async () => {
+    vi.mocked(A11y.find).mockReturnValue(
+      makeChain([metroDoc("m3", "xx無障礙坡道")]) as never
+    );
+    vi.mocked(OsmA11y.find).mockReturnValue(
+      makeChain([osmDoc({ _id: "od1", osmId: "o1", category: "ramp", name: "無障礙坡道" })]) as never
+    );
+    vi.mocked(campusService.findAllFacilities).mockResolvedValue([
+      makeCampusFacility({ facUid: "c1", type: "elevator" }),
+      makeCampusFacility({ facUid: "c2", type: "ramp" }),
+    ]);
+
+    const result = await findRampFacilities();
+    const campusItems = result.filter((f) => f.source === "campus");
+    expect(campusItems).toHaveLength(1);
+    expect(campusItems[0]._id).toBe("c2");
+    const osmItems = result.filter((f) => f.source === "osm");
+    expect(osmItems.every((f) => f.category === "ramp")).toBe(true);
+  });
+});
+
+describe("findBathroomFacilities", () => {
+  it("returns toilet-category items across bathroom, OSM and campus sources", async () => {
+    vi.mocked(BathroomModel.find).mockReturnValue(
+      makeChain([{ _id: "b1", name: "台北車站無障礙廁所", location: GEO, type: "無障礙廁所" }]) as never
+    );
+    vi.mocked(OsmA11y.find).mockReturnValue(
+      makeChain([osmDoc({ _id: "od1", osmId: "o1", category: "toilet", name: undefined, tags: {} })]) as never
+    );
+    vi.mocked(campusService.findAllFacilities).mockResolvedValue([
+      makeCampusFacility({ facUid: "c1", type: "accessible_toilet" }),
+      makeCampusFacility({ facUid: "c2", type: "elevator" }),
+    ]);
+
+    const result = await findBathroomFacilities();
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.every((f) => f.category === "toilet")).toBe(true);
+
+    const bathroomItem = result.find((f) => f.source === "bathroom");
+    expect(bathroomItem).toMatchObject({ category: "toilet", name: "台北車站無障礙廁所" });
+
+    const campusItems = result.filter((f) => f.source === "campus");
+    expect(campusItems).toHaveLength(1);
+    expect(campusItems[0]._id).toBe("c1");
+  });
+});
+
+describe("A11yFacilitySchema", () => {
+  const geo = { type: "Point", coordinates: [121.5, 25.03] };
+
+  it("accepts a valid sample of each source", () => {
+    const samples = [
+      { _id: "1", name: "電梯", location: geo, category: "elevator", source: "metro", exitName: "M8" },
+      { _id: "2", name: "坡道", location: geo, category: "ramp", source: "osm", osmId: "o1", wheelchair: "yes" },
+      { _id: "3", name: "電梯", location: geo, category: "elevator", source: "campus", schoolName: "北科大" },
+      { _id: "4", name: "廁所", location: geo, category: "toilet", source: "bathroom" },
+      { _id: "5", name: "停車格", location: geo, category: "parking", source: "parking" },
+    ];
+    for (const s of samples) {
+      expect(A11yFacilitySchema.safeParse(s).success).toBe(true);
+    }
+  });
+
+  it("rejects a metro object missing exitName", () => {
+    const res = A11yFacilitySchema.safeParse({
+      _id: "1", name: "電梯", location: geo, category: "elevator", source: "metro",
+    });
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects a metro object with an extra osmId field (.strict)", () => {
+    const res = A11yFacilitySchema.safeParse({
+      _id: "1", name: "電梯", location: geo, category: "elevator", source: "metro", exitName: "M8", osmId: "x",
+    });
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects a campus object missing schoolName", () => {
+    const res = A11yFacilitySchema.safeParse({
+      _id: "3", name: "電梯", location: geo, category: "elevator", source: "campus",
+    });
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects an osm object missing osmId", () => {
+    const res = A11yFacilitySchema.safeParse({
+      _id: "2", name: "坡道", location: geo, category: "ramp", source: "osm", wheelchair: "yes",
+    });
+    expect(res.success).toBe(false);
   });
 });
