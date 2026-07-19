@@ -38,6 +38,7 @@
         "import:rag": "npx dotenvx run -- ts-node src/scripts/import-rag.ts",
         "import:visual-a11y": "npx dotenvx run -- ts-node src/scripts/import-visual-a11y.ts",
         "eval:routing": "npx dotenvx run -- ts-node src/scripts/eval-tool-routing.ts",
+        "smoke:line-agent": "npx dotenvx run -- ts-node src/scripts/smoke-line-agent.ts",
         "capture:rail-fixtures": "npx dotenvx run -- ts-node src/scripts/capture-rail-station-fixtures.ts"
     },
     "keywords": [
