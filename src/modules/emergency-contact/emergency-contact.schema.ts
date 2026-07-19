@@ -17,6 +17,17 @@ export const ContactIdParamSchema = z
   })
   .strict();
 
+export const DeleteContactResponseSchema = z
+  .object({
+    ok: z.boolean().openapi({ example: true }),
+    status: z.enum(["success", "error"]).openapi({ example: "success" }),
+    code: z.number().openapi({ example: 200 }),
+    message: z.string().openapi({ example: "已刪除" }),
+    data: z.null().openapi({ example: null }),
+    accessToken: z.string().optional(),
+  })
+  .openapi("DeleteEmergencyContactResponse");
+
 registry.registerPath({
   method: "get",
   path: "/user/emergency-contacts",
@@ -57,7 +68,12 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: { params: ContactIdParamSchema },
   responses: {
-    205: { description: "已刪除" },
+    200: {
+      description: "已刪除",
+      content: {
+        "application/json": { schema: DeleteContactResponseSchema },
+      },
+    },
     403: { description: "非本人" },
     404: { description: "找不到聯絡人" },
   },
