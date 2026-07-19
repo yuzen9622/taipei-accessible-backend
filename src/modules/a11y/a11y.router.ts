@@ -10,6 +10,7 @@ import {
 } from "./a11y.controller";
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
+  AllFacilitiesQuerySchema,
   NearbyA11yQuerySchema,
   A11yPlaceQuerySchema,
   ParkingNearbyQuerySchema,
@@ -17,7 +18,11 @@ import {
 
 export function createA11yRouter(): Router {
   const router = Router();
-  router.get("/all-facilities", getAllFacilities);
+  router.get(
+    "/all-facilities",
+    validateRequest({ query: AllFacilitiesQuerySchema }),
+    getAllFacilities
+  );
   router.get("/all-bathrooms", getBathrooms);
   router.get("/all-ramps", getRamps);
   router.get("/all-elevators", getElevators);

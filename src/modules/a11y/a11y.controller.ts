@@ -4,11 +4,14 @@ import { ApiResponse } from "../../types/response";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import * as a11yService from "./a11y.service";
-import type { A11yFacility } from "./a11y.service";
+import type { A11yCategory, A11yFacility } from "./a11y.service";
 
 async function getAllFacilities(req: Request, res: Response<ApiResponse<A11yFacility[]>>) {
   try {
-    const data = await a11yService.findAllFacilities();
+    const { category } = (req.validated?.query ?? {}) as {
+      category?: A11yCategory[];
+    };
+    const data = await a11yService.findAllFacilities(category);
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
   } catch {
     return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);

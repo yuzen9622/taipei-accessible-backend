@@ -1,6 +1,7 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import { A11Y_CATEGORIES } from "./a11y.service";
 
 extendZodWithOpenApi(z);
 
@@ -84,8 +85,24 @@ export const A11ySchema = z
   .openapi("A11y");
 
 const A11yCategoryEnum = z
-  .enum(["elevator", "ramp", "toilet", "parking", "other"])
+  .enum(A11Y_CATEGORIES)
   .openapi({ example: "elevator" });
+
+export const AllFacilitiesQuerySchema = z
+  .object({
+    category: z
+      .string()
+      .min(1)
+      .transform((s) => [...new Set(s.split(",").map((t) => t.trim()))])
+      .pipe(z.array(z.enum(A11Y_CATEGORIES)).min(1))
+      .optional()
+      .openapi({
+        example: "elevator,ramp,toilet",
+        description:
+          "逗號分隔的類別白名單（elevator / ramp / toilet / parking / other），省略時回傳全部類別",
+      }),
+  })
+  .strict();
 
 export const A11yFacilitySchema = z
   .discriminatedUnion("source", [
@@ -225,6 +242,20 @@ export const AllFacilitiesResponseSchema = ApiResponseSchema(
   "AllFacilitiesResponse"
 );
 
+export const InvalidInputResponseSchema = ApiResponseSchema(
+  z
+    .object({
+      errors: z.array(
+        z.object({
+          path: z.string().openapi({ example: "category" }),
+          message: z.string().openapi({ example: "Invalid input" }),
+        })
+      ),
+    })
+    .openapi("ValidationErrorData"),
+  "InvalidInputResponse"
+);
+
 export const AllBathroomsResponseSchema = ApiResponseSchema(
   z.array(A11yFacilitySchema),
   "AllBathroomsResponse"
@@ -260,11 +291,16 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "所有無障礙設施",
   description:
-    "回傳所有無障礙設施（捷運、OSM、校園、廁所、身障停車格聯集），統一正規化形狀，每筆以 source 區分來源、category 區分類別，不分頁。",
+    "回傳所有無障礙設施（捷運、OSM、校園、廁所、身障停車格聯集），統一正規化形狀，每筆以 source 區分來源、category 區分類別，不分頁。可用 category 參數（逗號分隔白名單）只取需要的類別；參數含非法值或未知 query key 時回傳 400。",
+  request: { query: AllFacilitiesQuerySchema },
   responses: {
     200: {
       description: "無障礙設施清單",
       content: { "application/json": { schema: AllFacilitiesResponseSchema } },
+    },
+    400: {
+      description: "查詢參數不合法（data.errors 帶欄位錯誤明細）",
+      content: { "application/json": { schema: InvalidInputResponseSchema } },
     },
     500: { description: "伺服器錯誤" },
   },

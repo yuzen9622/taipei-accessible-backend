@@ -201,6 +201,7 @@ function osmDoc(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.mocked(A11y.find).mockReturnValue(makeChain([]) as never);
   vi.mocked(OsmA11y.find).mockReturnValue(makeChain([]) as never);
   vi.mocked(BathroomModel.find).mockReturnValue(makeChain([]) as never);
@@ -315,6 +316,142 @@ describe("findAllFacilities", () => {
     expect(vi.mocked(A11y.find)).toHaveBeenCalled();
     expect(metroChain.sort).toHaveBeenCalled();
     expect(metroChain.limit).toHaveBeenCalled();
+  });
+});
+
+describe("findAllFacilities with a category whitelist", () => {
+  it("queries only parking-capable sources for ['parking']", async () => {
+    vi.mocked(DisabledParkingModel.find).mockReturnValue(
+      makeChain([{ _id: "p1", placeName: "商港八路身障停車格", location: GEO }]) as never
+    );
+    vi.mocked(campusService.findAllFacilities).mockResolvedValue([
+      makeCampusFacility({ facUid: "c1", type: "elevator" }),
+    ]);
+
+    const result = await findAllFacilities(["parking"]);
+
+    expect(vi.mocked(A11y.find)).not.toHaveBeenCalled();
+    expect(vi.mocked(OsmA11y.find)).not.toHaveBeenCalled();
+    expect(vi.mocked(BathroomModel.find)).not.toHaveBeenCalled();
+    expect(vi.mocked(DisabledParkingModel.find)).toHaveBeenCalled();
+    expect(result.map((f) => f.category)).toEqual(["parking"]);
+  });
+
+  it("narrows the OSM query and skips bathroom/parking for ['elevator']", async () => {
+    vi.mocked(A11y.find).mockReturnValue(
+      makeChain([metroDoc("m1", "台北車站 M8 出口電梯"), metroDoc("m2", "xx無障礙坡道")]) as never
+    );
+    vi.mocked(OsmA11y.find).mockReturnValue(
+      makeChain([osmDoc({ _id: "od1", osmId: "o1", category: "elevator" })]) as never
+    );
+
+    const result = await findAllFacilities(["elevator"]);
+
+    expect(vi.mocked(OsmA11y.find)).toHaveBeenCalledWith({
+      category: { $in: ["elevator"] },
+    });
+    expect(vi.mocked(BathroomModel.find)).not.toHaveBeenCalled();
+    expect(vi.mocked(DisabledParkingModel.find)).not.toHaveBeenCalled();
+    expect(result.length).toBeGreaterThan(0);
+    for (const f of result) expect(f.category).toBe("elevator");
+  });
+
+  it("skips metro and includes bathroom, OSM toilets and campus toilets for ['toilet']", async () => {
+    vi.mocked(BathroomModel.find).mockReturnValue(
+      makeChain([{ _id: "b1", name: "台北車站無障礙廁所", location: GEO, type: "無障礙廁所" }]) as never
+    );
+    vi.mocked(OsmA11y.find).mockReturnValue(
+      makeChain([osmDoc({ _id: "od2", osmId: "o2", category: "toilet" })]) as never
+    );
+    vi.mocked(campusService.findAllFacilities).mockResolvedValue([
+      makeCampusFacility({ facUid: "c1", type: "accessible_toilet" }),
+      makeCampusFacility({ facUid: "c2", type: "ramp" }),
+    ]);
+
+    const result = await findAllFacilities(["toilet"]);
+
+    expect(vi.mocked(A11y.find)).not.toHaveBeenCalled();
+    expect(vi.mocked(OsmA11y.find)).toHaveBeenCalledWith({
+      category: { $in: ["toilet"] },
+    });
+    expect(new Set(result.map((f) => f.source))).toEqual(
+      new Set(["bathroom", "osm", "campus"])
+    );
+    for (const f of result) expect(f.category).toBe("toilet");
+  });
+
+  it("maps ['other'] to the OSM kerb_cut/wheelchair_accessible categories and keeps unclassified metro/campus items", async () => {
+    vi.mocked(A11y.find).mockReturnValue(
+      makeChain([metroDoc("m1", "台北車站 M8 出口電梯"), metroDoc("m2", "無障礙通道")]) as never
+    );
+    vi.mocked(OsmA11y.find).mockReturnValue(
+      makeChain([osmDoc({ _id: "od3", osmId: "o3", category: "kerb_cut" })]) as never
+    );
+    vi.mocked(campusService.findAllFacilities).mockResolvedValue([
+      makeCampusFacility({ facUid: "c1", type: "accessible_stairs" }),
+    ]);
+
+    const result = await findAllFacilities(["other"]);
+
+    expect(vi.mocked(OsmA11y.find)).toHaveBeenCalledWith({
+      category: { $in: ["kerb_cut", "wheelchair_accessible"] },
+    });
+    expect(vi.mocked(BathroomModel.find)).not.toHaveBeenCalled();
+    expect(vi.mocked(DisabledParkingModel.find)).not.toHaveBeenCalled();
+    expect(new Set(result.map((f) => f.source))).toEqual(
+      new Set(["metro", "osm", "campus"])
+    );
+    for (const f of result) expect(f.category).toBe("other");
+  });
+
+  it("unions the OSM $in condition and only returns the selected categories for ['elevator','toilet']", async () => {
+    vi.mocked(OsmA11y.find).mockReturnValue(
+      makeChain([
+        osmDoc({ _id: "od1", osmId: "o1", category: "elevator" }),
+        osmDoc({ _id: "od2", osmId: "o2", category: "toilet" }),
+      ]) as never
+    );
+    vi.mocked(BathroomModel.find).mockReturnValue(
+      makeChain([{ _id: "b1", name: "台北車站無障礙廁所", location: GEO, type: "無障礙廁所" }]) as never
+    );
+    vi.mocked(campusService.findAllFacilities).mockResolvedValue([
+      makeCampusFacility({ facUid: "c1", type: "elevator" }),
+      makeCampusFacility({ facUid: "c2", type: "accessible_parking" }),
+    ]);
+
+    const result = await findAllFacilities(["elevator", "toilet"]);
+
+    expect(vi.mocked(OsmA11y.find)).toHaveBeenCalledWith({
+      category: { $in: ["elevator", "toilet"] },
+    });
+    expect(vi.mocked(BathroomModel.find)).toHaveBeenCalled();
+    expect(vi.mocked(DisabledParkingModel.find)).not.toHaveBeenCalled();
+    expect(new Set(result.map((f) => f.category))).toEqual(
+      new Set(["elevator", "toilet"])
+    );
+  });
+
+  it("queries every source when all five categories are requested", async () => {
+    await findAllFacilities(["elevator", "ramp", "toilet", "parking", "other"]);
+
+    expect(vi.mocked(A11y.find)).toHaveBeenCalled();
+    expect(vi.mocked(OsmA11y.find)).toHaveBeenCalledWith({
+      category: {
+        $in: ["elevator", "ramp", "toilet", "kerb_cut", "wheelchair_accessible"],
+      },
+    });
+    expect(vi.mocked(BathroomModel.find)).toHaveBeenCalled();
+    expect(vi.mocked(DisabledParkingModel.find)).toHaveBeenCalled();
+    expect(vi.mocked(campusService.findAllFacilities)).toHaveBeenCalled();
+  });
+
+  it("treats an empty whitelist like no whitelist and queries every source unfiltered", async () => {
+    await findAllFacilities([]);
+
+    expect(vi.mocked(A11y.find)).toHaveBeenCalledWith();
+    expect(vi.mocked(OsmA11y.find)).toHaveBeenCalledWith();
+    expect(vi.mocked(BathroomModel.find)).toHaveBeenCalledWith({ type: "無障礙廁所" });
+    expect(vi.mocked(DisabledParkingModel.find)).toHaveBeenCalledWith();
   });
 });
 

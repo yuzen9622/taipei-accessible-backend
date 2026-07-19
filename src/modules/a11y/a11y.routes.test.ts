@@ -75,6 +75,74 @@ describe("a11y facility list routes", () => {
     });
   }
 
+  describe("GET /all-facilities category filter", () => {
+    it("passes the parsed whitelist to the service", async () => {
+      vi.mocked(service.findAllFacilities).mockResolvedValue([]);
+
+      const res = await request(app).get(`${BASE}/all-facilities?category=elevator,ramp`);
+
+      expect(res.status).toBe(200);
+      expect(vi.mocked(service.findAllFacilities)).toHaveBeenCalledWith([
+        "elevator",
+        "ramp",
+      ]);
+    });
+
+    it("passes undefined to the service when the param is omitted", async () => {
+      vi.mocked(service.findAllFacilities).mockResolvedValue([]);
+
+      const res = await request(app).get(`${BASE}/all-facilities`);
+
+      expect(res.status).toBe(200);
+      expect(vi.mocked(service.findAllFacilities)).toHaveBeenCalledWith(undefined);
+    });
+
+    it("dedupes repeated categories", async () => {
+      vi.mocked(service.findAllFacilities).mockResolvedValue([]);
+
+      const res = await request(app).get(
+        `${BASE}/all-facilities?category=elevator,elevator`
+      );
+
+      expect(res.status).toBe(200);
+      expect(vi.mocked(service.findAllFacilities)).toHaveBeenCalledWith(["elevator"]);
+    });
+
+    it("trims whitespace around tokens", async () => {
+      vi.mocked(service.findAllFacilities).mockResolvedValue([]);
+
+      const res = await request(app).get(
+        `${BASE}/all-facilities?category=%20elevator%20,%20ramp%20`
+      );
+
+      expect(res.status).toBe(200);
+      expect(vi.mocked(service.findAllFacilities)).toHaveBeenCalledWith([
+        "elevator",
+        "ramp",
+      ]);
+    });
+
+    const invalidQueries = [
+      { name: "an unknown category value", qs: "category=foo" },
+      { name: "a mix of valid and unknown values", qs: "category=elevator,foo" },
+      { name: "an empty param", qs: "category=" },
+      { name: "a trailing empty token", qs: "category=elevator," },
+      { name: "an unknown query key", qs: "category=elevator&foo=bar" },
+    ];
+
+    for (const { name, qs } of invalidQueries) {
+      it(`rejects ${name} with a 400 envelope carrying data.errors`, async () => {
+        const res = await request(app).get(`${BASE}/all-facilities?${qs}`);
+
+        expect(res.status).toBe(400);
+        expect(res.body).toMatchObject({ ok: false, status: "error", code: 400 });
+        expect(Array.isArray(res.body.data.errors)).toBe(true);
+        expect(res.body.data.errors.length).toBeGreaterThan(0);
+        expect(vi.mocked(service.findAllFacilities)).not.toHaveBeenCalled();
+      });
+    }
+  });
+
   it("wires each path to its own service function", async () => {
     vi.mocked(service.findAllFacilities).mockResolvedValue([facility("A", "metro")] as any);
     vi.mocked(service.findBathroomFacilities).mockResolvedValue([facility("B", "bathroom")] as any);

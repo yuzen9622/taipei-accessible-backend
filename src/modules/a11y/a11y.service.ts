@@ -93,7 +93,14 @@ function makeGeoQuery(lng: number, lat: number, radiusM: number) {
 }
 
 export type A11ySource = "metro" | "osm" | "campus" | "bathroom" | "parking";
-export type A11yCategory = "elevator" | "ramp" | "toilet" | "parking" | "other";
+export const A11Y_CATEGORIES = [
+  "elevator",
+  "ramp",
+  "toilet",
+  "parking",
+  "other",
+] as const;
+export type A11yCategory = (typeof A11Y_CATEGORIES)[number];
 type A11yGeoPoint = { type: "Point"; coordinates: [number, number] };
 
 interface A11yFacilityBase {
@@ -157,6 +164,15 @@ function extractMetroExitName(name: string): string | null {
   }
   return null;
 }
+
+const OSM_CATEGORIES_BY_FACILITY: Partial<
+  Record<A11yCategory, IOsmA11y["category"][]>
+> = {
+  elevator: ["elevator"],
+  ramp: ["ramp"],
+  toilet: ["toilet"],
+  other: ["kerb_cut", "wheelchair_accessible"],
+};
 
 function mapOsmCategory(category: IOsmA11y["category"]): A11yCategory {
   if (category === "elevator" || category === "ramp" || category === "toilet") {
@@ -240,25 +256,50 @@ function parkingToFacility(doc: IDisabledParking): A11yFacility {
  * All accessibility facilities across every source, normalized into one shape.
  * Each source query is capped at A11Y_MAX_RESULTS with a stable `_id` sort so a
  * dataset that ever exceeds the cap still returns a deterministic subset.
+ * @param categories optional category whitelist; sources that cannot produce
+ * any requested category are skipped entirely and the OSM query is narrowed
+ * with `$in` (campus is always queried since it can produce every category)
+ * @returns facilities whose category is in the whitelist, or every facility
+ * when the whitelist is omitted or empty
  */
-export async function findAllFacilities(): Promise<A11yFacility[]> {
+export async function findAllFacilities(
+  categories?: A11yCategory[]
+): Promise<A11yFacility[]> {
+  const want = categories && categories.length > 0 ? new Set(categories) : null;
+  const osmCategories = want
+    ? [...want].flatMap((c) => OSM_CATEGORIES_BY_FACILITY[c] ?? [])
+    : null;
   const [metro, osm, campus, bathroom, parking] = await Promise.all([
-    A11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean(),
-    OsmA11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean(),
+    !want || want.has("elevator") || want.has("ramp") || want.has("other")
+      ? A11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean()
+      : [],
+    !osmCategories
+      ? OsmA11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean()
+      : osmCategories.length > 0
+        ? OsmA11y.find({ category: { $in: osmCategories } })
+            .sort({ _id: 1 })
+            .limit(A11Y_MAX_RESULTS)
+            .lean()
+        : [],
     campusService.findAllFacilities(),
-    BathroomModel.find({ type: "無障礙廁所" })
-      .sort({ _id: 1 })
-      .limit(A11Y_MAX_RESULTS)
-      .lean(),
-    DisabledParkingModel.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean(),
+    !want || want.has("toilet")
+      ? BathroomModel.find({ type: "無障礙廁所" })
+          .sort({ _id: 1 })
+          .limit(A11Y_MAX_RESULTS)
+          .lean()
+      : [],
+    !want || want.has("parking")
+      ? DisabledParkingModel.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean()
+      : [],
   ]);
-  return [
+  const facilities = [
     ...metro.map(metroToFacility),
     ...osm.map(osmToFacility),
     ...campus.slice(0, A11Y_MAX_RESULTS).map(campusToFacility),
     ...bathroom.map(bathroomToFacility),
     ...parking.map(parkingToFacility),
   ];
+  return want ? facilities.filter((f) => want.has(f.category)) : facilities;
 }
 
 /**
