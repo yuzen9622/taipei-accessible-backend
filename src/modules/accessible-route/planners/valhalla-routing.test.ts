@@ -236,3 +236,40 @@ describe("planValhallaRoute walk access legs", () => {
     expect(wpIn).toBeDefined();
   });
 });
+
+// --- parking-aware tail: finalWalkTarget redirects the trailing WALK ---
+
+// PARK = the drive's routing destination snap (the disabled-parking bay);
+// DEST is the TRUE destination ~222m past it, so a tail connector appears.
+const PARK: LL = DSNAP;
+
+describe("planValhallaRoute finalWalkTarget (parking-aware tail)", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("targets finalWalkTarget instead of the routing destination", async () => {
+    // origin == drive leg start → no head; routing dest == PARK == drive leg end
+    compute.mockImplementation(async (p: any) =>
+      p.costing === "pedestrian"
+        ? pedTripFrom(p.origin, p.destination)
+        : driveTrip([[[ORIGIN.lat, ORIGIN.lng], [PARK.lat, PARK.lng]]]));
+    const [route] = await planValhallaRoute(ORIGIN, PARK, { travelMode: "drive", finalWalkTarget: DEST });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE", "WALK"]);
+    const drive = route.legs[0];
+    const tail = route.legs[1];
+    expect(drive.type === "DRIVE" && drive.to).toMatchObject(PARK);
+    // tail reaches the TRUE destination, not the parking snap
+    expect(tail.type === "WALK" && near(tail.polyline.at(-1)!, DEST)).toBe(true);
+    expect(tail.type === "WALK" && near(tail.polyline.at(-1)!, PARK)).toBe(false);
+  });
+
+  it("targets the routing destination when finalWalkTarget is unset (regression)", async () => {
+    compute.mockImplementation(async (p: any) =>
+      p.costing === "pedestrian"
+        ? pedTripFrom(p.origin, p.destination)
+        : driveTrip([[[ORIGIN.lat, ORIGIN.lng], [PARK.lat, PARK.lng]]]));
+    const [route] = await planValhallaRoute(ORIGIN, DEST, { travelMode: "drive" });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE", "WALK"]);
+    const tail = route.legs[1];
+    expect(tail.type === "WALK" && near(tail.polyline.at(-1)!, DEST)).toBe(true);
+  });
+});

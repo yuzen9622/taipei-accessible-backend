@@ -280,7 +280,11 @@ async function attachWalkAccessLegs(
   origin: LatLng,
   destination: LatLng,
   waypoints: LatLng[],
+  finalWalkTarget?: LatLng,
 ): Promise<AccessibleRoute[]> {
+  // When the drive was routed to a proxy arrival point (e.g. a disabled parking
+  // bay), the tail walk must reach the user's true destination, not the proxy.
+  const tailTarget = finalWalkTarget ?? destination;
   const limiter = createLimiter(MAX_CONNECTOR_CONCURRENCY);
   const cache = new Map<string, Promise<WalkConnector | null>>();
   const round = (n: number) => n.toFixed(SNAP_KEY_PRECISION);
@@ -300,9 +304,9 @@ async function attachWalkAccessLegs(
       const originSnap = driveLegs[0].from;
       const destSnap = driveLegs.at(-1)!.to;
       const gapHead = haversineMeters(origin.lat, origin.lng, originSnap.lat, originSnap.lng);
-      const gapTail = haversineMeters(destSnap.lat, destSnap.lng, destination.lat, destination.lng);
+      const gapTail = haversineMeters(destSnap.lat, destSnap.lng, tailTarget.lat, tailTarget.lng);
       const headPending = gapHead > WALK_ACCESS_MIN_GAP_M ? connector(origin, originSnap) : null;
-      const tailPending = gapTail > WALK_ACCESS_MIN_GAP_M ? connector(destSnap, destination) : null;
+      const tailPending = gapTail > WALK_ACCESS_MIN_GAP_M ? connector(destSnap, tailTarget) : null;
 
       const wpMatches = driveLegs.length - 1 === waypoints.length;
       if (waypoints.length && !wpMatches) {
@@ -415,5 +419,5 @@ export async function planValhallaRoute(
     throw new ValhallaRoutingError("Malformed Valhalla response");
   }
   if (opts.travelMode === "walk" || routes.length === 0) return routes;
-  return attachWalkAccessLegs(routes, origin, destination, opts.waypoints ?? []);
+  return attachWalkAccessLegs(routes, origin, destination, opts.waypoints ?? [], opts.finalWalkTarget);
 }
