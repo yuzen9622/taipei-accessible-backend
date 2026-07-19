@@ -741,7 +741,7 @@ async function attachDrivingA11yHighlights(
     );
     if (structures.length) {
       const hl = `目的地附近有 ${structures.length} 處電梯／坡道`;
-      for (const r of routes) r.accessibilityHighlights = [hl];
+      for (const r of routes) r.accessibilityHighlights = [...r.accessibilityHighlights, hl];
     }
     return;
   }
@@ -749,7 +749,7 @@ async function attachDrivingA11yHighlights(
   const parking = await findNearbyParking(destination.lat, destination.lng, 300);
   if (parking.length) {
     const hl = `目的地 300m 內有 ${parking.length} 處身障停車格`;
-    for (const r of routes) r.accessibilityHighlights = [hl];
+    for (const r of routes) r.accessibilityHighlights = [...r.accessibilityHighlights, hl];
   }
 }
 

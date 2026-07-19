@@ -9,6 +9,7 @@ import {
 import { VALHALLA_OSM_ATTRIBUTION } from "../../../config/valhalla";
 import type { AccessibleRoute, DriveLeg, DriveStep, WalkLeg, WalkStep } from "../../../types/route";
 import type { LatLng, PlanRoadRouteOptions, RoadTravelMode } from "../accessible-route.types";
+import { haversineCoords, haversineMeters } from "../../../utils/geo";
 import { ValhallaRoutingError } from "./valhalla-routing.types";
 
 export { ValhallaRoutingError } from "./valhalla-routing.types";
@@ -18,6 +19,18 @@ const COSTING: Record<RoadTravelMode, ValhallaCosting> = {
   motorcycle: "motorcycle",
   walk: "pedestrian",
 };
+
+/** Real point is treated as roadside (no walk connector) within this straight-line gap. */
+const WALK_ACCESS_MIN_GAP_M = 30;
+/** Max tolerated distance between a pedestrian polyline endpoint and its anchor. */
+const CONNECT_TOLERANCE_M = 25;
+/** Decimal places used to build the connector cache key. */
+const SNAP_KEY_PRECISION = 6;
+/** Max pedestrian connector queries in flight per public request. */
+const MAX_CONNECTOR_CONCURRENCY = 4;
+
+/** A walk-connector body: a WALK leg without its display from/to labels. */
+type WalkConnector = Omit<WalkLeg, "from" | "to">;
 
 const ROUTE_LABEL: Record<RoadTravelMode, string> = {
   drive: "開車",
@@ -182,6 +195,205 @@ function mapTrip(trip: NormalizedValhallaTrip, mode: RoadTravelMode, index: numb
   };
 }
 
+/**
+ * Plan a real pedestrian path between two anchors and return it as a WALK-leg
+ * body (without display labels). Returns null — never throws — when no
+ * trustworthy walkable geometry exists, so a failed connector never fails the
+ * host driving route. The pedestrian graph re-snaps each anchor, so both
+ * polyline endpoints are gated against their anchor; out-of-tolerance means the
+ * anchors are separated by an impassable feature and the connector is dropped.
+ * The genuine Valhalla geometry is used verbatim — endpoints are never rewritten.
+ *
+ * @param fromAnchor Where the walk should start.
+ * @param toAnchor Where the walk should end.
+ * @returns The connector body, or null when no trustworthy path is found.
+ */
+async function planWalkConnector(
+  fromAnchor: LatLng,
+  toAnchor: LatLng,
+): Promise<WalkConnector | null> {
+  try {
+    const result = await computeValhallaRoutes({
+      origin: fromAnchor, destination: toAnchor, costing: "pedestrian",
+    });
+    if (result.status !== "OK") return null;
+    const leg = result.trips[0]?.legs[0];
+    if (!leg) return null;
+    let points: [number, number][];
+    try {
+      points = decodeValhallaShape(leg.shapePolyline6);
+    } catch {
+      return null;
+    }
+    const pStart = points[0];
+    const pEnd = points.at(-1)!;
+    if (haversineCoords(pStart, [fromAnchor.lng, fromAnchor.lat]) > CONNECT_TOLERANCE_M) return null;
+    if (haversineCoords(pEnd, [toAnchor.lng, toAnchor.lat]) > CONNECT_TOLERANCE_M) return null;
+    const steps = walkSteps(leg, points);
+    return {
+      type: "WALK",
+      distanceM: Math.round(leg.summary.lengthKm * 1000),
+      minutesEst: minutes(leg.summary.timeSec),
+      polyline: points,
+      a11yFacilities: [],
+      ...(steps ? { steps } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Concurrency limiter: at most `limit` tasks run at once, the rest queue. */
+function createLimiter(limit: number) {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  const release = () => {
+    active--;
+    queue.shift()?.();
+  };
+  return function run<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const start = () => {
+        active++;
+        task().then(resolve, reject).finally(release);
+      };
+      if (active < limit) start();
+      else queue.push(start);
+    });
+  };
+}
+
+/** Clone a connector body into a full WALK leg with position-specific labels. */
+function toWalkLeg(body: WalkConnector, from: string, to: string): WalkLeg {
+  return { ...body, from, to, polyline: [...body.polyline], a11yFacilities: [] };
+}
+
+/**
+ * Append leading/trailing/waypoint walk-access legs to road routes so a user
+ * standing off the drivable network sees a real walk to/from the road instead
+ * of being silently snapped onto it. Only affects drive/motorcycle. Each route
+ * uses its own snapped endpoints; each affected waypoint gets an atomic
+ * arrive+depart walk pair (both succeed or neither is added).
+ */
+async function attachWalkAccessLegs(
+  routes: AccessibleRoute[],
+  origin: LatLng,
+  destination: LatLng,
+  waypoints: LatLng[],
+): Promise<AccessibleRoute[]> {
+  const limiter = createLimiter(MAX_CONNECTOR_CONCURRENCY);
+  const cache = new Map<string, Promise<WalkConnector | null>>();
+  const round = (n: number) => n.toFixed(SNAP_KEY_PRECISION);
+  const connector = (from: LatLng, to: LatLng) => {
+    const key = `${round(from.lng)},${round(from.lat)}|${round(to.lng)},${round(to.lat)}`;
+    let pending = cache.get(key);
+    if (!pending) {
+      pending = limiter(() => planWalkConnector(from, to));
+      cache.set(key, pending);
+    }
+    return pending;
+  };
+
+  return Promise.all(
+    routes.map(async (route) => {
+      const driveLegs = route.legs as DriveLeg[];
+      const originSnap = driveLegs[0].from;
+      const destSnap = driveLegs.at(-1)!.to;
+      const gapHead = haversineMeters(origin.lat, origin.lng, originSnap.lat, originSnap.lng);
+      const gapTail = haversineMeters(destSnap.lat, destSnap.lng, destination.lat, destination.lng);
+      const headPending = gapHead > WALK_ACCESS_MIN_GAP_M ? connector(origin, originSnap) : null;
+      const tailPending = gapTail > WALK_ACCESS_MIN_GAP_M ? connector(destSnap, destination) : null;
+
+      const wpMatches = driveLegs.length - 1 === waypoints.length;
+      if (waypoints.length && !wpMatches) {
+        console.warn(
+          `[valhalla-routing] leg/waypoint count mismatch (${driveLegs.length - 1} vs ${waypoints.length}); skipping waypoint walk legs`,
+        );
+      }
+      const wpSlots = wpMatches
+        ? waypoints.flatMap((trueWp, j) => {
+            const arrivalSnap = driveLegs[j].to;
+            const departureSnap = driveLegs[j + 1].from;
+            const gapArrival = haversineMeters(trueWp.lat, trueWp.lng, arrivalSnap.lat, arrivalSnap.lng);
+            const gapDeparture = haversineMeters(trueWp.lat, trueWp.lng, departureSnap.lat, departureSnap.lng);
+            const gap = Math.max(gapArrival, gapDeparture);
+            if (gap <= WALK_ACCESS_MIN_GAP_M) return [];
+            return [{
+              index: j,
+              gap,
+              inPending: connector(arrivalSnap, trueWp),
+              outPending: connector(trueWp, departureSnap),
+            }];
+          })
+        : [];
+
+      const head = headPending ? await headPending : null;
+      const tail = tailPending ? await tailPending : null;
+      const wpResolved = await Promise.all(
+        wpSlots.map(async (slot) => ({
+          index: slot.index,
+          gap: slot.gap,
+          in: await slot.inPending,
+          out: await slot.outPending,
+        })),
+      );
+      const wpByIndex = new Map(wpResolved.map((slot) => [slot.index, slot]));
+
+      const highlights = [...route.accessibilityHighlights];
+      let walkMinutes = 0;
+      let walkDistanceM = 0;
+      const legs: AccessibleRoute["legs"] = [];
+
+      if (headPending) {
+        if (head) {
+          legs.push(toWalkLeg(head, "起點", "上車處"));
+          walkMinutes += head.minutesEst;
+          walkDistanceM += head.distanceM;
+          highlights.push(`起點需步行約 ${head.distanceM} 公尺至可上車路段`);
+        } else {
+          highlights.push(`起點距可行車路段約 ${Math.round(gapHead)} 公尺，但無法建立可信步行路徑，請留意`);
+        }
+      }
+
+      driveLegs.forEach((leg, i) => {
+        legs.push(leg);
+        if (i >= driveLegs.length - 1) return;
+        const slot = wpByIndex.get(i);
+        if (!slot) return;
+        const label = `中途點 ${i + 1}`;
+        if (slot.in && slot.out) {
+          legs.push(toWalkLeg(slot.in, `${label} 停車處`, label));
+          legs.push(toWalkLeg(slot.out, label, `${label} 停車處`));
+          walkMinutes += slot.in.minutesEst + slot.out.minutesEst;
+          walkDistanceM += slot.in.distanceM + slot.out.distanceM;
+          highlights.push(`${label} 需步行約 ${slot.in.distanceM + slot.out.distanceM} 公尺往返停車處`);
+        } else {
+          highlights.push(`${label} 距可行車路段約 ${Math.round(slot.gap)} 公尺，但無法建立可信步行路徑，請留意`);
+        }
+      });
+
+      if (tailPending) {
+        if (tail) {
+          legs.push(toWalkLeg(tail, "下車處", "終點"));
+          walkMinutes += tail.minutesEst;
+          walkDistanceM += tail.distanceM;
+          highlights.push(`於終點前約 ${tail.distanceM} 公尺處停車，需步行至目的地`);
+        } else {
+          highlights.push(`目的地距可行車路段約 ${Math.round(gapTail)} 公尺，但無法建立可信步行路徑，請留意`);
+        }
+      }
+
+      return {
+        ...route,
+        legs,
+        totalMinutes: route.totalMinutes + walkMinutes,
+        totalWalkDistanceM: walkDistanceM,
+        accessibilityHighlights: highlights,
+      };
+    }),
+  );
+}
+
 export async function planValhallaRoute(
   origin: LatLng,
   destination: LatLng,
@@ -195,10 +407,13 @@ export async function planValhallaRoute(
   if (result.status === "UPSTREAM_ERROR") {
     throw new ValhallaRoutingError("Valhalla routing upstream error", result.httpStatus);
   }
+  let routes: AccessibleRoute[];
   try {
-    return result.trips.map((trip, index) => mapTrip(trip, opts.travelMode, index));
+    routes = result.trips.map((trip, index) => mapTrip(trip, opts.travelMode, index));
   } catch (error) {
     if (error instanceof ValhallaRoutingError) throw error;
     throw new ValhallaRoutingError("Malformed Valhalla response");
   }
+  if (opts.travelMode === "walk" || routes.length === 0) return routes;
+  return attachWalkAccessLegs(routes, origin, destination, opts.waypoints ?? []);
 }
