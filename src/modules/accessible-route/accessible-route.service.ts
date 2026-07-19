@@ -651,6 +651,27 @@ export async function planAccessibleRouteFromRequest(
       };
     }
   } else {
+    // walk (no waypoints) → OTP2 pedestrian first, so it matches the walking legs
+    // used inside transit routing; Valhalla is the fallback. All other modes (and
+    // walk+waypoints) use the driving path below.
+    let otpWalkRoutes: AccessibleRoute[] | null = null;
+    if (travelMode === "walk" && !waypointsOpt) {
+      try {
+        const { planOtpWalk } = await import("./planners/otp-routing");
+        const w = await planOtpWalk(originLatLng, dest, { mode: mode ?? "normal" });
+        // OTP results still run the shared walk finalize/enrichment (dedupe →
+        // top-3 → nearby elevator/ramp highlight) for parity with Valhalla walk.
+        if (w.length) otpWalkRoutes = await finalizeDrivingRoutes(w, "walk", dest);
+      } catch (err) {
+        console.warn(
+          "[accessible-route] OTP walk failed; falling back to Valhalla",
+          err,
+        );
+      }
+    }
+    if (otpWalkRoutes && otpWalkRoutes.length) {
+      routes = otpWalkRoutes;
+    } else {
     // Parking-aware arrival (drive/motorcycle): route the car to the nearest
     // disabled-parking bay near the destination and walk from there. Best-effort
     // — a lookup failure must not break routing; falls back to the true dest.
@@ -730,6 +751,7 @@ export async function planAccessibleRouteFromRequest(
       };
     }
     routes = outcome.routes;
+    }
   }
 
   return {

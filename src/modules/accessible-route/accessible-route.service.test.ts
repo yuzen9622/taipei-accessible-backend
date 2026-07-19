@@ -16,6 +16,7 @@ vi.mock("../a11y/a11y.service", async (importActual) => {
 // The transit branch dynamic-imports both from the OTP planner.
 vi.mock("./planners/otp-routing", () => ({
   planOtpRoute: vi.fn().mockResolvedValue([]),
+  planOtpWalk: vi.fn(),
   isOtpCircuitOpen: () => false,
 }));
 
@@ -38,7 +39,7 @@ vi.mock("../../adapters/google.adapter", async (importActual) => {
 import { planAccessibleRouteFromRequest } from "./accessible-route.service";
 import { planValhallaRoute, ValhallaRoutingError } from "./planners/valhalla-routing";
 import { findNearbyParking, findNearby } from "../a11y/a11y.service";
-import { planOtpRoute } from "./planners/otp-routing";
+import { planOtpRoute, planOtpWalk } from "./planners/otp-routing";
 import { getCity } from "../../adapters/google.adapter";
 import { ResponseCode } from "../../types/code";
 
@@ -76,6 +77,7 @@ beforeEach(() => {
   vi.mocked(getCity).mockResolvedValue("Taipei");
   vi.mocked(findNearby).mockResolvedValue({ nearbyOsm: [] } as any);
   vi.mocked(planOtpRoute).mockResolvedValue([]);
+  vi.mocked(planOtpWalk).mockResolvedValue([]);
 });
 
 describe("planAccessibleRouteFromRequest driving a11y highlights append", () => {
@@ -241,5 +243,102 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
 
     expect(findNearbyParking).not.toHaveBeenCalled();
     expect(res.ok).toBe(true);
+  });
+});
+
+const walkRequest = {
+  travelMode: "walk" as const,
+  origin: { latitude: 25.04, longitude: 121.56 },
+  destination: { latitude: 25.03, longitude: 121.55 },
+};
+
+const walkRoute = () => ({
+  routeId: "walk-0",
+  routeName: "步行",
+  totalMinutes: 10,
+  transferCount: 0,
+  totalWalkDistanceM: 800,
+  legs: [
+    {
+      type: "WALK",
+      from: "出發地",
+      to: "目的地",
+      distanceM: 800,
+      minutesEst: 10,
+      polyline: [
+        [121.56, 25.04],
+        [121.55, 25.03],
+      ],
+      a11yFacilities: [],
+    },
+  ],
+  accessibilityHighlights: [],
+});
+
+describe("planAccessibleRouteFromRequest walk mode OTP", () => {
+  it("uses the OTP walk route and does not call Valhalla", async () => {
+    vi.mocked(planOtpWalk).mockResolvedValue([walkRoute()] as any);
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.routes[0].routeName).toBe("步行");
+    expect(vi.mocked(planValhallaRoute).mock.calls).toHaveLength(0);
+  });
+
+  it("runs finalize enrichment on the OTP walk route", async () => {
+    vi.mocked(planOtpWalk).mockResolvedValue([walkRoute()] as any);
+    vi.mocked(findNearby).mockResolvedValue({
+      nearbyOsm: [{ category: "elevator" }],
+    } as any);
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    const highlights = res.data!.routes[0].accessibilityHighlights;
+    expect(highlights.some((h) => h.includes("電梯"))).toBe(true);
+  });
+
+  it("falls back to Valhalla when OTP returns no walk route", async () => {
+    vi.mocked(planOtpWalk).mockResolvedValue([]);
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(planValhallaRoute).mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("falls back to Valhalla when OTP rejects", async () => {
+    vi.mocked(planOtpWalk).mockRejectedValue(new Error("otp down"));
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(planValhallaRoute).mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("does not call OTP walk for walk + waypoints", async () => {
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      waypoints: [{ latitude: 25.035, longitude: 121.555 }],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(planOtpWalk).mock.calls).toHaveLength(0);
+    expect(vi.mocked(planValhallaRoute).mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("does not call OTP walk for drive mode", async () => {
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+    vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+
+    const res = await planAccessibleRouteFromRequest(driveRequest);
+
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(planOtpWalk).mock.calls).toHaveLength(0);
   });
 });
