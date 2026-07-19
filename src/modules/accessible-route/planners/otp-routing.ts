@@ -74,7 +74,7 @@ const METRO_SYSTEMS = new Set([
   "TYMC",
 ]);
 
-const SUPPORTED_TRANSIT_MODES = new Set([
+export const SUPPORTED_TRANSIT_MODES = new Set([
   "BUS",
   "TROLLEYBUS",
   "RAIL",
@@ -201,7 +201,17 @@ function trainNoFromTripId(tripId: string): string | null {
   return tripId.match(/^(?:TRA|THSR)_(\d+)/)?.[1] ?? null;
 }
 
-const PLAN_QUERY = `
+/**
+ * Explicit transport-mode allowlist for the OTP plan query, derived from
+ * SUPPORTED_TRANSIT_MODES so the query and the downstream filter share one
+ * source of truth. Requesting these instead of the broad `TRANSIT` composite
+ * stops OTP from ever returning AIRPLANE/FERRY (e.g. offshore-island) legs.
+ */
+const PLAN_TRANSPORT_MODES = ["WALK", ...SUPPORTED_TRANSIT_MODES]
+  .map((mode) => `{ mode: ${mode} }`)
+  .join(", ");
+
+export const PLAN_QUERY = `
 query Plan(
   $fromLat: Float!, $fromLon: Float!,
   $toLat: Float!, $toLon: Float!,
@@ -216,7 +226,7 @@ query Plan(
     wheelchair: $wheelchair
     walkSpeed: $walkSpeed
     numItineraries: $numItineraries
-    transportModes: [{ mode: WALK }, { mode: TRANSIT }]
+    transportModes: [${PLAN_TRANSPORT_MODES}]
     locale: "zh-TW"
   ) {
     itineraries {
@@ -767,11 +777,11 @@ function transitLegFrom(
 /**
  * An itinerary is usable iff it has ≥1 transit leg, every transit leg rides a
  * supported mode, and its transfer count (transit legs − 1) is within
- * maxTransfers. Used both to decide whether a stop-snap retry is needed and to
- * filter the final output, so the snap trigger and the output filter never drift
- * apart: OTP can return only itineraries that all exceed the transfer cap (e.g.
- * a venue centroid stranded far from any stop forces extra hops), which must
- * count as "no usable route" and trigger the snap, not slip through as success.
+ * maxTransfers, and drops any itinerary containing a transit leg whose mode is
+ * outside SUPPORTED_TRANSIT_MODES (e.g. AIRPLANE/FERRY). This is the final
+ * output filter; the separate stop-snap retry decision is made by
+ * hasUsableTransit in planOtpRoute (which checks leg presence and the transfer
+ * cap only, not the mode allowlist).
  *
  * @param it The OTP itinerary to test.
  * @param maxTransfers The transfer cap, or undefined for no cap.
