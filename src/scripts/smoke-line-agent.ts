@@ -17,9 +17,18 @@ interface ScenarioRun {
 
 interface Scenario {
   id: string;
-  message: string;
+  message?: string;
+  run?: () => Promise<ScenarioRun>;
   assert: (run: ScenarioRun) => string[];
 }
+
+interface HistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+const FIXED_LINE_CONTEXT =
+  "【你服務的對象】此聯絡人已綁定家人：測試家人。上次分享的位置：尚未分享過位置。";
 
 const CANNED_RESULTS: Record<string, unknown> = {
   getActiveSosContext: {
@@ -53,12 +62,18 @@ const CANNED_RESULTS: Record<string, unknown> = {
  * selections and returns canned data instead of touching DB or external APIs.
  *
  * @param message User message to send through the LINE family agent
+ * @param history Prior user and assistant messages to include
  * @returns Recorded tool calls plus the parsed speech of the final answer
  */
-async function runScenario(message: string): Promise<ScenarioRun> {
+async function runScenario(
+  message: string,
+  history: HistoryMessage[] = [],
+): Promise<ScenarioRun> {
   const calls: RecordedCall[] = [];
   const { systemInstruction, contents } = toGeminiHistory([
     { role: "system", content: withCurrentDate(LINE_FAMILY_SYSTEM_PROMPT) },
+    { role: "system", content: FIXED_LINE_CONTEXT },
+    ...history,
     { role: "user", content: message },
   ]);
 
@@ -81,6 +96,21 @@ async function runScenario(message: string): Promise<ScenarioRun> {
   );
 
   return { calls, speech: parseSpeech(result.text ?? "") };
+}
+
+/**
+ * @returns Combined tool calls from a two-turn weather clarification exchange.
+ */
+async function runWeatherClarificationScenario(): Promise<ScenarioRun> {
+  const first = await runScenario("天氣如何");
+  const second = await runScenario("台北", [
+    { role: "user", content: "天氣如何" },
+    { role: "assistant", content: first.speech },
+  ]);
+  return {
+    calls: [...first.calls, ...second.calls],
+    speech: second.speech,
+  };
 }
 
 /**
@@ -179,6 +209,34 @@ const SCENARIOS: Scenario[] = [
       return errors;
     },
   },
+  {
+    id: "S6 多輪天氣位置澄清",
+    run: runWeatherClarificationScenario,
+    assert: (run) => {
+      const errors: string[] = [];
+      const environmentCalls = run.calls.filter(
+        (call) => call.name === "getEnvironmentInfo",
+      );
+      const finalEnvironmentCall = environmentCalls.at(-1);
+      if (!finalEnvironmentCall) {
+        errors.push("第二輪必須呼叫 getEnvironmentInfo");
+      } else if (
+        typeof finalEnvironmentCall.args.query !== "string" ||
+        !finalEnvironmentCall.args.query.includes("台北")
+      ) {
+        errors.push(
+          `第二輪 getEnvironmentInfo 的 query 應含台北，實際: ${JSON.stringify(finalEnvironmentCall.args)}`,
+        );
+      }
+      if (environmentCalls.length !== 1) {
+        errors.push(
+          `兩輪合計應只在第二輪呼叫一次 getEnvironmentInfo，實際: ${environmentCalls.length}`,
+        );
+      }
+      if (calledSosTool(run)) errors.push("兩輪全程不得呼叫任何 SOS 工具");
+      return errors;
+    },
+  },
 ];
 
 const MAX_ATTEMPTS = 2;
@@ -193,7 +251,9 @@ async function main(): Promise<void> {
   for (const scenario of SCENARIOS) {
     let errors: string[] = [];
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const run = await runScenario(scenario.message);
+      const run = scenario.run
+        ? await scenario.run()
+        : await runScenario(scenario.message ?? "");
       errors = scenario.assert(run);
       const toolSeq = run.calls.map((c) => c.name).join(" → ") || "(無工具呼叫)";
       console.log(

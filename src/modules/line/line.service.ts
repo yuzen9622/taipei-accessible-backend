@@ -25,6 +25,17 @@ import type {
 } from "./line.types";
 import type { RunToolLoopResult } from "../../types/agent";
 import type { AccessibilityMode, TravelMode } from "../../types/route";
+import {
+  appendLineChatTurn,
+  getLineChatHistory,
+} from "./line-memory";
+
+interface BoundFamilyContext {
+  userId: string;
+  lastLineLat?: number | null;
+  lastLineLng?: number | null;
+  lastLineLocationUpdatedAt?: Date | null;
+}
 
 function getUserId(event: LineEvent): string | undefined {
   const source = event.source as webhook.UserSource | undefined;
@@ -222,14 +233,87 @@ function buildAgentReply(result: RunToolLoopResult): {
   };
 }
 
+function formatLineLocationTime(value: Date): string {
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(value);
+}
+
+async function buildLineUserContext(lineUserId: string): Promise<string> {
+  try {
+    const contacts = (await EmergencyContact.find({
+      lineUserId,
+      bindStatus: "bound",
+    })
+      .select("userId lastLineLat lastLineLng lastLineLocationUpdatedAt")
+      .lean()) as BoundFamilyContext[];
+
+    if (!contacts.length) {
+      return "【你服務的對象】此聯絡人尚未綁定家人。上次分享的位置：尚未分享過位置。";
+    }
+
+    const familyUsers = await User.find({
+      _id: { $in: contacts.map((contact) => contact.userId) },
+    })
+      .select("_id name")
+      .lean();
+    const familyNames = familyUsers
+      .map((familyUser) => familyUser.name?.trim())
+      .filter((name): name is string => Boolean(name));
+    const familySummary =
+      familyNames.length === contacts.length
+        ? familyNames.join("、")
+        : `已綁定 ${contacts.length} 位家人`;
+    const latestLocation = contacts
+      .filter(
+        (contact) =>
+          typeof contact.lastLineLat === "number" &&
+          typeof contact.lastLineLng === "number",
+      )
+      .sort(
+        (left, right) =>
+          (right.lastLineLocationUpdatedAt?.getTime() ?? 0) -
+          (left.lastLineLocationUpdatedAt?.getTime() ?? 0),
+      )[0];
+    const locationSummary = latestLocation
+      ? `${latestLocation.lastLineLat},${latestLocation.lastLineLng}${
+          latestLocation.lastLineLocationUpdatedAt
+            ? `（${formatLineLocationTime(latestLocation.lastLineLocationUpdatedAt)} 分享）`
+            : "（分享時間不明）"
+        }`
+      : "尚未分享過位置";
+
+    return `【你服務的對象】此聯絡人已綁定家人：${familySummary}。上次分享的位置：${locationSummary}。`;
+  } catch (error) {
+    console.error("[line.service] failed to build LINE user context", error);
+    return "";
+  }
+}
+
 async function handleTextMessage(
   replyToken: string,
   text: string,
   lineUserId?: string,
 ): Promise<void> {
   try {
+    const [history, lineUserContext] = lineUserId
+      ? await Promise.all([
+          getLineChatHistory(lineUserId),
+          buildLineUserContext(lineUserId),
+        ])
+      : [[], ""];
     const { systemInstruction, contents } = toGeminiHistory([
       { role: "system", content: withCurrentDate(LINE_FAMILY_SYSTEM_PROMPT) },
+      ...(lineUserContext
+        ? [{ role: "system" as const, content: lineUserContext }]
+        : []),
+      ...history,
       { role: "user", content: text },
     ]);
 
@@ -254,6 +338,9 @@ async function handleTextMessage(
 
     const reply = buildAgentReply(result);
     await replyAgentResult(replyToken, reply.speech, reply.routeCard);
+    if (lineUserId) {
+      await appendLineChatTurn(lineUserId, text, reply.speech);
+    }
   } catch (error) {
     console.error("[line.service] family agent failed", error);
     await replyText(replyToken, LINE_MSG.INFO);

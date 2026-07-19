@@ -21,8 +21,14 @@ vi.mock("../../config/ai/line-family-prompt", () => ({
   LINE_FAMILY_SYSTEM_PROMPT: "family prompt",
 }));
 
+vi.mock("./line-memory", () => ({
+  getLineChatHistory: vi.fn(),
+  appendLineChatTurn: vi.fn(),
+}));
+
 vi.mock("../../model/emergency-contact.model", () => ({
   default: {
+    find: vi.fn(),
     findOne: vi.fn(),
     updateMany: vi.fn(),
   },
@@ -36,6 +42,7 @@ vi.mock("../../model/sos-session.model", () => ({
 
 vi.mock("../../model/user.model", () => ({
   default: {
+    find: vi.fn(),
     findById: vi.fn(),
   },
 }));
@@ -55,8 +62,13 @@ import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-r
 import { LINE_MSG } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import type { LineEvent } from "./line.types";
+import {
+  appendLineChatTurn,
+  getLineChatHistory,
+} from "./line-memory";
 
 const contactModel = EmergencyContact as unknown as {
+  find: ReturnType<typeof vi.fn>;
   findOne: ReturnType<typeof vi.fn>;
   updateMany: ReturnType<typeof vi.fn>;
 };
@@ -64,6 +76,7 @@ const sosSessionModel = SosSession as unknown as {
   findById: ReturnType<typeof vi.fn>;
 };
 const userModel = User as unknown as {
+  find: ReturnType<typeof vi.fn>;
   findById: ReturnType<typeof vi.fn>;
 };
 
@@ -73,6 +86,14 @@ beforeEach(() => {
   vi.mocked(replyAgentResult).mockResolvedValue(undefined);
   vi.mocked(replyText).mockResolvedValue(undefined);
   vi.mocked(runToolLoop).mockResolvedValue({ text: "agent reply", toolResults: [] });
+  vi.mocked(getLineChatHistory).mockResolvedValue([]);
+  vi.mocked(appendLineChatTurn).mockResolvedValue(undefined);
+  contactModel.find.mockReturnValue({
+    select: () => ({ lean: () => Promise.resolve([]) }),
+  });
+  userModel.find.mockReturnValue({
+    select: () => ({ lean: () => Promise.resolve([]) }),
+  });
   vi.mocked(planAccessibleRouteFromRequest).mockResolvedValue({
     ok: true,
     data: {
@@ -109,6 +130,67 @@ describe("line.service — message", () => {
 
     expect(vi.mocked(runToolLoop)).toHaveBeenCalled();
     expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith("r1", "agent reply", null);
+    expect(vi.mocked(appendLineChatTurn)).toHaveBeenCalledWith(
+      "U1",
+      "他現在在哪",
+      "agent reply",
+    );
+  });
+
+  it("injects personal context and prior turns before the current message", async () => {
+    vi.mocked(getLineChatHistory).mockResolvedValue([
+      { role: "user", content: "天氣如何" },
+      { role: "assistant", content: "要查哪個地區？" },
+    ]);
+    contactModel.find.mockReturnValue({
+      select: () => ({
+        lean: () =>
+          Promise.resolve([
+            {
+              userId: "u1",
+              lastLineLat: 25.0478,
+              lastLineLng: 121.5171,
+              lastLineLocationUpdatedAt: new Date("2026-07-19T04:30:00.000Z"),
+            },
+          ]),
+      }),
+    });
+    userModel.find.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve([{ _id: "u1", name: "王小明" }]),
+      }),
+    });
+
+    await handleEvents([textEvent("台北")]);
+
+    const messages = vi.mocked(toGeminiHistory).mock.calls.at(-1)![0];
+    expect(messages).toEqual([
+      expect.objectContaining({ role: "system" }),
+      {
+        role: "system",
+        content: expect.stringContaining(
+          "【你服務的對象】此聯絡人已綁定家人：王小明。上次分享的位置：25.0478,121.5171",
+        ),
+      },
+      { role: "user", content: "天氣如何" },
+      { role: "assistant", content: "要查哪個地區？" },
+      { role: "user", content: "台北" },
+    ]);
+  });
+
+  it("keeps replying when personal context lookup fails", async () => {
+    contactModel.find.mockReturnValue({
+      select: () => ({ lean: () => Promise.reject(new Error("db down")) }),
+    });
+
+    await handleEvents([textEvent("台北天氣如何")]);
+
+    expect(vi.mocked(runToolLoop)).toHaveBeenCalled();
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
+      "r1",
+      "agent reply",
+      null,
+    );
   });
 
   it("injects the current date into the system prompt (F23)", async () => {
