@@ -408,7 +408,7 @@ const DriveLegSchema = z
     durationInTrafficMin: z.number().optional().openapi({
       example: 21,
       description:
-        "交通感知行駛時間（Routes API duration，帶未來 departureTime 時的塞車預測）",
+        "交通感知行駛時間（塞車預測）；目前自架 Valhalla 引擎未提供，保留供未來擴充",
     }),
     trafficLevel: z
       .enum(["light", "moderate", "heavy"])
@@ -483,7 +483,7 @@ export const AccessibleRouteSchema = z
           MotorcycleLegSchema,
         ]),
       )
-      .openapi({ description: "依序的路段：步行 → 大眾運輸 → 步行；運輸段類型為 BUS、METRO、THSR、TRA；開車／騎車路線為 DRIVE／MOTORCYCLE。" }),
+      .openapi({ description: "依序的路段：步行 → 大眾運輸 → 步行；運輸段類型為 BUS、METRO、THSR、TRA；開車／騎車路線主體為 DRIVE／MOTORCYCLE，且可能於頭、尾、以及各中途點含 WALK leg（步行銜接至/自可行車道路；中途點若只能步行抵達會出現一進一出兩段 WALK）。前端須依 leg.type 分派繪製。步行銜接段採真實行人幾何、絕不畫直線；其端點與相鄰車行段端點可能有至多約 25 公尺的網路層自然偏移（前端如需可自行視覺化銜接）。偵測到落差但無法建立可信步行路徑時不補 WALK leg，改於 accessibilityHighlights 給文字警示。" }),
     accessibilityHighlights: z
       .array(z.string())
       .openapi({ example: ["全程低地板公車", "出入口設有電梯"] }),

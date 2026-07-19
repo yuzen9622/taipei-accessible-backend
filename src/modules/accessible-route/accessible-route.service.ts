@@ -18,6 +18,7 @@ import type { IOsmA11y } from "../../types";
 import { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
 import { scoreRoute, routeCost, prerankCost, MODE_PROFILES } from "./scoring";
+import { haversineMeters } from "../../utils/geo";
 
 import type {
   AccessibilityMode,
@@ -38,6 +39,9 @@ export type {
   TraLeg,
   AccessibleRoute,
 } from "../../types/route";
+
+/** Search radius for the destination disabled-parking arrival anchor. */
+const PARKING_ARRIVAL_RADIUS_M = 200;
 
 function nearQuery(coords: [number, number], maxDistM: number) {
   return {
@@ -647,11 +651,80 @@ export async function planAccessibleRouteFromRequest(
       };
     }
   } else {
-    const outcome = await findDrivingRoutes(originLatLng, dest, {
+    // walk (no waypoints) → OTP2 pedestrian first, so it matches the walking legs
+    // used inside transit routing; Valhalla is the fallback. All other modes (and
+    // walk+waypoints) use the driving path below.
+    let otpWalkRoutes: AccessibleRoute[] | null = null;
+    if (travelMode === "walk" && !waypointsOpt) {
+      try {
+        const { planOtpWalk } = await import("./planners/otp-routing");
+        const w = await planOtpWalk(originLatLng, dest, { mode: mode ?? "normal" });
+        // OTP results still run the shared walk finalize/enrichment (dedupe →
+        // top-3 → nearby elevator/ramp highlight) for parity with Valhalla walk.
+        if (w.length) otpWalkRoutes = await finalizeDrivingRoutes(w, "walk", dest);
+      } catch (err) {
+        console.warn(
+          "[accessible-route] OTP walk failed; falling back to Valhalla",
+          err,
+        );
+      }
+    }
+    if (otpWalkRoutes && otpWalkRoutes.length) {
+      routes = otpWalkRoutes;
+    } else {
+    // Parking-aware arrival (drive/motorcycle): route the car to the nearest
+    // disabled-parking bay near the destination and walk from there. Best-effort
+    // — a lookup failure must not break routing; falls back to the true dest.
+    let routingDest = dest;
+    let finalWalkTarget: LatLng | undefined;
+    let arrivalParking: { name: string; distanceM: number } | undefined;
+    if (travelMode !== "walk") {
+      try {
+        const { findNearbyParking } = await import("../a11y/a11y.service");
+        const parking = await findNearbyParking(
+          dest.lat,
+          dest.lng,
+          PARKING_ARRIVAL_RADIUS_M,
+        );
+        if (parking.length) {
+          const p = parking[0];
+          const anchor: LatLng = {
+            lat: p.location.coordinates[1],
+            lng: p.location.coordinates[0],
+          };
+          routingDest = anchor;
+          finalWalkTarget = dest;
+          arrivalParking = {
+            name: p.placeName,
+            distanceM: Math.round(
+              haversineMeters(anchor.lat, anchor.lng, dest.lat, dest.lng),
+            ),
+          };
+        }
+      } catch (err) {
+        console.warn(
+          "[accessible-route] parking-aware arrival lookup failed; using true destination",
+          err,
+        );
+      }
+    }
+    let outcome = await findDrivingRoutes(originLatLng, routingDest, {
       travelMode,
       waypoints: waypointsOpt,
       departureTime: futureDeparture,
+      ...(finalWalkTarget ? { finalWalkTarget } : {}),
+      ...(arrivalParking ? { arrivalParking } : {}),
     });
+    // Two-stage fallback: if the parking bay is not drivable (NO_ROUTE → empty),
+    // retry once with the true destination and the plain current-behavior path.
+    // Only "empty" retries; "unavailable"/"error" keep their existing meaning.
+    if (outcome.kind === "empty" && finalWalkTarget) {
+      outcome = await findDrivingRoutes(originLatLng, dest, {
+        travelMode,
+        waypoints: waypointsOpt,
+        departureTime: futureDeparture,
+      });
+    }
     console.log(
       "[route-timing] request",
       JSON.stringify({ geocode: geocodeMs, city: cityMs, plan: Date.now() - tPlan }),
@@ -678,6 +751,7 @@ export async function planAccessibleRouteFromRequest(
       };
     }
     routes = outcome.routes;
+    }
   }
 
   return {
@@ -731,6 +805,7 @@ async function attachDrivingA11yHighlights(
   routes: AccessibleRoute[],
   travelMode: RoadTravelMode,
   destination: LatLng,
+  skipParkingHighlight = false,
 ): Promise<void> {
   if (!routes.length) return;
   if (travelMode === "walk") {
@@ -741,15 +816,18 @@ async function attachDrivingA11yHighlights(
     );
     if (structures.length) {
       const hl = `目的地附近有 ${structures.length} 處電梯／坡道`;
-      for (const r of routes) r.accessibilityHighlights = [hl];
+      for (const r of routes) r.accessibilityHighlights = [...r.accessibilityHighlights, hl];
     }
     return;
   }
+  // Parking-aware arrival already surfaced a specific bay — skip the generic
+  // nearby-parking count (avoids a duplicate lookup and an overlapping highlight).
+  if (skipParkingHighlight) return;
   const { findNearbyParking } = await import("../a11y/a11y.service");
   const parking = await findNearbyParking(destination.lat, destination.lng, 300);
   if (parking.length) {
     const hl = `目的地 300m 內有 ${parking.length} 處身障停車格`;
-    for (const r of routes) r.accessibilityHighlights = [hl];
+    for (const r of routes) r.accessibilityHighlights = [...r.accessibilityHighlights, hl];
   }
 }
 
@@ -767,6 +845,7 @@ async function finalizeDrivingRoutes(
   routes: AccessibleRoute[],
   travelMode: RoadTravelMode,
   destination: LatLng,
+  skipParkingHighlight = false,
 ): Promise<AccessibleRoute[]> {
   const ranked = dedupeDrivingRoutes(routes)
     .sort(
@@ -776,7 +855,7 @@ async function finalizeDrivingRoutes(
     )
     .slice(0, 3);
   try {
-    await attachDrivingA11yHighlights(ranked, travelMode, destination);
+    await attachDrivingA11yHighlights(ranked, travelMode, destination, skipParkingHighlight);
   } catch (err) {
     console.warn("[accessible-route] driving a11y hook failed", err);
   }
@@ -811,6 +890,7 @@ async function findDrivingRoutes(
       travelMode: opts.travelMode,
       waypoints: opts.waypoints,
       departureTime: opts.departureTime,
+      finalWalkTarget: opts.finalWalkTarget,
     });
   } catch (err) {
     if (err instanceof ValhallaRoutingError) return { kind: "unavailable" };
@@ -818,7 +898,23 @@ async function findDrivingRoutes(
     return { kind: "error" };
   }
   if (!raw.length) return { kind: "empty" };
-  const routes = await finalizeDrivingRoutes(raw, opts.travelMode, destination);
+  // Highlight-hook uses the true destination, not a proxy arrival point.
+  const trueDest = opts.finalWalkTarget ?? destination;
+  const routes = await finalizeDrivingRoutes(
+    raw,
+    opts.travelMode,
+    trueDest,
+    !!opts.arrivalParking,
+  );
+  if (opts.arrivalParking) {
+    const { name, distanceM } = opts.arrivalParking;
+    for (const r of routes) {
+      r.accessibilityHighlights = [
+        ...r.accessibilityHighlights,
+        `已為您導引至最近身障停車格「${name}」（距目的地約 ${distanceM} 公尺）`,
+      ];
+    }
+  }
   return routes.length ? { kind: "ok", routes } : { kind: "empty" };
 }
 

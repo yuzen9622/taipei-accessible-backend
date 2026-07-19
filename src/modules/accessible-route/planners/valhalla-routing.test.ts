@@ -49,3 +49,227 @@ describe("planValhallaRoute", () => {
     await expect(planValhallaRoute({ lat: 1, lng: 2 }, { lat: 3, lng: 4 }, { travelMode: "drive" })).rejects.toBeInstanceOf(ValhallaRoutingError);
   });
 });
+
+// --- walk access legs (head / tail / waypoint connectors for drive & motorcycle) ---
+
+type LL = { lat: number; lng: number };
+// A drive leg's from/to round-trip back to the original [lat,lng] pair fed to encode().
+const driveLeg = (pts: [number, number][]) => ({
+  summary: { lengthKm: 3, timeSec: 600 },
+  shapePolyline6: encode(pts, 6),
+});
+const driveTrip = (legs: [number, number][][]) => ({ status: "OK" as const, trips: [{ summary: { lengthKm: 3 * legs.length, timeSec: 600 * legs.length }, legs: legs.map(driveLeg) }] });
+// Pedestrian mock endpoints EXACTLY equal the requested anchors → passes the gate.
+const pedTripFrom = (o: LL, d: LL, timeSec = 180) => ({
+  status: "OK" as const,
+  trips: [{ summary: { lengthKm: 0.15, timeSec }, legs: [{ summary: { lengthKm: 0.15, timeSec }, shapePolyline6: encode([[o.lat, o.lng], [d.lat, d.lng]], 6) }] }],
+});
+const walkLegs = (r: { legs: { type: string }[] }) => r.legs.filter((l) => l.type === "WALK");
+const near = (a: [number, number], b: LL) => Math.abs(a[0] - b.lng) < 1e-6 && Math.abs(a[1] - b.lat) < 1e-6;
+
+const ORIGIN: LL = { lat: 25.0, lng: 121.0 };
+const OSNAP: LL = { lat: 25.002, lng: 121.0 };      // ~222m from ORIGIN → head connector
+const DSNAP: LL = { lat: 25.05, lng: 121.05 };
+const DEST: LL = { lat: 25.052, lng: 121.05 };       // ~222m from DSNAP → tail connector
+
+describe("planValhallaRoute walk access legs", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  const pedestrianRouter = (fn: (o: LL, d: LL) => any) =>
+    compute.mockImplementation(async (p: any) => (p.costing === "pedestrian" ? fn(p.origin, p.destination) : driveTrip([[[OSNAP.lat, OSNAP.lng], [DSNAP.lat, DSNAP.lng]]])));
+
+  it("prepends a head WALK when origin is off the drivable network", async () => {
+    pedestrianRouter((o, d) => pedTripFrom(o, d));
+    const [route] = await planValhallaRoute(ORIGIN, DSNAP, { travelMode: "drive" });
+    expect(route.legs.map((l) => l.type)).toEqual(["WALK", "DRIVE"]);
+    const head = route.legs[0];
+    const drive = route.legs[1];
+    expect(head.type === "WALK" && head.from).toBe("起點");
+    // continuity: WALK end ≈ DRIVE from (Osnap); WALK start ≈ origin
+    expect(head.type === "WALK" && near(head.polyline.at(-1)!, OSNAP)).toBe(true);
+    expect(head.type === "WALK" && near(head.polyline[0], ORIGIN)).toBe(true);
+    expect(drive.type === "DRIVE" && drive.from).toMatchObject(OSNAP);
+    expect(route.totalWalkDistanceM).toBe(150);
+    expect(route.accessibilityHighlights.some((h) => h.includes("起點需步行約 150 公尺"))).toBe(true);
+  });
+
+  it("adds both head and tail WALK when both ends are off-network", async () => {
+    pedestrianRouter((o, d) => pedTripFrom(o, d));
+    const [route] = await planValhallaRoute(ORIGIN, DEST, { travelMode: "drive" });
+    expect(route.legs.map((l) => l.type)).toEqual(["WALK", "DRIVE", "WALK"]);
+    const tail = route.legs[2];
+    expect(tail.type === "WALK" && [tail.from, tail.to]).toEqual(["下車處", "終點"]);
+    expect(tail.type === "WALK" && near(tail.polyline[0], DSNAP)).toBe(true);
+    expect(tail.type === "WALK" && near(tail.polyline.at(-1)!, DEST)).toBe(true);
+  });
+
+  it("leaves the route untouched when endpoints are already roadside", async () => {
+    pedestrianRouter((o, d) => pedTripFrom(o, d));
+    const [route] = await planValhallaRoute(OSNAP, DSNAP, { travelMode: "drive" });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE"]);
+    expect(compute.mock.calls.some((c) => c[0].costing === "pedestrian")).toBe(false);
+    expect(route.totalWalkDistanceM).toBe(0);
+  });
+
+  it("drops the connector and warns when no walkable path exists (NO_ROUTE)", async () => {
+    pedestrianRouter(() => ({ status: "NO_ROUTE", trips: [] }));
+    const [route] = await planValhallaRoute(ORIGIN, DSNAP, { travelMode: "drive" });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE"]);
+    expect(route.accessibilityHighlights.some((h) => h.includes("無法建立可信步行路徑"))).toBe(true);
+  });
+
+  it("drops the connector when the pedestrian endpoint lands beyond tolerance", async () => {
+    // pedestrian path ends ~55m from the drive snap → out of the 25m gate
+    pedestrianRouter((o) => pedTripFrom(o, { lat: OSNAP.lat + 0.0005, lng: OSNAP.lng }));
+    const [route] = await planValhallaRoute(ORIGIN, DSNAP, { travelMode: "drive" });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE"]);
+    expect(route.accessibilityHighlights.some((h) => h.includes("無法建立可信步行路徑"))).toBe(true);
+  });
+
+  it("never emits a straight 2-point connector polyline (uses real pedestrian geometry only)", async () => {
+    // Even for a failed gate the code must not fabricate a straight line
+    pedestrianRouter(() => ({ status: "NO_ROUTE", trips: [] }));
+    const [route] = await planValhallaRoute(ORIGIN, DEST, { travelMode: "drive" });
+    expect(walkLegs(route)).toHaveLength(0);
+  });
+
+  it("applies the same treatment to motorcycle", async () => {
+    pedestrianRouter((o, d) => pedTripFrom(o, d));
+    compute.mockImplementation(async (p: any) => (p.costing === "pedestrian" ? pedTripFrom(p.origin, p.destination) : driveTrip([[[OSNAP.lat, OSNAP.lng], [DSNAP.lat, DSNAP.lng]]])));
+    const [route] = await planValhallaRoute(ORIGIN, DSNAP, { travelMode: "motorcycle" });
+    expect(route.legs.map((l) => l.type)).toEqual(["WALK", "MOTORCYCLE"]);
+  });
+
+  it("does not add connectors in walk mode", async () => {
+    compute.mockResolvedValue(driveTrip([[[OSNAP.lat, OSNAP.lng], [DSNAP.lat, DSNAP.lng]]]));
+    const routes = await planValhallaRoute(ORIGIN, DSNAP, { travelMode: "walk" });
+    expect(routes[0].legs.every((l) => l.type === "WALK")).toBe(true);
+    // walk mode's own main query is pedestrian; connector logic must NOT run → exactly 1 call
+    expect(compute.mock.calls.filter((c) => c[0].costing === "pedestrian")).toHaveLength(1);
+  });
+
+  it("single-flights shared connectors across alternates", async () => {
+    compute.mockImplementation(async (p: any) =>
+      p.costing === "pedestrian"
+        ? pedTripFrom(p.origin, p.destination)
+        : { status: "OK", trips: [driveTrip([[[OSNAP.lat, OSNAP.lng], [DSNAP.lat, DSNAP.lng]]]).trips[0], driveTrip([[[OSNAP.lat, OSNAP.lng], [DSNAP.lat, DSNAP.lng]]]).trips[0]] },
+    );
+    const routes = await planValhallaRoute(ORIGIN, DSNAP, { travelMode: "drive" });
+    expect(routes).toHaveLength(2);
+    // both alternates share the same Osnap → one pedestrian call, not two
+    expect(compute.mock.calls.filter((c) => c[0].costing === "pedestrian")).toHaveLength(1);
+    expect(routes.every((r) => r.legs[0].type === "WALK")).toBe(true);
+  });
+
+  it("brackets a walk-only waypoint with an atomic arrive+depart WALK pair", async () => {
+    const WP: LL = { lat: 25.03, lng: 121.03 };            // true waypoint
+    const ARR: LL = { lat: 25.028, lng: 121.028 };          // arrival snap (leg0.to)
+    const DEP: LL = { lat: 25.0281, lng: 121.0281 };        // departure snap (leg1.from), different point
+    compute.mockImplementation(async (p: any) =>
+      p.costing === "pedestrian"
+        ? pedTripFrom(p.origin, p.destination)
+        : driveTrip([[[OSNAP.lat, OSNAP.lng], [ARR.lat, ARR.lng]], [[DEP.lat, DEP.lng], [DSNAP.lat, DSNAP.lng]]]));
+    const [route] = await planValhallaRoute(OSNAP, DSNAP, { travelMode: "drive", waypoints: [WP] });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE", "WALK", "WALK", "DRIVE"]);
+    const [, wIn, wOut] = route.legs;
+    // arrive-side gate against leg0.to, depart-side against leg1.from (R8-F1)
+    expect(wIn.type === "WALK" && near(wIn.polyline[0], ARR)).toBe(true);
+    expect(wIn.type === "WALK" && near(wIn.polyline.at(-1)!, WP)).toBe(true);
+    expect(wOut.type === "WALK" && near(wOut.polyline[0], WP)).toBe(true);
+    expect(wOut.type === "WALK" && near(wOut.polyline.at(-1)!, DEP)).toBe(true);
+    expect(route.accessibilityHighlights.some((h) => h.includes("中途點 1 需步行約 300 公尺往返停車處"))).toBe(true);
+  });
+
+  it("inserts neither waypoint WALK when the pair is not atomic (depart fails)", async () => {
+    const WP: LL = { lat: 25.03, lng: 121.03 };
+    const ARR: LL = { lat: 25.028, lng: 121.028 };
+    const DEP: LL = { lat: 25.0281, lng: 121.0281 };
+    compute.mockImplementation(async (p: any) => {
+      if (p.costing !== "pedestrian") return driveTrip([[[OSNAP.lat, OSNAP.lng], [ARR.lat, ARR.lng]], [[DEP.lat, DEP.lng], [DSNAP.lat, DSNAP.lng]]]);
+      // depart connector (from the true waypoint) fails; arrive succeeds
+      if (Math.abs(p.origin.lat - WP.lat) < 1e-9 && Math.abs(p.origin.lng - WP.lng) < 1e-9) return { status: "NO_ROUTE", trips: [] };
+      return pedTripFrom(p.origin, p.destination);
+    });
+    const [route] = await planValhallaRoute(OSNAP, DSNAP, { travelMode: "drive", waypoints: [WP] });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE", "DRIVE"]);
+    expect(route.accessibilityHighlights.some((h) => h.includes("中途點 1 距可行車路段"))).toBe(true);
+  });
+
+  it("inserts neither waypoint WALK when the pair is not atomic (arrive fails)", async () => {
+    const WP: LL = { lat: 25.03, lng: 121.03 };
+    const ARR: LL = { lat: 25.028, lng: 121.028 };
+    const DEP: LL = { lat: 25.0281, lng: 121.0281 };
+    compute.mockImplementation(async (p: any) => {
+      if (p.costing !== "pedestrian") return driveTrip([[[OSNAP.lat, OSNAP.lng], [ARR.lat, ARR.lng]], [[DEP.lat, DEP.lng], [DSNAP.lat, DSNAP.lng]]]);
+      // arrive connector (to the true waypoint) fails; depart succeeds
+      if (Math.abs(p.destination.lat - WP.lat) < 1e-9 && Math.abs(p.destination.lng - WP.lng) < 1e-9) return { status: "NO_ROUTE", trips: [] };
+      return pedTripFrom(p.origin, p.destination);
+    });
+    const [route] = await planValhallaRoute(OSNAP, DSNAP, { travelMode: "drive", waypoints: [WP] });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE", "DRIVE"]);
+    expect(route.accessibilityHighlights.some((h) => h.includes("中途點 1 距可行車路段"))).toBe(true);
+  });
+
+  it("skips waypoint legs (head/tail only) when leg count does not match waypoint count", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // 1 waypoint requested but Valhalla returns a single leg
+    compute.mockImplementation(async (p: any) => (p.costing === "pedestrian" ? pedTripFrom(p.origin, p.destination) : driveTrip([[[OSNAP.lat, OSNAP.lng], [DSNAP.lat, DSNAP.lng]]])));
+    const [route] = await planValhallaRoute(ORIGIN, DEST, { travelMode: "drive", waypoints: [{ lat: 25.03, lng: 121.03 }] });
+    expect(route.legs.map((l) => l.type)).toEqual(["WALK", "DRIVE", "WALK"]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("keeps per-position labels correct when the same geometry is reused (no cache label bleed)", async () => {
+    // head anchors (ORIGIN→OSNAP) and a waypoint arrive share identical coords → same cache key
+    const WP: LL = OSNAP;                 // waypoint equals the head snap coords
+    const ARR: LL = ORIGIN;               // arrival snap equals origin → arrive connector key == head key
+    const DEP: LL = { lat: 25.0281, lng: 121.0281 };
+    compute.mockImplementation(async (p: any) =>
+      p.costing === "pedestrian"
+        ? pedTripFrom(p.origin, p.destination)
+        : driveTrip([[[OSNAP.lat, OSNAP.lng], [ARR.lat, ARR.lng]], [[DEP.lat, DEP.lng], [DSNAP.lat, DSNAP.lng]]]));
+    const [route] = await planValhallaRoute(ORIGIN, DSNAP, { travelMode: "drive", waypoints: [WP] });
+    const head = route.legs.find((l) => l.type === "WALK" && l.from === "起點");
+    const wpIn = route.legs.find((l) => l.type === "WALK" && l.from === "中途點 1 停車處");
+    expect(head).toBeDefined();
+    expect(wpIn).toBeDefined();
+  });
+});
+
+// --- parking-aware tail: finalWalkTarget redirects the trailing WALK ---
+
+// PARK = the drive's routing destination snap (the disabled-parking bay);
+// DEST is the TRUE destination ~222m past it, so a tail connector appears.
+const PARK: LL = DSNAP;
+
+describe("planValhallaRoute finalWalkTarget (parking-aware tail)", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("targets finalWalkTarget instead of the routing destination", async () => {
+    // origin == drive leg start → no head; routing dest == PARK == drive leg end
+    compute.mockImplementation(async (p: any) =>
+      p.costing === "pedestrian"
+        ? pedTripFrom(p.origin, p.destination)
+        : driveTrip([[[ORIGIN.lat, ORIGIN.lng], [PARK.lat, PARK.lng]]]));
+    const [route] = await planValhallaRoute(ORIGIN, PARK, { travelMode: "drive", finalWalkTarget: DEST });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE", "WALK"]);
+    const drive = route.legs[0];
+    const tail = route.legs[1];
+    expect(drive.type === "DRIVE" && drive.to).toMatchObject(PARK);
+    // tail reaches the TRUE destination, not the parking snap
+    expect(tail.type === "WALK" && near(tail.polyline.at(-1)!, DEST)).toBe(true);
+    expect(tail.type === "WALK" && near(tail.polyline.at(-1)!, PARK)).toBe(false);
+  });
+
+  it("targets the routing destination when finalWalkTarget is unset (regression)", async () => {
+    compute.mockImplementation(async (p: any) =>
+      p.costing === "pedestrian"
+        ? pedTripFrom(p.origin, p.destination)
+        : driveTrip([[[ORIGIN.lat, ORIGIN.lng], [PARK.lat, PARK.lng]]]));
+    const [route] = await planValhallaRoute(ORIGIN, DEST, { travelMode: "drive" });
+    expect(route.legs.map((l) => l.type)).toEqual(["DRIVE", "WALK"]);
+    const tail = route.legs[1];
+    expect(tail.type === "WALK" && near(tail.polyline.at(-1)!, DEST)).toBe(true);
+  });
+});
