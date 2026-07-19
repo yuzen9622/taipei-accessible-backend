@@ -100,14 +100,15 @@ describe("DELETE /user/emergency-contacts/:id", () => {
     expect(res.body.data.reason).toBe(CONTACT_REASON.NOT_CONTACT_OWNER);
   });
 
-  it("returns 205 on success", async () => {
+  it("returns 200 on success", async () => {
     vi.mocked(service.deleteContact).mockResolvedValue({
       ok: true,
-      httpCode: ResponseCode.DELETED,
+      httpCode: ResponseCode.OK,
       message: CONTACT_MSG.DELETED,
       data: null,
     });
     const res = await request(app).delete(`${URL}/507f1f77bcf86cd799439011`).set("Authorization", auth);
-    expect(res.status).toBe(ResponseCode.DELETED);
+    expect(res.status).toBe(ResponseCode.OK);
+    expect(res.body.message).toBe(CONTACT_MSG.DELETED);
   });
 });

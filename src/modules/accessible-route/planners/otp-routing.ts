@@ -127,6 +127,11 @@ function createBreaker(name: string): Breaker {
 
 const planBreaker = createBreaker("plan");
 const railGeomBreaker = createBreaker("railgeom");
+// Walk-mode routing has its own breaker so its failures never trip the transit
+// planner (and vice versa) — the two OTP call paths stay isolated fault domains.
+const walkPlanBreaker = createBreaker("walkplan");
+
+const WALK_OSM_ATTRIBUTION = "© OpenStreetMap contributors";
 
 /**
  * Whether the main OTP plan circuit is currently open (tripped). Lets callers
@@ -284,6 +289,138 @@ async function queryOtpPlan(
     throw new Error(`OTP GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
   }
   return json.data?.plan?.itineraries ?? [];
+}
+
+const WALK_QUERY = `
+query Walk(
+  $fromLat: Float!, $fromLon: Float!,
+  $toLat: Float!, $toLon: Float!,
+  $date: String!, $time: String!,
+  $wheelchair: Boolean!, $numItineraries: Int!, $walkSpeed: Float
+) {
+  plan(
+    from: { lat: $fromLat, lon: $fromLon }
+    to: { lat: $toLat, lon: $toLon }
+    date: $date
+    time: $time
+    wheelchair: $wheelchair
+    walkSpeed: $walkSpeed
+    numItineraries: $numItineraries
+    transportModes: [{ mode: WALK }]
+    locale: "zh-TW"
+  ) {
+    itineraries {
+      duration
+      walkDistance
+      legs {
+        mode
+        startTime
+        endTime
+        duration
+        distance
+        from { name }
+        to { name }
+        legGeometry { points }
+        steps {
+          distance
+          lon
+          lat
+          relativeDirection
+          absoluteDirection
+          streetName
+          area
+          bogusName
+        }
+      }
+    }
+  }
+}`;
+
+async function queryOtpWalk(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  departure: Date,
+  wheelchair: boolean,
+  walkSpeed: number,
+): Promise<OtpItinerary[]> {
+  const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
+  const response = await otpClient.post(`${baseUrl}/otp/routers/default/index/graphql`, {
+    query: WALK_QUERY,
+    variables: {
+      fromLat: origin.lat,
+      fromLon: origin.lng,
+      toLat: destination.lat,
+      toLon: destination.lng,
+      date: ymdDash(departure),
+      time: hhmm(departure.getTime()),
+      wheelchair,
+      walkSpeed,
+      numItineraries: OTP_NUM_ITINERARIES,
+    },
+  });
+  const json = response.data as {
+    data?: { plan?: { itineraries?: OtpItinerary[] } };
+    errors?: { message?: string }[];
+  };
+  if (json.errors?.length) {
+    throw new Error(`OTP GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
+  }
+  return json.data?.plan?.itineraries ?? [];
+}
+
+/**
+ * Plan a pure walking route via OTP2 (pedestrian), so `travelMode=walk` uses the
+ * same street engine as the walking legs inside transit routing. Uses its own
+ * circuit breaker, filters to genuinely walk-only itineraries with usable
+ * geometry, and is fail-soft ([]) so the caller can fall back to Valhalla. Does
+ * NOT run the transit stop-snap retry.
+ *
+ * @param origin The origin coordinate.
+ * @param destination The destination coordinate.
+ * @param opts Optional accessibility mode (drives wheelchair routing + walk speed).
+ * @returns Walk-only AccessibleRoutes (top 3), or [] when none are usable.
+ */
+export async function planOtpWalk(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  opts?: { mode?: AccessibilityMode },
+): Promise<AccessibleRoute[]> {
+  if (walkPlanBreaker.isOpen()) return [];
+  const mode = opts?.mode ?? "normal";
+  const wheelchair = mode === "wheelchair";
+  const walkSpeed = walkSpeedMps(mode);
+
+  let itineraries: OtpItinerary[];
+  try {
+    itineraries = await queryOtpWalk(origin, destination, new Date(), wheelchair, walkSpeed);
+    walkPlanBreaker.recordSuccess();
+  } catch (err) {
+    walkPlanBreaker.recordFailure();
+    console.warn("[otp-routing] walk query failed (fail-soft to [])", err);
+    return [];
+  }
+
+  const out: AccessibleRoute[] = [];
+  for (const it of itineraries) {
+    if (!it.legs.length || !it.legs.every((l) => l.mode === "WALK")) continue;
+    const legs = it.legs.map((l, i) => walkLegFrom(l, i === 0, i === it.legs.length - 1));
+    if (!legs.every((l) => l.polyline.length >= 2)) continue;
+    const totalWalkDistanceM = Number.isFinite(it.walkDistance)
+      ? Math.round(it.walkDistance as number)
+      : Math.round(legs.reduce((sum, l) => sum + l.distanceM, 0));
+    out.push({
+      routeId: `walk-${out.length}`,
+      routeName: "步行",
+      totalMinutes: Math.max(1, Math.round(it.duration / 60)),
+      transferCount: 0,
+      legs,
+      accessibilityHighlights: [],
+      totalWalkDistanceM,
+      attribution: WALK_OSM_ATTRIBUTION,
+    });
+    if (out.length >= 3) break;
+  }
+  return out;
 }
 
 const RAIL_GEOMETRY_QUERY = `

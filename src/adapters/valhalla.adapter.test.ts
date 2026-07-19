@@ -32,6 +32,16 @@ describe("computeValhallaRoutes", () => {
     if (result.status === "OK") expect(result.trips).toHaveLength(2);
   });
 
+  it.each(["pedestrian", "auto", "motorcycle"] as const)(
+    "excludes ferries via costing_options for %s",
+    async (costing) => {
+      post.mockResolvedValue({ data: { trip } });
+      await computeValhallaRoutes({ origin: { lat: 1, lng: 2 }, destination: { lat: 3, lng: 4 }, costing });
+      const body = post.mock.calls[0][1] as { costing_options: Record<string, { exclude_ferries: boolean; use_ferry: number }> };
+      expect(body.costing_options[costing]).toEqual({ exclude_ferries: true, use_ferry: 0 });
+    },
+  );
+
   it("omits alternatives when waypoints exist", async () => {
     post.mockResolvedValue({ data: { trip } });
     await computeValhallaRoutes({ origin: { lat: 1, lng: 2 }, destination: { lat: 5, lng: 6 }, waypoints: [{ lat: 3, lng: 4 }], costing: "auto", computeAlternatives: true });

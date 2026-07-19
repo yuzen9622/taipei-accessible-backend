@@ -72,12 +72,18 @@ export interface PlanRoadRouteOptions {
   travelMode: RoadTravelMode;
   waypoints?: LatLng[];
   departureTime?: Date;
+  /** True destination for the tail walk when the drive routes to a proxy arrival point (e.g. disabled parking). */
+  finalWalkTarget?: LatLng;
 }
 
 export interface FindDrivingRoutesOptions {
   travelMode: RoadTravelMode;
   waypoints?: LatLng[];
   departureTime?: Date;
+  /** True destination for the tail walk when `destination` is a proxy arrival point (e.g. disabled parking). */
+  finalWalkTarget?: LatLng;
+  /** Set when the drive was routed to a disabled parking bay, for the arrival highlight. */
+  arrivalParking?: { name: string; distanceM: number };
 }
 
 export interface PlanRouteRequest {

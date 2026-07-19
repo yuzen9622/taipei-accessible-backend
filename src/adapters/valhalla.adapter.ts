@@ -128,6 +128,11 @@ export async function computeValhallaRoutes(
   const body: Record<string, unknown> = {
     locations,
     costing: params.costing,
+    // Exclude ferries so no mode (walk/drive/motorcycle) routes across the strait
+    // to an offshore island (e.g. a 新竹→台南 walk hopping via 澎湖/馬公). exclude_ferries
+    // is a hard exclusion where the deployment allows it; use_ferry: 0 is the soft
+    // fallback that any deployment honors.
+    costing_options: { [params.costing]: { exclude_ferries: true, use_ferry: 0 } },
     directions_options: { units: "kilometers", language: VALHALLA_LANGUAGE },
   };
   if (params.computeAlternatives && !params.waypoints?.length) body.alternates = 2;

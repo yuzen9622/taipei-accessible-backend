@@ -98,7 +98,7 @@ export async function createContact(input: CreateContactInput): Promise<ServiceR
  * Deletes an emergency contact owned by the caller.
  *
  * @param input Owner id and contact id.
- * @returns A 205 result, or 404/403 when missing / not owned.
+ * @returns A 200 result, or 404/403 when missing / not owned.
  */
 export async function deleteContact(input: DeleteContactInput): Promise<ServiceResult> {
   if (!Types.ObjectId.isValid(input.contactId)) {
@@ -112,5 +112,5 @@ export async function deleteContact(input: DeleteContactInput): Promise<ServiceR
     return fail(ResponseCode.FORBIDDEN, "NOT_CONTACT_OWNER");
   }
   await contact.deleteOne();
-  return { ok: true, httpCode: ResponseCode.DELETED, message: CONTACT_MSG.DELETED, data: null };
+  return { ok: true, httpCode: ResponseCode.OK, message: CONTACT_MSG.DELETED, data: null };
 }
