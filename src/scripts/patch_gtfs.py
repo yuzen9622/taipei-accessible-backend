@@ -10,6 +10,8 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import time
+import threading
+import concurrent.futures
 
 # Script to patch a GTFS static feed zip file with Taiwan City + InterCity bus
 # GeneralTimetable (定期班表) data and shape geometry. The regular timetable
@@ -31,6 +33,15 @@ CITIES = [
 ]
 
 CALENDAR_VALID_DAYS = 180
+
+# Valhalla /route accepts a bounded number of locations per request; longer
+# subroutes are split into consecutive chunks that share a boundary stop.
+VALHALLA_MAX_LOCATIONS = 40
+
+# Bounded worker pool for the per-subroute Valhalla travel-time profile calls.
+# This runs across thousands of freq-only subroutes at build time, so it must
+# not hammer Valhalla unbounded; 8 concurrent profile requests is the ceiling.
+VALHALLA_CONCURRENCY = 8
 
 # Socket timeout (seconds) for every TDX request, so a half-open connection
 # cannot hang the batch indefinitely.
@@ -389,13 +400,15 @@ def _synthesize_from_stop_of_route(sor_records):
     return synthetic
 
 
-def fetch_source(token, label, schedule_records, daily_records, shape_records,
+def fetch_source(token, label, schedule_records, daily_records, shape_records, sor_records,
                  schedule_fetcher, daily_fetcher, stop_of_route_fetcher, shape_fetcher):
     """Fetch one source (a city or InterCity) and extend the shared record
-    lists. Only DailyTimetableUnavailable triggers the StopOfRoute degradation;
-    every other exception (TdxFetchError, TdxHttpError, transport) propagates so
-    the import fails rather than silently producing a feed missing a source.
-    Returns a per-source fetch summary for observability."""
+    lists. StopOfRoute is fetched once per source and reused both for the
+    frequency-based subroute stop index and for the DailyTimetableUnavailable
+    synthesis path (no double fetch). Only DailyTimetableUnavailable triggers
+    the StopOfRoute degradation; every other exception (TdxFetchError,
+    TdxHttpError, transport) propagates so the import fails rather than silently
+    producing a feed missing a source. Returns a per-source fetch summary."""
     records, sched_source = schedule_fetcher()
     if not records:
         raise TdxFetchError(
@@ -404,6 +417,9 @@ def fetch_source(token, label, schedule_records, daily_records, shape_records,
             f"overwrite the feed without {label} (the same whole-city disappearance as the incident).")
     schedule_records.extend(records)
 
+    sor_recs = stop_of_route_fetcher()
+    sor_records.extend(sor_recs)
+
     daily_source, synth_profiles = "none", 0
     if needs_daily_fallback(records):
         try:
@@ -411,7 +427,7 @@ def fetch_source(token, label, schedule_records, daily_records, shape_records,
             daily_records.extend(d_recs)
         except DailyTimetableUnavailable:
             print(f"  {label}: DailyTimeTable unavailable — synthesizing profiles from StopOfRoute", file=sys.stderr)
-            synth = _synthesize_from_stop_of_route(stop_of_route_fetcher())
+            synth = _synthesize_from_stop_of_route(sor_recs)
             daily_records.extend(synth)
             daily_source, synth_profiles = "stoproute", len(synth)
         time.sleep(0.5)
@@ -420,9 +436,11 @@ def fetch_source(token, label, schedule_records, daily_records, shape_records,
     time.sleep(0.5)
 
     summary = {"city": label, "schedule": len(records), "schedule_source": sched_source,
-               "daily_source": daily_source, "synth_profiles": synth_profiles}
+               "daily_source": daily_source, "synth_profiles": synth_profiles,
+               "stop_of_route": len(sor_recs)}
     print(f"  {label}: schedule={summary['schedule']}({sched_source}), "
-          f"daily_source={daily_source}, synth_profiles={synth_profiles}")
+          f"daily_source={daily_source}, synth_profiles={synth_profiles}, "
+          f"stop_of_route={len(sor_recs)}")
     return summary
 
 
@@ -576,7 +594,280 @@ def synthesize_stop_rows(trip_id, timetable, key_uids, direction, daily_profiles
         })
     return rows
 
-def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles, route_shape_by_route, tdx_shapes, new_shapes):
+def build_stop_of_route_index(sor_records):
+    """Index StopOfRoute records by (SubRouteUID, Direction) -> ordered list of
+    {StopUID, seq, lat, lon}. Stops without a StopUID or coordinates are dropped;
+    only subroutes with >=2 resolvable stops (needed to form a stop_times pair)
+    are indexed."""
+    index = {}
+    for r in sor_records:
+        key_uid = r.get("SubRouteUID") or r.get("RouteUID")
+        direction = r.get("Direction", 0)
+        raw_stops = r.get("Stops") or []
+        if not key_uid or not raw_stops:
+            continue
+        stops = []
+        for s in raw_stops:
+            stop_id = s.get("StopUID") or s.get("StopID")
+            pos = s.get("StopPosition") or {}
+            lat = pos.get("PositionLat")
+            lon = pos.get("PositionLon")
+            if stop_id is None or lat is None or lon is None:
+                continue
+            try:
+                seq = int(s.get("StopSequence", 0))
+            except (TypeError, ValueError):
+                seq = 0
+            stops.append({"StopUID": stop_id, "seq": seq, "lat": lat, "lon": lon})
+        stops.sort(key=lambda x: x["seq"])
+        if len(stops) >= 2:
+            index[(key_uid, direction)] = stops
+    return index
+
+
+def _valhalla_route_times(locations):
+    """POST a list of (lat, lon) locations to ${VALHALLA_BASE_URL}/route with
+    costing "auto" and return the per-consecutive-pair travel time in seconds
+    (trip.legs[i].summary.time). Length is len(locations) - 1. Raises on missing
+    env, transport error, or unexpected response shape."""
+    base = os.environ.get("VALHALLA_BASE_URL")
+    if not base:
+        raise RuntimeError("VALHALLA_BASE_URL is not set")
+    url = base.rstrip("/") + "/route"
+    payload = {"locations": [{"lat": lat, "lon": lon} for (lat, lon) in locations],
+               "costing": "auto"}
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
+        body = json.loads(res.read().decode("utf-8"))
+    legs = body["trip"]["legs"]
+    return [leg["summary"]["time"] for leg in legs]
+
+
+def _valhalla_profile(stops):
+    """Build an N-length cumulative-seconds travel profile for N ordered stops
+    via Valhalla. Splits into consecutive chunks of at most VALHALLA_MAX_LOCATIONS
+    where adjacent chunks share the boundary stop (so no leg time is lost or
+    double counted), then stitches the per-chunk cumulative sums together."""
+    n = len(stops)
+    if n < 2:
+        raise ValueError("need >=2 stops for a travel profile")
+    profile = [0]
+    start = 0
+    while True:
+        end = min(start + VALHALLA_MAX_LOCATIONS, n)
+        chunk = stops[start:end]
+        times = _valhalla_route_times(chunk)
+        if len(times) != len(chunk) - 1:
+            raise ValueError(
+                f"Valhalla returned {len(times)} legs for {len(chunk)} locations")
+        for t in times:
+            profile.append(profile[-1] + t)
+        if end >= n:
+            break
+        start = end - 1
+    return profile
+
+
+def build_travel_profile(stops, fail_counter=None):
+    """Return an N-length cumulative-seconds profile for N ordered (lat, lon)
+    stops: profile[0] == 0, monotonic non-decreasing. On ANY failure (network,
+    bad response, or a violated invariant) fall back to a 2-min-per-stop profile
+    so the subroute stays plannable, and increment fail_counter[0] (guarded by a
+    lock) when one is provided."""
+    n = len(stops)
+    try:
+        profile = _valhalla_profile(stops)
+        assert len(profile) == n
+        assert profile[0] == 0
+        assert all(profile[i] <= profile[i + 1] for i in range(len(profile) - 1))
+        return profile
+    except Exception:
+        if fail_counter is not None:
+            with _VALHALLA_FAIL_LOCK:
+                fail_counter[0] += 1
+        return [i * 120 for i in range(n)]
+
+
+_VALHALLA_FAIL_LOCK = threading.Lock()
+
+
+def _mean_headway_secs(min_h, max_h):
+    """Mean of the min/max headway minutes converted to whole seconds, matching
+    the metro convention. None when neither value is numeric."""
+    vals = [v for v in (min_h, max_h) if isinstance(v, (int, float))]
+    if not vals:
+        return None
+    return round(sum(vals) / len(vals) * 60)
+
+
+def _merge_frequency_windows(windows):
+    """Merge overlapping/duplicate frequency windows WITHIN a single template
+    trip so the feed never carries two overlapping windows for the same trip_id
+    (which fails the gtfs-validator). Windows are [start, end) in minutes; an
+    overlap extends the earlier window's end and keeps its headway."""
+    ordered = sorted(windows, key=lambda w: (w["start"], w["end"]))
+    merged = []
+    for w in ordered:
+        if merged and w["start"] < merged[-1]["end"]:
+            if w["end"] > merged[-1]["end"]:
+                merged[-1]["end"] = w["end"]
+        else:
+            merged.append(dict(w))
+    return merged
+
+
+def _select_shape_id(matched_id, sub_route_uid, route_uid, direction,
+                     route_shape_by_route, tdx_shapes, new_shapes, stats):
+    """Hybrid shape selection: inherit the original static GTFS shape for the
+    route if present, else fall back to the freshly fetched TDX shape index
+    (direct then reversed opposite direction). Increments missing_shape when no
+    geometry is available."""
+    shape_id = route_shape_by_route.get(matched_id, "")
+    if not shape_id:
+        pts = None
+        for key_uid in (sub_route_uid, route_uid):
+            if key_uid:
+                if (key_uid, direction) in tdx_shapes:
+                    pts = tdx_shapes[(key_uid, direction)]
+                    break
+                opp_dir = 1 - direction
+                if (key_uid, opp_dir) in tdx_shapes:
+                    pts = tdx_shapes[(key_uid, opp_dir)][::-1]
+                    break
+        if pts:
+            shape_id = f"patched_shp_{matched_id}"
+            new_shapes[shape_id] = pts
+        else:
+            stats["missing_shape"] += 1
+    return shape_id
+
+
+def _resolve_sor_stops(route, sor_index):
+    sub_route_uid = route.get("SubRouteUID")
+    route_uid = route.get("RouteUID")
+    direction = route.get("Direction", 0)
+    for key_uid in (sub_route_uid, route_uid):
+        if key_uid and (key_uid, direction) in sor_index:
+            return sor_index[(key_uid, direction)]
+    return None
+
+
+def _emit_frequency_trip(route, matched_id, stops, profile, new_trips, new_stop_times,
+                         new_frequencies, seen_trips, service_patterns, stats,
+                         route_shape_by_route, tdx_shapes, new_shapes):
+    """Emit one headway template trip per weekday pattern for a freq-only
+    subroute: stop_times from the travel profile, and one frequencies.txt row per
+    (merged) window."""
+    sub_route_uid = route.get("SubRouteUID")
+    route_uid = route.get("RouteUID")
+    route_id_tdx = route.get("RouteID")
+    direction = route.get("Direction", 0)
+    record_key = sub_route_uid or route_uid or route_id_tdx or "unknown"
+
+    by_pattern = {}
+    for fr in route.get("Frequencys") or []:
+        service_day = fr.get("ServiceDay") or {}
+        pattern = tuple(1 if service_day.get(k) else 0 for k in WEEKDAY_KEYS)
+        if not any(pattern):
+            stats["no_service_day"] += 1
+            continue
+        start_min = parse_hhmm(fr.get("StartTime"))
+        end_min = parse_hhmm(fr.get("EndTime"))
+        headway = _mean_headway_secs(fr.get("MinHeadwayMins"), fr.get("MaxHeadwayMins"))
+        if start_min is None or end_min is None or headway is None or headway <= 0:
+            continue
+        if end_min <= start_min:
+            end_min += 1440
+        by_pattern.setdefault(pattern, []).append(
+            {"start": start_min, "end": end_min, "headway": headway})
+
+    for pattern, windows in by_pattern.items():
+        pattern_digits = "".join(str(d) for d in pattern)
+        trip_id = f"freqpatched_{matched_id}_{record_key}_{pattern_digits}"
+        if trip_id in seen_trips:
+            stats["dup_trip"] += 1
+            continue
+        windows = _merge_frequency_windows(windows)
+        if not windows:
+            continue
+        base_min = min(w["start"] for w in windows)
+
+        stop_rows = []
+        prev_t = None
+        for i, s in enumerate(stops):
+            t = base_min + round(profile[i] / 60)
+            if prev_t is not None and t <= prev_t:
+                t = prev_t + 1
+            prev_t = t
+            stop_rows.append({
+                "trip_id": trip_id,
+                "arrival_time": fmt_gtfs_time(t),
+                "departure_time": fmt_gtfs_time(t),
+                "stop_id": s["StopUID"],
+                "stop_sequence": str(s["seq"]),
+            })
+
+        shape_id = _select_shape_id(matched_id, sub_route_uid, route_uid, direction,
+                                    route_shape_by_route, tdx_shapes, new_shapes, stats)
+
+        seen_trips.add(trip_id)
+        service_patterns.add(pattern)
+        new_trips.append({
+            "route_id": matched_id,
+            "service_id": service_id_for_pattern(pattern),
+            "trip_id": trip_id,
+            "shape_id": shape_id,
+            "direction_id": str(direction),
+        })
+        new_stop_times.extend(stop_rows)
+        stats["freq_trips"] += 1
+        for w in windows:
+            new_frequencies.append({
+                "trip_id": trip_id,
+                "start_time": fmt_gtfs_time(w["start"]),
+                "end_time": fmt_gtfs_time(w["end"]),
+                "headway_secs": w["headway"],
+                "exact_times": "0",
+            })
+            stats["freq_windows"] += 1
+
+
+def _generate_frequency_trips(freq_pending, sor_index, new_trips, new_stop_times,
+                              new_frequencies, seen_trips, service_patterns, stats,
+                              route_shape_by_route, tdx_shapes, new_shapes):
+    """Second pass over the freq-only subroutes collected during the schedule
+    loop: resolve StopOfRoute stops, compute Valhalla travel profiles with a
+    bounded worker pool, then emit template trips + frequencies rows."""
+    resolved = []
+    for route, matched_id in freq_pending:
+        stops = _resolve_sor_stops(route, sor_index)
+        if not stops or len(stops) < 2:
+            stats["freq_no_stops"] += 1
+            continue
+        resolved.append((route, matched_id, stops))
+
+    if not resolved:
+        return
+
+    fail_counter = [0]
+    coords = [[(s["lat"], s["lon"]) for s in stops] for (_, _, stops) in resolved]
+    profiles = [None] * len(resolved)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=VALHALLA_CONCURRENCY) as ex:
+        future_to_idx = {ex.submit(build_travel_profile, c, fail_counter): i
+                         for i, c in enumerate(coords)}
+        for fut in concurrent.futures.as_completed(future_to_idx):
+            profiles[future_to_idx[fut]] = fut.result()
+    stats["freq_valhalla_fail"] += fail_counter[0]
+
+    for (route, matched_id, stops), profile in zip(resolved, profiles):
+        _emit_frequency_trip(route, matched_id, stops, profile, new_trips, new_stop_times,
+                             new_frequencies, seen_trips, service_patterns, stats,
+                             route_shape_by_route, tdx_shapes, new_shapes)
+
+
+def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_frequencies, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles, route_shape_by_route, tdx_shapes, new_shapes, sor_index):
+    freq_pending = []
     for route in records:
         route_uid = route.get("RouteUID")
         sub_route_uid = route.get("SubRouteUID")
@@ -622,10 +913,13 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_tr
         if not matched_id:
             continue
 
+        if route.get("Frequencys"):
+            freq_pending.append((route, matched_id))
+
         timetables = route.get("Timetables") or route.get("TimeTables") or []
         if not timetables:
-            # Headway-only subroutes carry no StopTimes, so no GTFS trip can be
-            # synthesised from the Schedule API alone.
+            # Headway-only subroutes carry no StopTimes; they become boardable via
+            # the frequency template-trip pass (frequencies.txt) below.
             if route.get("Frequencys"):
                 stats["freq_only"] += 1
             continue
@@ -670,30 +964,9 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_tr
 
             seen_trips.add(trip_id)
             service_patterns.add(pattern)
-            
-            # Hybrid shape selection:
-            # 1. Inherit from original static GTFS if it exists
-            shape_id = route_shape_by_route.get(matched_id, "")
-            
-            # 2. Otherwise lookup in our newly fetched TDX shape index
-            if not shape_id:
-                pts = None
-                for key_uid in (sub_route_uid, route_uid):
-                    if key_uid:
-                        # Direct match
-                        if (key_uid, direction) in tdx_shapes:
-                            pts = tdx_shapes[(key_uid, direction)]
-                            break
-                        # Opposite direction fallback (reversed)
-                        opp_dir = 1 - direction
-                        if (key_uid, opp_dir) in tdx_shapes:
-                            pts = tdx_shapes[(key_uid, opp_dir)][::-1]
-                            break
-                if pts:
-                    shape_id = f"patched_shp_{matched_id}"
-                    new_shapes[shape_id] = pts
-                else:
-                    stats["missing_shape"] += 1
+
+            shape_id = _select_shape_id(matched_id, sub_route_uid, route_uid, direction,
+                                        route_shape_by_route, tdx_shapes, new_shapes, stats)
 
             new_trips.append({
                 "route_id": matched_id,
@@ -704,7 +977,11 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, seen_tr
             })
             new_stop_times.extend(stop_rows)
 
-def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, start_date):
+    _generate_frequency_trips(
+        freq_pending, sor_index, new_trips, new_stop_times, new_frequencies,
+        seen_trips, service_patterns, stats, route_shape_by_route, tdx_shapes, new_shapes)
+
+def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_records, start_date):
     cal_start = start_date.strftime("%Y%m%d")
     cal_end = (start_date + datetime.timedelta(days=CALENDAR_VALID_DAYS)).strftime("%Y%m%d")
 
@@ -790,24 +1067,31 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, start_
     # 6. Parse schedule records into weekly-service trips & map shape geometries
     new_trips = []
     new_stop_times = []
+    new_frequencies = []
     seen_trips = set()
     service_patterns = set()
-    stats = {"freq_only": 0, "no_service_day": 0, "dup_trip": 0, "short_trip": 0, "synthesized": 0, "missing_shape": 0}
+    stats = {"freq_only": 0, "no_service_day": 0, "dup_trip": 0, "short_trip": 0,
+             "synthesized": 0, "missing_shape": 0, "freq_trips": 0, "freq_windows": 0,
+             "freq_valhalla_fail": 0, "freq_no_stops": 0}
     daily_profiles = build_daily_profiles(daily_records)
+    sor_index = build_stop_of_route_index(sor_records)
     new_shapes = {}
-    
+
     process_schedule_records_to_gtfs(
-        schedule_records, new_trips, new_stop_times, seen_trips,
+        schedule_records, new_trips, new_stop_times, new_frequencies, seen_trips,
         route_list, route_ids_set, service_patterns, stats, daily_profiles,
-        route_shape_by_route, tdx_shapes, new_shapes
+        route_shape_by_route, tdx_shapes, new_shapes, sor_index
     )
-    
+
     print(f"Generated {len(new_trips)} new bus trips and {len(new_stop_times)} new stop times "
           f"({len(service_patterns)} weekly service patterns, valid {cal_start}–{cal_end}; "
           f"{stats['synthesized']} trips synthesized from daily travel-time profiles; "
           f"{stats['missing_shape']} trips without original or fetched shape).")
-    print(f"Skipped: {stats['freq_only']} frequency-only subroutes (no StopTimes), "
-          f"{stats['no_service_day']} timetables with no service day, "
+    print(f"Frequency-based buses: {stats['freq_trips']} template trips, {stats['freq_windows']} windows "
+          f"({stats['freq_valhalla_fail']} Valhalla-fallback profiles, "
+          f"{stats['freq_no_stops']} skipped for missing StopOfRoute stops; "
+          f"{stats['freq_only']} freq-only subroutes seen).")
+    print(f"Skipped: {stats['no_service_day']} timetables with no service day, "
           f"{stats['dup_trip']} duplicate trips, {stats['short_trip']} trips with < 2 stops and no daily profile.")
 
     # 7. Combine kept non-bus + new bus data
@@ -826,7 +1110,8 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, start_
         with zipfile.ZipFile(temp_zip_path, "w", zipfile.ZIP_DEFLATED) as zout:
             # Copy all entries except those we overwrite
             for item in zin.infolist():
-                if item.filename in ("trips.txt", "stop_times.txt", "calendar.txt", "calendar_dates.txt", "shapes.txt"):
+                if item.filename in ("trips.txt", "stop_times.txt", "calendar.txt",
+                                     "calendar_dates.txt", "shapes.txt", "frequencies.txt"):
                     continue
                 zout.writestr(item, zin.read(item.filename))
 
@@ -877,6 +1162,21 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, start_
                     for seq, (lat, lon) in enumerate(points, start=1):
                         wrapper.write(f"{shape_id},{lat},{lon},{seq}\n")
 
+            # Write frequencies.txt unconditionally: canonical header, any
+            # upstream rows preserved, then the new bus template windows appended.
+            # (inject-metro-gtfs.py later appends metro rows on top of this file.)
+            print(f"Writing frequencies.txt (injecting {len(new_frequencies)} new bus frequency windows)...")
+            freq_fields = ["trip_id", "start_time", "end_time", "headway_secs", "exact_times"]
+            freq_out = io.StringIO()
+            freq_writer = csv.DictWriter(freq_out, fieldnames=freq_fields, extrasaction="ignore")
+            freq_writer.writeheader()
+            if "frequencies.txt" in zin.namelist():
+                with zin.open("frequencies.txt") as in_f:
+                    in_text = io.TextIOWrapper(in_f, encoding="utf-8-sig")
+                    freq_writer.writerows(csv.DictReader(in_text))
+            freq_writer.writerows(new_frequencies)
+            zout.writestr("frequencies.txt", freq_out.getvalue())
+
     os.replace(temp_zip_path, zip_path)
     print("GTFS zip successfully patched with general timetables and shape geometry!")
 
@@ -905,12 +1205,13 @@ def main():
     schedule_records = []
     daily_records = []
     shape_records = []
+    sor_records = []
     city_summaries = []
 
     # 1. Fetch InterCity (公路客運) — v2 only; symmetric daily -> StopOfRoute fallback.
     print("\nStep 2: Fetching InterCity (公路客運) Data...")
     city_summaries.append(fetch_source(
-        token, "InterCity", schedule_records, daily_records, shape_records,
+        token, "InterCity", schedule_records, daily_records, shape_records, sor_records,
         schedule_fetcher=lambda: (fetch_paginated_api(token, V2_SCHED_INTERCITY, strict=True), "v2"),
         daily_fetcher=lambda: fetch_intercity_daily(token),
         stop_of_route_fetcher=lambda: fetch_stop_of_route(token, V2_STOP_OF_ROUTE_INTERCITY),
@@ -922,7 +1223,7 @@ def main():
     for city in CITIES:
         print(f"  Fetching {city} Data...")
         city_summaries.append(fetch_source(
-            token, city, schedule_records, daily_records, shape_records,
+            token, city, schedule_records, daily_records, shape_records, sor_records,
             schedule_fetcher=lambda c=city: fetch_city_schedule(token, c),
             daily_fetcher=lambda c=city: fetch_daily_timetable(token, c),
             stop_of_route_fetcher=lambda c=city: fetch_stop_of_route(token, V2_STOP_OF_ROUTE(c)),
@@ -935,7 +1236,7 @@ def main():
     print(f"Parsed {len(tdx_shapes)} unique Route+Direction shape profiles.")
 
     print(f"\nStep 5: Patching {zip_path} with {len(schedule_records)} schedule records...")
-    patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, today)
+    patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_records, today)
 
 if __name__ == "__main__":
     main()
