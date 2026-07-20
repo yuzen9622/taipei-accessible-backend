@@ -105,6 +105,31 @@ else
   log "WARN: TRA timetable download failed — continuing without TRA legs"
 fi
 
+# ── 1b-bis. Official TRTC (Taipei Metro) GTFS injection — must run BEFORE the
+# metro block (1c). TDX's V3 GTFS-static rail endpoint serves an official per-trip
+# feed ONLY for TRTC (every other operator 400s), including 文湖線(Brown), which the
+# national feed ships with ZERO trips. This grafts the official Brown frequency
+# schedule + its own service calendar onto the feed so 文湖線 uses real operator
+# data instead of inject-metro-gtfs.py's synthetic headway fill. Because Brown then
+# has trips, the metro block's 0-trip gap-detection skips it (no duplicate line).
+# Fail-soft and additive: it never touches pathways/levels/other lines, and any
+# gap (download fail, unmatched direction) leaves the feed unchanged for the metro
+# fallback. See inject-trtc-official-gtfs.py.
+sleep 3 # TDX 429s on bursts
+if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
+  -o "$WORK_DIR/trtc-official.gtfs.zip" \
+  "https://tdx.transportdata.tw/api/gtfs/V3/Map/GTFS/Static/Rail/TRTC"; then
+  if unzip -l "$WORK_DIR/trtc-official.gtfs.zip" >/dev/null 2>&1; then
+    python3 "$SCRIPT_DIR/inject-trtc-official-gtfs.py" \
+      "$WORK_DIR/feed-1.gtfs.zip" "$WORK_DIR/trtc-official.gtfs.zip" \
+      || log "WARN: official TRTC injection failed — continuing (metro block synthesizes 文湖線)"
+  else
+    log "WARN: official TRTC GTFS is not a valid zip — skipping (metro block synthesizes 文湖線)"
+  fi
+else
+  log "WARN: official TRTC GTFS download failed — continuing (metro block synthesizes 文湖線)"
+fi
+
 # ── 1c. Metro/LRT frequency injection — same gap as TRA, one tier down: the
 # national feed defines these lines' routes + stops but ships ZERO trips for
 # 文湖線(TRTC BR)、環狀線(NTMC Y)、台中綠線(TMRT G)、機捷一方向, so OTP can't
