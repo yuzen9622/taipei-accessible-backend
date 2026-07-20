@@ -8,6 +8,7 @@ import zipfile
 import datetime
 import urllib.request
 import urllib.parse
+import urllib.error
 import time
 
 # Script to patch a GTFS static feed zip file with Taiwan City + InterCity bus
@@ -31,9 +32,59 @@ CITIES = [
 
 CALENDAR_VALID_DAYS = 180
 
+# Socket timeout (seconds) for every TDX request, so a half-open connection
+# cannot hang the batch indefinitely.
+REQUEST_TIMEOUT = 60
+
 # TDX ServiceDay keys in GTFS calendar.txt column order (monday..sunday).
 WEEKDAY_KEYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 GTFS_WEEKDAY_COLS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+# Transport-layer exceptions that are transient and worth retrying (a socket
+# timeout raised by urlopen()/read() surfaces as one of these).
+TRANSPORT_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError, OSError)
+
+
+class DailyTimetableUnavailable(Exception):
+    """Business signal that a source has no usable per-stop daily timetable —
+    either HTTP 400 on both v2 and v3, or a structurally valid response with no
+    timetable carrying >=2 stops (empty / origin-only). This is the only signal
+    that triggers the StopOfRoute synthesis fallback."""
+
+
+class TdxFetchError(Exception):
+    """Fatal, non-degradable fetch failure: 5xx after retries, transport error
+    after retries, JSON parse failure, or v3 wrapper schema drift (missing key,
+    wrong type, non-dict element). Propagates so the import exits non-zero
+    rather than pretending success."""
+
+
+class TdxHttpError(TdxFetchError):
+    """A 4xx HTTP error (including 400) carrying the response body. e.read()
+    consumes the stream and the default HTTPError string omits the body, so we
+    capture status/reason/url/body for diagnostics. The version cascade branches
+    on .status to detect 400; any TdxHttpError not interpreted by the cascade is
+    fatal (subclass of TdxFetchError)."""
+
+    def __init__(self, status, reason, url, body):
+        self.status = status
+        self.reason = reason
+        self.url = url
+        self.body = body or ""
+        super().__init__(f"HTTP {status} {reason} @ {url} :: {self.body[:200]}")
+
+
+def daily_records_usable(records):
+    """True when at least one route carries a timetable with >=2 valid stops,
+    i.e. the batch can graft a real per-stop profile onto an origin-only route.
+    This is a batch-level check: a source that yields any usable profile is
+    accepted, and routes lacking one are skipped as short_trip downstream."""
+    for route in records or []:
+        for tt in (route.get("Timetables") or route.get("TimeTables") or []):
+            if len(valid_stop_entries(tt)) >= 2:
+                return True
+    return False
+
 
 def get_tdx_token(client_id, client_secret):
     url = "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token"
@@ -46,15 +97,51 @@ def get_tdx_token(client_id, client_secret):
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
     for retry in range(3):
         try:
-            with urllib.request.urlopen(req) as res:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
                 res_data = json.loads(res.read().decode("utf-8"))
                 return res_data["access_token"]
         except Exception as e:
-            print(f"Error getting TDX token (attempt {retry+1}): {e}")
+            print(f"Error getting TDX token (attempt {retry+1}): {e}", file=sys.stderr)
             time.sleep(2)
     sys.exit(1)
 
-def fetch_paginated_api(token, url_template):
+def _unwrap_page(body, page_key, skip, strict):
+    """Extract the record list from a decoded page body. v2 endpoints return a
+    bare list; v3 endpoints wrap it as {..., <page_key>: [...]}. In strict mode
+    a shape mismatch (schema drift) raises TdxFetchError; in legacy (non-strict)
+    mode it degrades to an empty page as the original code did."""
+    if page_key is None:
+        if isinstance(body, list):
+            records = body
+        elif strict:
+            raise TdxFetchError(f"expected top-level list at skip={skip}, got {type(body).__name__}")
+        else:
+            return []
+    else:
+        if not isinstance(body, dict):
+            if strict:
+                raise TdxFetchError(f"expected wrapper object for '{page_key}' at skip={skip}, got {type(body).__name__}")
+            return []
+        if page_key not in body:
+            if strict:
+                raise TdxFetchError(f"v3 wrapper missing key '{page_key}' at skip={skip} (schema drift)")
+            return []
+        inner = body[page_key]
+        if not isinstance(inner, list):
+            if strict:
+                raise TdxFetchError(f"v3 wrapper '{page_key}' is {type(inner).__name__}, not list, at skip={skip}")
+            return []
+        records = inner
+
+    if strict:
+        for idx, rec in enumerate(records):
+            if not isinstance(rec, dict):
+                raise TdxFetchError(
+                    f"non-dict element in '{page_key or 'list'}' at skip={skip}, index {idx}: {type(rec).__name__}")
+    return records
+
+
+def fetch_paginated_api(token, url_template, page_key=None, strict=False):
     records = []
     top = 1000
     skip = 0
@@ -67,7 +154,7 @@ def fetch_paginated_api(token, url_template):
         query_map["$top"] = str(top)
         query_map["$skip"] = str(skip)
         encoded_query = urllib.parse.urlencode(query_map, safe="=&?$")
-        
+
         url = urllib.parse.urlunparse((
             parsed_url.scheme,
             parsed_url.netloc,
@@ -76,34 +163,52 @@ def fetch_paginated_api(token, url_template):
             encoded_query,
             parsed_url.fragment
         ))
-        
+
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "accept": "application/json"})
 
         success = False
         for retry in range(5):
             try:
-                with urllib.request.urlopen(req) as res:
-                    page_data = json.loads(res.read().decode("utf-8"))
-                    if not isinstance(page_data, list):
-                        page_data = []
-                    records.extend(page_data)
-                    page_size = len(page_data)
-                    success = True
-                    break
+                with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
+                    raw = res.read().decode("utf-8")
+                try:
+                    body = json.loads(raw)
+                except json.JSONDecodeError as e:
+                    if strict:
+                        raise TdxFetchError(f"invalid JSON at skip={skip}: {e}") from e
+                    body = []
+                page_data = _unwrap_page(body, page_key, skip, strict)
+                records.extend(page_data)
+                page_size = len(page_data)
+                success = True
+                break
+            except TdxFetchError:
+                # Deterministic contract errors (parse / schema drift / re-raised
+                # TdxHttpError) are never transient — surface immediately.
+                raise
             except urllib.error.HTTPError as e:
                 if e.code == 429:
                     backoff = 2 * (retry + 1)
-                    print(f"  Received 429 Too Many Requests. Backing off for {backoff}s...")
+                    print(f"  Received 429 Too Many Requests. Backing off for {backoff}s...", file=sys.stderr)
                     time.sleep(backoff)
+                elif 400 <= e.code < 500:
+                    try:
+                        body = e.read().decode("utf-8", errors="replace")
+                    except TRANSPORT_ERRORS:
+                        body = ""
+                    print(f"  HTTP error {e.code}: {e.reason} :: {body[:200]}", file=sys.stderr)
+                    raise TdxHttpError(e.code, e.reason, url, body) from e
                 else:
-                    print(f"  HTTP error {e.code}: {e.reason}")
+                    print(f"  HTTP error {e.code}: {e.reason}", file=sys.stderr)
                     time.sleep(1)
-            except Exception as e:
-                print(f"  Network error: {e}")
+            except TRANSPORT_ERRORS as e:
+                print(f"  Network error: {e}", file=sys.stderr)
                 time.sleep(1)
 
         if not success:
-            print(f"  Failed to fetch page at skip={skip} after multiple retries. Skipping remaining pages.")
+            if strict:
+                raise TdxFetchError(f"failed to fetch page at skip={skip} after {5} retries (5xx/transport)")
+            print(f"  Failed to fetch page at skip={skip} after multiple retries. Skipping remaining pages.", file=sys.stderr)
             break
 
         if page_size < top:
@@ -113,6 +218,213 @@ def fetch_paginated_api(token, url_template):
         time.sleep(0.1)
 
     return records
+
+_TDX_BASE = "https://tdx.transportdata.tw/api/basic"
+
+
+def V2_SCHED(city):
+    return f"{_TDX_BASE}/v2/Bus/Schedule/City/{city}?%24format=JSON"
+
+
+def V3_SCHED(city):
+    return f"{_TDX_BASE}/v3/Bus/Schedule/City/{city}?%24format=JSON"
+
+
+def V2_DAILY(city):
+    return f"{_TDX_BASE}/v2/Bus/DailyTimeTable/City/{city}?%24format=JSON"
+
+
+def V3_DAILY(city):
+    return f"{_TDX_BASE}/v3/Bus/DailyTimeTable/City/{city}?%24format=JSON"
+
+
+def V2_SHAPE(city):
+    return f"{_TDX_BASE}/v2/Bus/Shape/City/{city}?%24format=JSON"
+
+
+def V2_STOP_OF_ROUTE(city):
+    return f"{_TDX_BASE}/v2/Bus/StopOfRoute/City/{city}?%24format=JSON"
+
+
+V2_SCHED_INTERCITY = f"{_TDX_BASE}/v2/Bus/Schedule/InterCity?%24format=JSON"
+V2_DAILY_INTERCITY = f"{_TDX_BASE}/v2/Bus/DailyTimeTable/InterCity?%24format=JSON"
+V2_SHAPE_INTERCITY = f"{_TDX_BASE}/v2/Bus/Shape/InterCity?%24format=JSON"
+V2_STOP_OF_ROUTE_INTERCITY = f"{_TDX_BASE}/v2/Bus/StopOfRoute/InterCity?%24format=JSON"
+
+
+def fetch_with_version(token, v2_url, v3_url, page_key):
+    """Fetch a source, falling back v2 -> v3 on HTTP 400 only. Returns
+    (records, source) where source is "v2" or "v3". A 400 from both versions
+    re-raises the v3 TdxHttpError (carrying the v3 body); any non-400 HTTP
+    error and every other TdxFetchError propagate as fatal. Suitable for
+    sources with no usability concept (e.g. Schedule)."""
+    try:
+        return fetch_paginated_api(token, v2_url, strict=True), "v2"
+    except TdxHttpError as e:
+        if e.status != 400:
+            raise
+    return fetch_paginated_api(token, v3_url, page_key=page_key, strict=True), "v3"
+
+
+def fetch_city_schedule(token, city):
+    """Schedule for a city, v2 -> v3. Both versions 400 means the city has
+    vanished from TDX entirely (the original incident), so it is fatal rather
+    than a silent skip."""
+    try:
+        return fetch_with_version(token, V2_SCHED(city), V3_SCHED(city), "Schedules")
+    except TdxHttpError as e:
+        if e.status == 400:
+            raise TdxFetchError(
+                f"{city}: Schedule returned 400 on both v2 and v3 — the city may have been "
+                f"removed from TDX; aborting so patch_gtfs_zip does not overwrite the feed "
+                f"without it. TDX body: {e.body[:200]}") from e
+        raise
+
+
+def fetch_daily_timetable(token, city):
+    """Daily timetable for a city with a usability-aware cascade: v2 -> v3 when
+    v2 is 400 OR returns a structurally-valid but unusable batch (empty /
+    origin-only). Returns (records, source). Raises DailyTimetableUnavailable
+    (the only signal that triggers StopOfRoute synthesis) when neither version
+    yields a usable batch; non-400 HTTP and schema-drift errors stay fatal."""
+    try:
+        recs = fetch_paginated_api(token, V2_DAILY(city), strict=True)
+        if daily_records_usable(recs):
+            return recs, "v2"
+    except TdxHttpError as e:
+        if e.status != 400:
+            raise
+    try:
+        recs = fetch_paginated_api(token, V3_DAILY(city), page_key="DailyTimeTables", strict=True)
+    except TdxHttpError as e:
+        if e.status == 400:
+            raise DailyTimetableUnavailable(f"{city}: DailyTimeTable unavailable (400 on v2 and v3)") from e
+        raise
+    if not daily_records_usable(recs):
+        raise DailyTimetableUnavailable(
+            f"{city}: DailyTimeTable structurally valid on v2/v3 but has no usable per-stop timetable (empty/origin-only)")
+    return recs, "v3"
+
+
+def fetch_intercity_daily(token):
+    """InterCity daily timetable (v2 only), symmetric with the City cascade: a
+    400 or a valid-but-unusable batch degrades to StopOfRoute synthesis; other
+    errors stay fatal."""
+    try:
+        recs = fetch_paginated_api(token, V2_DAILY_INTERCITY, strict=True)
+    except TdxHttpError as e:
+        if e.status == 400:
+            raise DailyTimetableUnavailable("InterCity: DailyTimeTable unavailable (400)") from e
+        raise
+    if not daily_records_usable(recs):
+        raise DailyTimetableUnavailable("InterCity: DailyTimeTable has no usable per-stop timetable")
+    return recs, "v2"
+
+
+def fetch_stop_of_route(token, url):
+    """StopOfRoute for the DailyTimeTable degradation path. Tolerates a 400
+    (source also unsupported) by returning []; every other error is fatal."""
+    try:
+        return fetch_paginated_api(token, url, strict=True)
+    except TdxHttpError as e:
+        if e.status == 400:
+            print("  StopOfRoute unsupported (400) — skipping daily for this source", file=sys.stderr)
+            return []
+        raise
+
+
+def fetch_shape(token, url):
+    """Shape geometry (v2). Tolerates a 400 (missing geometry is non-fatal) by
+    returning []; 5xx/transport/parse errors are fatal via strict mode."""
+    try:
+        return fetch_paginated_api(token, url, strict=True)
+    except TdxHttpError as e:
+        if e.status == 400:
+            print("  Shape unsupported (400) — skipping geometry", file=sys.stderr)
+            return []
+        raise
+
+
+def _synthesize_from_stop_of_route(sor_records):
+    """Build v2-compatible daily records from StopOfRoute stop sequences, giving
+    each stop a synthetic 2-min-per-stop travel-time profile. Only routes with
+    >=2 usable stops are emitted (a 1-stop profile is never consumed by
+    build_daily_profiles and would misreport as synthesized)."""
+    synthetic = []
+    for r in sor_records:
+        ruid = r.get("RouteUID")
+        sub_route_uid = r.get("SubRouteUID") or ruid
+        direction = r.get("Direction", 0)
+        stops = r.get("Stops", [])
+        if not (ruid and stops):
+            continue
+
+        def seq_key(s):
+            try:
+                return int(s.get("StopSequence", 0))
+            except (TypeError, ValueError):
+                return 0
+
+        sorted_stops = sorted(stops, key=seq_key)
+        stop_times = []
+        for i, s in enumerate(sorted_stops):
+            stop_id = s.get("StopUID") or s.get("StopID")
+            seq = s.get("StopSequence", i + 1)
+            if stop_id:
+                offset_min = i * 2
+                time_str = f"{offset_min // 60:02d}:{offset_min % 60:02d}"
+                stop_times.append({
+                    "StopUID": stop_id,
+                    "StopSequence": seq,
+                    "ArrivalTime": time_str,
+                    "DepartureTime": time_str
+                })
+        if len(stop_times) >= 2:
+            synthetic.append({
+                "RouteUID": ruid,
+                "SubRouteUID": sub_route_uid,
+                "Direction": direction,
+                "TimeTables": [{"StopTimes": stop_times}]
+            })
+    return synthetic
+
+
+def fetch_source(token, label, schedule_records, daily_records, shape_records,
+                 schedule_fetcher, daily_fetcher, stop_of_route_fetcher, shape_fetcher):
+    """Fetch one source (a city or InterCity) and extend the shared record
+    lists. Only DailyTimetableUnavailable triggers the StopOfRoute degradation;
+    every other exception (TdxFetchError, TdxHttpError, transport) propagates so
+    the import fails rather than silently producing a feed missing a source.
+    Returns a per-source fetch summary for observability."""
+    records, sched_source = schedule_fetcher()
+    if not records:
+        raise TdxFetchError(
+            f"{label}: Schedule returned 0 records (HTTP 200 empty / upstream anomaly). "
+            f"Aborting so patch_gtfs_zip does not delete every bus trip and atomically "
+            f"overwrite the feed without {label} (the same whole-city disappearance as the incident).")
+    schedule_records.extend(records)
+
+    daily_source, synth_profiles = "none", 0
+    if needs_daily_fallback(records):
+        try:
+            d_recs, daily_source = daily_fetcher()
+            daily_records.extend(d_recs)
+        except DailyTimetableUnavailable:
+            print(f"  {label}: DailyTimeTable unavailable — synthesizing profiles from StopOfRoute", file=sys.stderr)
+            synth = _synthesize_from_stop_of_route(stop_of_route_fetcher())
+            daily_records.extend(synth)
+            daily_source, synth_profiles = "stoproute", len(synth)
+        time.sleep(0.5)
+
+    shape_records.extend(shape_fetcher())
+    time.sleep(0.5)
+
+    summary = {"city": label, "schedule": len(records), "schedule_source": sched_source,
+               "daily_source": daily_source, "synth_profiles": synth_profiles}
+    print(f"  {label}: schedule={summary['schedule']}({sched_source}), "
+          f"daily_source={daily_source}, synth_profiles={synth_profiles}")
+    return summary
+
 
 def service_id_for_pattern(pattern):
     return "patched_" + "".join(str(d) for d in pattern)
@@ -593,88 +905,29 @@ def main():
     schedule_records = []
     daily_records = []
     shape_records = []
+    city_summaries = []
 
-    def fetch_source(label, schedule_url, daily_url, shape_url=None):
-        records = fetch_paginated_api(token, schedule_url)
-        schedule_records.extend(records)
-        if needs_daily_fallback(records):
-            print(f"  {label}: origin-only general timetables detected — fetching Daily Timetable fallback...")
-            try:
-                daily_records.extend(fetch_paginated_api(token, daily_url))
-            except Exception as e:
-                print(f"  {label}: Daily Timetable failed ({e}). Fetching StopOfRoute to build synthetic profiles...")
-                stop_of_route_url = schedule_url.replace("/Schedule/", "/StopOfRoute/")
-                try:
-                    sor_records = fetch_paginated_api(token, stop_of_route_url)
-                    synthetic_count = 0
-                    for r in sor_records:
-                        ruid = r.get("RouteUID")
-                        sub_route_uid = r.get("SubRouteUID") or ruid
-                        direction = r.get("Direction", 0)
-                        stops = r.get("Stops", [])
-                        if ruid and stops:
-                            def seq_key(s):
-                                try:
-                                    return int(s.get("StopSequence", 0))
-                                except (TypeError, ValueError):
-                                    return 0
-                            sorted_stops = sorted(stops, key=seq_key)
-                            
-                            stop_times = []
-                            for i, s in enumerate(sorted_stops):
-                                stop_id = s.get("StopUID") or s.get("StopID")
-                                seq = s.get("StopSequence", i + 1)
-                                if stop_id:
-                                    offset_min = i * 2
-                                    h = offset_min // 60
-                                    m = offset_min % 60
-                                    time_str = f"{h:02d}:{m:02d}"
-                                    stop_times.append({
-                                        "StopUID": stop_id,
-                                        "StopSequence": seq,
-                                        "ArrivalTime": time_str,
-                                        "DepartureTime": time_str
-                                    })
-                            if stop_times:
-                                daily_records.append({
-                                    "RouteUID": ruid,
-                                    "SubRouteUID": sub_route_uid,
-                                    "Direction": direction,
-                                    "TimeTables": [
-                                        {
-                                            "StopTimes": stop_times
-                                        }
-                                    ]
-                                })
-                                synthetic_count += 1
-                    print(f"  {label}: generated {synthetic_count} synthetic stop-sequence profiles from StopOfRoute.")
-                except Exception as sor_e:
-                    print(f"  {label}: StopOfRoute fetch failed ({sor_e}). Skipping daily fallback.")
-            time.sleep(0.5)
-        if shape_url:
-            print(f"  {label}: fetching Shape geometry...")
-            shape_records.extend(fetch_paginated_api(token, shape_url))
-            time.sleep(0.5)
-
-    # 1. Fetch InterCity (公路客運)
+    # 1. Fetch InterCity (公路客運) — v2 only; symmetric daily -> StopOfRoute fallback.
     print("\nStep 2: Fetching InterCity (公路客運) Data...")
-    fetch_source(
-        "InterCity",
-        "https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/InterCity?%24format=JSON",
-        "https://tdx.transportdata.tw/api/basic/v2/Bus/DailyTimeTable/InterCity?%24format=JSON",
-        "https://tdx.transportdata.tw/api/basic/v2/Bus/Shape/InterCity?%24format=JSON"
-    )
+    city_summaries.append(fetch_source(
+        token, "InterCity", schedule_records, daily_records, shape_records,
+        schedule_fetcher=lambda: (fetch_paginated_api(token, V2_SCHED_INTERCITY, strict=True), "v2"),
+        daily_fetcher=lambda: fetch_intercity_daily(token),
+        stop_of_route_fetcher=lambda: fetch_stop_of_route(token, V2_STOP_OF_ROUTE_INTERCITY),
+        shape_fetcher=lambda: fetch_shape(token, V2_SHAPE_INTERCITY),
+    ))
 
-    # 2. Fetch City Bus for all 17 supported cities
+    # 2. Fetch City Bus for all cities in CITIES (Schedule/Daily cascade v2 -> v3).
     print("\nStep 3: Fetching City Bus (各縣市市區公車) Data...")
     for city in CITIES:
         print(f"  Fetching {city} Data...")
-        fetch_source(
-            city,
-            f"https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/City/{city}?%24format=JSON",
-            f"https://tdx.transportdata.tw/api/basic/v2/Bus/DailyTimeTable/City/{city}?%24format=JSON",
-            f"https://tdx.transportdata.tw/api/basic/v2/Bus/Shape/City/{city}?%24format=JSON"
-        )
+        city_summaries.append(fetch_source(
+            token, city, schedule_records, daily_records, shape_records,
+            schedule_fetcher=lambda c=city: fetch_city_schedule(token, c),
+            daily_fetcher=lambda c=city: fetch_daily_timetable(token, c),
+            stop_of_route_fetcher=lambda c=city: fetch_stop_of_route(token, V2_STOP_OF_ROUTE(c)),
+            shape_fetcher=lambda c=city: fetch_shape(token, V2_SHAPE(c)),
+        ))
         time.sleep(0.5)
 
     print(f"\nStep 4: Parsing Shape records (downloaded {len(shape_records)} shapes)...")
