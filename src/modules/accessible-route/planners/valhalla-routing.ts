@@ -269,6 +269,29 @@ function toWalkLeg(body: WalkConnector, from: string, to: string): WalkLeg {
 }
 
 /**
+ * Plan a labeled pedestrian WALK leg between two points via Valhalla, or null
+ * when no trustworthy walkable geometry exists. Thin exported wrapper over
+ * planWalkConnector + toWalkLeg for callers outside the road-access path (e.g. the
+ * synthesized short-distance bus fallback, which uses this as its walk-geometry
+ * fallback after OTP2 pedestrian).
+ *
+ * @param from Walk origin.
+ * @param to Walk destination.
+ * @param fromLabel Display label for the leg start.
+ * @param toLabel Display label for the leg end.
+ * @returns A labeled WALK leg, or null when no path is found.
+ */
+export async function planWalkLeg(
+  from: LatLng,
+  to: LatLng,
+  fromLabel: string,
+  toLabel: string,
+): Promise<WalkLeg | null> {
+  const body = await planWalkConnector(from, to);
+  return body ? toWalkLeg(body, fromLabel, toLabel) : null;
+}
+
+/**
  * Append leading/trailing/waypoint walk-access legs to road routes so a user
  * standing off the drivable network sees a real walk to/from the road instead
  * of being silently snapped onto it. Only affects drive/motorcycle. Each route

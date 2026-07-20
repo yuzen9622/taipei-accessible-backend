@@ -18,6 +18,8 @@ import { GtfsTrip } from "../../../model/gtfs-trip.model";
 import MetroStationModel from "../../../model/metro-station.model";
 import TrainStationModel from "../../../model/train-station.model";
 import BusStopModel from "../../../model/bus-stop.model";
+import BusRouteModel from "../../../model/bus-route.model";
+import { planWalkLeg } from "./valhalla-routing";
 import { haversineCoords } from "../../../utils/geo";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
@@ -26,6 +28,7 @@ import type {
   ITdxMetroStation,
   ITdxTrainStation,
   ITdxBusStop,
+  ITdxBusRoute,
 } from "../../../types";
 import type {
   AccessibilityMode,
@@ -1010,6 +1013,158 @@ export async function planOtpRoute(
     });
   }
 
+/**
+ * Flatten an OTP walk route's WALK legs into a single labeled WALK leg,
+ * concatenating their polylines (dropping the duplicated seam point shared by
+ * consecutive legs). Returns null when the route yields no usable (>=2-point)
+ * walk geometry.
+ *
+ * @param route An all-WALK AccessibleRoute from planOtpWalk.
+ * @param fromLabel Display label for the leg start.
+ * @param toLabel Display label for the leg end.
+ * @returns A single labeled WALK leg, or null.
+ */
+function flattenOtpWalk(
+  route: AccessibleRoute,
+  fromLabel: string,
+  toLabel: string,
+): WalkLeg | null {
+  const walkLegs = route.legs.filter((l): l is WalkLeg => l.type === "WALK");
+  if (!walkLegs.length) return null;
+  const polyline: [number, number][] = [];
+  for (const wl of walkLegs) {
+    for (const pt of wl.polyline) {
+      const last = polyline[polyline.length - 1];
+      if (last && last[0] === pt[0] && last[1] === pt[1]) continue;
+      polyline.push([pt[0], pt[1]]);
+    }
+  }
+  if (polyline.length < 2) return null;
+  const summedDistanceM = walkLegs.reduce((sum, l) => sum + l.distanceM, 0);
+  const distanceM = Math.round(
+    typeof route.totalWalkDistanceM === "number" && Number.isFinite(route.totalWalkDistanceM)
+      ? route.totalWalkDistanceM
+      : summedDistanceM,
+  );
+  const minutesEst = Math.max(
+    1,
+    route.totalMinutes || walkLegs.reduce((sum, l) => sum + l.minutesEst, 0),
+  );
+  return {
+    type: "WALK",
+    from: fromLabel,
+    to: toLabel,
+    distanceM,
+    minutesEst,
+    polyline,
+    a11yFacilities: [],
+    exitInfo: null,
+  };
+}
+
+/**
+ * Resolve a real WALK leg between two points, mirroring the planner's canonical
+ * OTP2-pedestrian-first, Valhalla-fallback order (see accessible-route.service).
+ * Always resolves to a complete WalkLeg — never rejects: OTP → Valhalla →
+ * straight-line, so a synthesized route always has a leg even when both routers
+ * are down.
+ *
+ * @param from Walk origin ({lat,lng}).
+ * @param to Walk destination ({lat,lng}).
+ * @param fromLabel Display label for the leg start.
+ * @param toLabel Display label for the leg end.
+ * @param distanceM Straight-line fallback distance (metres).
+ * @param minutesEst Straight-line fallback duration estimate (minutes).
+ * @param mode Accessibility mode (drives wheelchair routing + walk speed).
+ * @returns A complete WALK leg.
+ */
+async function resolveWalkLeg(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  fromLabel: string,
+  toLabel: string,
+  distanceM: number,
+  minutesEst: number,
+  mode: AccessibilityMode,
+): Promise<WalkLeg> {
+  const straight: WalkLeg = {
+    type: "WALK",
+    from: fromLabel,
+    to: toLabel,
+    distanceM,
+    minutesEst,
+    polyline: [
+      [from.lng, from.lat],
+      [to.lng, to.lat],
+    ],
+    a11yFacilities: [],
+    exitInfo: null,
+  };
+  try {
+    const otpRoutes = await planOtpWalk(from, to, { mode });
+    const flat = otpRoutes.length ? flattenOtpWalk(otpRoutes[0], fromLabel, toLabel) : null;
+    if (flat) return flat;
+    const valhalla = await planWalkLeg(from, to, fromLabel, toLabel);
+    if (valhalla && valhalla.polyline.length >= 2) {
+      return { ...valhalla, exitInfo: valhalla.exitInfo ?? null };
+    }
+  } catch {
+    // Both routers unavailable — degrade to the straight-line leg below.
+  }
+  return straight;
+}
+
+/**
+ * Resolve a synthesized BUS leg's geometry + direction from the sub-route's
+ * ordered stop list (BusRouteModel). The polyline follows the sub-route's
+ * ORDERED STOP coordinates, NOT the road-snapped GTFS shape between stops, so a
+ * sub-route with sparse stops can still render near-straight between two stops.
+ * Always resolves (never rejects): a DB error, missing sub-route, or reversed
+ * stop order degrades to the two-point board→alight straight line so the caller's
+ * outer try/catch never discards the whole synthesized result set.
+ *
+ * @param boardStop The boarding bus stop.
+ * @param alightStop The alighting bus stop.
+ * @param routeName The Chinese sub-route name (the value stored in subRouteIds).
+ * @returns The BUS leg polyline ([lng,lat]) and its running direction (0|1).
+ */
+async function resolveBusLegGeometry(
+  boardStop: ITdxBusStop,
+  alightStop: ITdxBusStop,
+  routeName: string,
+): Promise<{ polyline: [number, number][]; direction: 0 | 1 }> {
+  const fallback: { polyline: [number, number][]; direction: 0 | 1 } = {
+    polyline: [
+      boardStop.location.coordinates as [number, number],
+      alightStop.location.coordinates as [number, number],
+    ],
+    direction: 0,
+  };
+  try {
+    const docs = await BusRouteModel.find({
+      "subRouteName.Zh_tw": routeName,
+      city: boardStop.city,
+    }).lean<ITdxBusRoute[]>();
+    for (const doc of docs) {
+      const stops = doc.stops || [];
+      // Join casing differs: bus-stop uses `stopUid`, bus-route uses `stopUID`.
+      const boardIdx = stops.findIndex((s) => s.stopUID === boardStop.stopUid);
+      const alightIdx = stops.findIndex((s) => s.stopUID === alightStop.stopUid);
+      if (boardIdx === -1 || alightIdx === -1 || boardIdx >= alightIdx) continue;
+      const polyline = stops
+        .slice(boardIdx, alightIdx + 1)
+        .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng))
+        .map((s) => [s.lng as number, s.lat as number] as [number, number]);
+      if (polyline.length < 2) continue;
+      const direction: 0 | 1 = doc.direction === 1 ? 1 : 0;
+      return { polyline, direction };
+    }
+  } catch {
+    // DB error — degrade this BUS leg only; never propagate.
+  }
+  return fallback;
+}
+
 async function synthesizeShortBusRoutes(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
@@ -1070,25 +1225,31 @@ async function synthesizeShortBusRoutes(
       const walk1Mins = Math.max(1, Math.ceil(walk1Dist / speed));
       const rideMins = Math.max(2, Math.ceil(rideDist / 400));
       const walk2Mins = Math.max(1, Math.ceil(walk2Dist / speed));
-      const totalMins = walk1Mins + rideMins + walk2Mins;
+
+      const boardCoord = {
+        lat: boardStop.location.coordinates[1],
+        lng: boardStop.location.coordinates[0],
+      };
+      const alightCoord = {
+        lat: alightStop.location.coordinates[1],
+        lng: alightStop.location.coordinates[0],
+      };
+
+      // BUS geometry and both access/egress walk legs are resolved concurrently
+      // (each resolver is fail-soft and never rejects), so the added latency for
+      // the <=3500m path is ~one router round-trip, not several serial ones.
+      const [busGeom, walk1Leg, walk2Leg] = await Promise.all([
+        resolveBusLegGeometry(boardStop, alightStop, routeName),
+        walk1Dist > 10
+          ? resolveWalkLeg(origin, boardCoord, "出發地", boardStop.stopName.Zh_tw, walk1Dist, walk1Mins, mode)
+          : Promise.resolve(null),
+        walk2Dist > 10
+          ? resolveWalkLeg(alightCoord, destination, alightStop.stopName.Zh_tw, "目的地", walk2Dist, walk2Mins, mode)
+          : Promise.resolve(null),
+      ]);
 
       const legs: (WalkLeg | BusLeg)[] = [];
-
-      if (walk1Dist > 10) {
-        legs.push({
-          type: "WALK",
-          from: "出發地",
-          to: boardStop.stopName.Zh_tw,
-          distanceM: walk1Dist,
-          minutesEst: walk1Mins,
-          polyline: [
-            [origin.lng, origin.lat],
-            boardStop.location.coordinates as [number, number],
-          ],
-          a11yFacilities: [],
-          exitInfo: null,
-        });
-      }
+      if (walk1Leg) legs.push(walk1Leg);
 
       legs.push({
         type: "BUS",
@@ -1099,37 +1260,24 @@ async function synthesizeShortBusRoutes(
         arrivalStopId: alightStop.stopUid,
         waitInfo: { time: hhmm(Date.now()), source: "schedule" },
         estimatedWaitMinutes: 3,
-        direction: 0,
-        polyline: [
-          boardStop.location.coordinates as [number, number],
-          alightStop.location.coordinates as [number, number],
-        ],
+        direction: busGeom.direction,
+        polyline: busGeom.polyline,
         departureStopA11y: [],
         arrivalStopA11y: [],
       });
 
-      if (walk2Dist > 10) {
-        legs.push({
-          type: "WALK",
-          from: alightStop.stopName.Zh_tw,
-          to: "目的地",
-          distanceM: walk2Dist,
-          minutesEst: walk2Mins,
-          polyline: [
-            alightStop.location.coordinates as [number, number],
-            [destination.lng, destination.lat],
-          ],
-          a11yFacilities: [],
-          exitInfo: null,
-        });
-      }
+      if (walk2Leg) legs.push(walk2Leg);
+
+      const totalWalkDistanceM = (walk1Leg?.distanceM ?? 0) + (walk2Leg?.distanceM ?? 0);
+      const totalMins =
+        (walk1Leg?.minutesEst ?? 0) + rideMins + (walk2Leg?.minutesEst ?? 0);
 
       routes.push({
         routeId: `direct-bus-${routeName}`,
         routeName: `公車 ${routeName}`,
-        totalMinutes: totalMins,
+        totalMinutes: Math.max(1, totalMins),
         transferCount: 0,
-        totalWalkDistanceM: walk1Dist + walk2Dist,
+        totalWalkDistanceM,
         legs,
         accessibilityHighlights: ["市區公車直達路線"],
       });
