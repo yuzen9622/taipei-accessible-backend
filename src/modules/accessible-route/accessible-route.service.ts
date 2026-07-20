@@ -141,7 +141,7 @@ export function scoreAndRank(
         r.totalMinutes,
         maxTime,
         minTime,
-        r.accessibilityHighlights.length,
+        r.accessibilityHighlights?.length ?? 0,
         mode,
         walkDistanceM,
         legDataCoverageRatio(r),
@@ -974,7 +974,7 @@ function combineSegments(segments: AccessibleRoute[]): AccessibleRoute {
     totalMinutes: segments.reduce((sum, s) => sum + s.totalMinutes, 0),
     transferCount: segments.reduce((sum, s) => sum + s.transferCount, 0),
     legs: mergeAdjacentWalkLegs(segments.flatMap((s) => s.legs)),
-    accessibilityHighlights: segments.flatMap((s) => s.accessibilityHighlights),
+    accessibilityHighlights: segments.flatMap((s) => s.accessibilityHighlights ?? []),
   };
 }
 

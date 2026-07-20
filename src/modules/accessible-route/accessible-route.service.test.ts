@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Mock tdxFetch to prevent real network calls during transit route enrichment
+vi.mock("../../config/fetch", () => ({
+  tdxFetch: vi.fn().mockResolvedValue({ ok: true, json: async () => [] }),
+}));
+
 // Mock the driving planner (dynamic-imported by the service) — override only
 // planValhallaRoute; keep ValhallaRoutingError so `instanceof` checks stay valid.
 vi.mock("./planners/valhalla-routing", () => ({
@@ -12,6 +17,14 @@ vi.mock("../a11y/a11y.service", async (importActual) => {
   const actual = await importActual<typeof import("../a11y/a11y.service")>();
   return { ...actual, findNearbyParking: vi.fn(), findNearby: vi.fn() };
 });
+
+// Mock route-a11y to isolate Mongo DB calls during transit route enrichment
+vi.mock("./planners/route-a11y", () => ({
+  nearbyA11y: vi.fn().mockResolvedValue([]),
+  attachA11yToLeg: vi.fn(),
+  deriveHighlights: vi.fn(),
+  enrichLegIndoor: vi.fn(),
+}));
 
 // The transit branch dynamic-imports both from the OTP planner.
 vi.mock("./planners/otp-routing", () => ({
@@ -342,3 +355,194 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     expect(vi.mocked(planOtpWalk).mock.calls).toHaveLength(0);
   });
 });
+
+describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路徑規劃 (Taipei Transit Route Planning)", () => {
+  const nccuOrigin = { latitude: 24.9868, longitude: 121.5762 }; // 政大
+  const mainStationDest = { latitude: 25.0478, longitude: 121.517 }; // 台北車站
+  const cckMemMem = { latitude: 25.0347, longitude: 121.5217 }; // 中正紀念堂
+
+  const rooseveltBusRoute = {
+    routeId: "otp-roosevelt-0",
+    routeName: "羅斯福路幹線",
+    totalMinutes: 28,
+    transferCount: 0,
+    totalWalkDistanceM: 400,
+    legs: [
+      {
+        type: "WALK",
+        from: "國立政治大學",
+        to: "政大公車站",
+        distanceM: 150,
+        minutesEst: 3,
+        polyline: [[121.5762, 24.9868], [121.5760, 24.9865]],
+        a11yFacilities: [],
+      },
+      {
+        type: "BUS",
+        routeName: "羅斯福路幹線",
+        departureStop: "政大",
+        arrivalStop: "台北車站(忠孝)",
+        cityCode: "Taipei",
+        waitInfo: { time: 180, source: "realtime" },
+        estimatedWaitMinutes: 3,
+        direction: 0,
+        polyline: [[121.5760, 24.9865], [121.5170, 25.0478]],
+        departureStopA11y: [],
+        arrivalStopA11y: [],
+        tdxCity: "Taipei",
+      },
+      {
+        type: "WALK",
+        from: "台北車站(忠孝)",
+        to: "台北車站捷運站出口",
+        distanceM: 250,
+        minutesEst: 4,
+        polyline: [[121.5170, 25.0478], [121.5175, 25.0480]],
+        a11yFacilities: [],
+      },
+    ],
+    accessibilityHighlights: ["低底盤公車直達"],
+  };
+
+  it("測試 Case A: 政大 ➔ 台北車站 (輪椅模式公車路徑規劃)", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([rooseveltBusRoute] as any);
+
+    const req = {
+      travelMode: "transit" as const,
+      origin: nccuOrigin,
+      destination: mainStationDest,
+      mode: "wheelchair" as const,
+    };
+
+    const res = await planAccessibleRouteFromRequest(req);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    expect(res.data.travelMode).toBe("transit");
+    expect(res.data.routes).toHaveLength(1);
+    const primaryRoute = res.data.routes[0];
+    expect(primaryRoute.routeName).toBe("羅斯福路幹線");
+    expect(primaryRoute.transferCount).toBe(0);
+    expect(primaryRoute.legs.some((l) => l.type === "BUS")).toBe(true);
+
+    expect(vi.mocked(planOtpRoute)).toHaveBeenCalledWith(
+      { lat: nccuOrigin.latitude, lng: nccuOrigin.longitude },
+      { lat: mainStationDest.latitude, lng: mainStationDest.longitude },
+      expect.objectContaining({ mode: "wheelchair" })
+    );
+  });
+
+  it("測試 Case B: 板橋車站 ➔ 撫遠街 (307 幹線公車無障礙路線規劃)", async () => {
+    const bus307Route = {
+      routeId: "otp-307",
+      routeName: "307",
+      totalMinutes: 35,
+      transferCount: 0,
+      totalWalkDistanceM: 200,
+      legs: [
+        {
+          type: "BUS",
+          routeName: "307",
+          departureStop: "板橋公車站",
+          arrivalStop: "撫遠街口",
+          cityCode: "Taipei",
+          waitInfo: { time: 120, source: "realtime" },
+          estimatedWaitMinutes: 2,
+          direction: 0,
+          polyline: [],
+          departureStopA11y: [],
+          arrivalStopA11y: [],
+          tdxCity: "Taipei",
+        },
+      ],
+      accessibilityHighlights: ["全線低底盤公車"],
+    };
+
+    vi.mocked(planOtpRoute).mockResolvedValue([bus307Route] as any);
+
+    const req = {
+      travelMode: "transit" as const,
+      origin: { latitude: 25.0143, longitude: 121.4638 }, // 板橋車站
+      destination: { latitude: 25.0602, longitude: 121.5684 }, // 撫遠街口
+      mode: "elderly" as const,
+    };
+
+    const res = await planAccessibleRouteFromRequest(req);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    expect(res.data.routes[0].routeName).toBe("307");
+    expect(res.data.routes[0].accessibilityHighlights).toContain("全線低底盤公車");
+  });
+
+  it("測試 Case C: 帶途經點公車路線規劃 (政大 ➔ 中正紀念堂 ➔ 台北車站)", async () => {
+    const seg1Route = {
+      routeId: "seg1",
+      routeName: "羅斯福路幹線 (段1)",
+      totalMinutes: 15,
+      transferCount: 0,
+      legs: [
+        { type: "WALK", from: "政大", to: "公車站", distanceM: 50, minutesEst: 1, polyline: [], a11yFacilities: [] },
+        { type: "BUS", routeName: "羅斯福路幹線", departureStop: "政大", arrivalStop: "中正紀念堂", waitInfo: { time: 0, source: "realtime" }, estimatedWaitMinutes: 0, direction: 0, polyline: [], departureStopA11y: [], arrivalStopA11y: [] },
+        { type: "WALK", from: "公車站", to: "中正紀念堂", distanceM: 50, minutesEst: 1, polyline: [], a11yFacilities: [] },
+      ],
+      accessibilityHighlights: [],
+    };
+
+    const seg2Route = {
+      routeId: "seg2",
+      routeName: "信義幹線 (段2)",
+      totalMinutes: 10,
+      transferCount: 0,
+      legs: [
+        { type: "WALK", from: "中正紀念堂", to: "公車站", distanceM: 50, minutesEst: 1, polyline: [], a11yFacilities: [] },
+        { type: "BUS", routeName: "信義幹線", departureStop: "中正紀念堂", arrivalStop: "台北車站", waitInfo: { time: 0, source: "realtime" }, estimatedWaitMinutes: 0, direction: 0, polyline: [], departureStopA11y: [], arrivalStopA11y: [] },
+        { type: "WALK", from: "公車站", to: "台北車站", distanceM: 50, minutesEst: 1, polyline: [], a11yFacilities: [] },
+      ],
+      accessibilityHighlights: [],
+    };
+
+    vi.mocked(planOtpRoute)
+      .mockResolvedValueOnce([seg1Route] as any)
+      .mockResolvedValueOnce([seg2Route] as any);
+
+    const req = {
+      travelMode: "transit" as const,
+      origin: nccuOrigin,
+      destination: mainStationDest,
+      waypoints: [cckMemMem],
+      mode: "wheelchair" as const,
+    };
+
+    const res = await planAccessibleRouteFromRequest(req);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    expect(res.data.waypoints).toBeDefined();
+    expect(res.data.routes[0].totalMinutes).toBe(25);
+    expect(res.data.routes[0].routeName).toContain("羅斯福路幹線");
+    expect(res.data.routes[0].routeName).toContain("信義幹線");
+  });
+
+  it("測試 Case D: 無可行公車/大眾運輸路線時回傳 404 (NOT_FOUND)", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([]);
+
+    const req = {
+      travelMode: "transit" as const,
+      origin: { latitude: 24.00, longitude: 120.00 }, // 偏遠山區/外海
+      destination: { latitude: 24.01, longitude: 120.01 },
+    };
+
+    const res = await planAccessibleRouteFromRequest(req);
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+
+    expect(res.status).toBe(ResponseCode.NOT_FOUND);
+    expect(res.error).toContain("找不到連通的公車或捷運路線");
+  });
+});
+

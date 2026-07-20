@@ -517,10 +517,13 @@ export async function fetchRailLegGeometry(
  * @param point The {lat, lng} point to snap from.
  * @returns The nearest rail-then-bus station, or null.
  */
-async function findSnapStop(point: {
-  lat: number;
-  lng: number;
-}): Promise<SnapStop | null> {
+async function findSnapStop(
+  point: {
+    lat: number;
+    lng: number;
+  },
+  preferBus = false,
+): Promise<SnapStop | null> {
   const origin: [number, number] = [point.lng, point.lat];
   const nearQuery = {
     location: {
@@ -531,6 +534,19 @@ async function findSnapStop(point: {
     },
   };
   try {
+    if (preferBus) {
+      const [bus] = await BusStopModel.find(nearQuery)
+        .limit(1)
+        .lean<ITdxBusStop[]>();
+      if (bus) {
+        return {
+          lat: bus.location.coordinates[1],
+          lng: bus.location.coordinates[0],
+          name: bus.stopName.Zh_tw,
+        };
+      }
+    }
+
     const [metro, train] = await Promise.all([
       MetroStationModel.find(nearQuery).limit(1).lean<ITdxMetroStation[]>(),
       TrainStationModel.find(nearQuery).limit(1).lean<ITdxTrainStation[]>(),
@@ -795,6 +811,8 @@ function itineraryUsable(it: OtpItinerary, maxTransfers?: number): boolean {
   return true;
 }
 
+
+
 /**
  * Plan transit routes via the OTP2 sidecar. Output is AccessibleRoute-compatible
  * and un-enriched (no a11y arrays, no highlights) — finalizeRoutes() handles
@@ -818,9 +836,9 @@ export async function planOtpRoute(
   const walkSpeed = walkSpeedMps(mode);
 
   const tm: Record<string, number> = {};
-  let itineraries: OtpItinerary[];
+  const t0 = Date.now();
+
   let firstItineraries: OtpItinerary[] = [];
-  const tFirst = Date.now();
   try {
     firstItineraries = await queryOtpPlan(
       origin,
@@ -829,29 +847,42 @@ export async function planOtpRoute(
       wheelchair,
       walkSpeed,
     );
-    itineraries = firstItineraries;
     planBreaker.recordSuccess();
   } catch (err) {
     planBreaker.recordFailure();
-    console.warn("[otp-routing] plan query failed (fail-soft to [])", err);
-    return [];
+    console.warn("[otp-routing] primary query failed, attempting stop snap", err);
   }
-  tm.otpFirst = Date.now() - tFirst;
+  tm.otpFirst = Date.now() - t0;
+  let itineraries = firstItineraries;
 
   const maxTransfers = opts?.maxTransfers;
   let snapPre: WalkLeg | null = null;
   let snapPost: WalkLeg | null = null;
 
-  const hasUsableTransit = (its: OtpItinerary[]) => its.some((it) => {
-    const transit = it.legs.filter(isTransitLeg);
-    return transit.length > 0 && (maxTransfers === undefined || transit.length - 1 <= maxTransfers);
-  });
+  const hasUsableTransit = (its: OtpItinerary[]) =>
+    its.some((it) => {
+      const transit = it.legs.filter(isTransitLeg);
+      return (
+        transit.length > 0 &&
+        (maxTransfers === undefined || transit.length - 1 <= maxTransfers)
+      );
+    });
 
-  if (!hasUsableTransit(itineraries)) {
+  const hasBusLeg = (its: OtpItinerary[]) =>
+    its.some((it) => it.legs.some((l) => l.mode === "BUS"));
+
+  const straightDistM = haversineCoords(
+    [origin.lng, origin.lat],
+    [destination.lng, destination.lat],
+  );
+  const needBusSnap = !hasUsableTransit(itineraries) || (straightDistM <= 3500 && !hasBusLeg(itineraries));
+
+  if (needBusSnap) {
     const tSnap = Date.now();
+    const preferBus = straightDistM <= 3500 || !hasUsableTransit(itineraries);
     const [originSnap, destSnap] = await Promise.all([
-      findSnapStop(origin),
-      findSnapStop(destination),
+      findSnapStop(origin, preferBus),
+      findSnapStop(destination, preferBus),
     ]);
     tm.snapLookup = Date.now() - tSnap;
     if (originSnap || destSnap) {
@@ -866,7 +897,12 @@ export async function planOtpRoute(
         );
         tm.otpRetry = Date.now() - tRetry;
         if (hasUsableTransit(retryItineraries)) {
-          itineraries = retryItineraries;
+          if (!hasUsableTransit(itineraries)) {
+            itineraries = retryItineraries;
+          } else {
+            // Append bus itineraries found via bus stop snap
+            itineraries = [...itineraries, ...retryItineraries];
+          }
           if (originSnap) {
             snapPre = snapWalkLeg(
               { ...origin, name: "出發地" },
@@ -886,18 +922,14 @@ export async function planOtpRoute(
               (originSnap ? ` origin→${originSnap.name}` : "") +
               (destSnap ? ` dest→${destSnap.name}` : ""),
           );
-        } else {
-          itineraries = firstItineraries;
         }
       } catch (err) {
         planBreaker.recordFailure();
         console.warn("[otp-routing] snap retry failed, falling back to walk-only", err);
-        itineraries = firstItineraries;
       }
     }
   }
 
-  const queryDate = ymdDash(departure);
   const allTripIds = [
     ...new Set(
       itineraries.flatMap((it) =>
@@ -953,9 +985,10 @@ export async function planOtpRoute(
           .join(" → ")
       : "步行路線";
 
-    const firstDepDate = transitOtpLegs.length > 0
-      ? ymdDash(new Date(transitOtpLegs[0].startTime))
-      : queryDate;
+  const queryDate = ymdDash(departure);
+  const firstDepDate = transitOtpLegs.length > 0
+    ? ymdDash(new Date(transitOtpLegs[0].startTime))
+    : queryDate;
 
     if (snapPre) legs.unshift({ ...snapPre });
     if (snapPost) legs.push({ ...snapPost });
@@ -975,6 +1008,144 @@ export async function planOtpRoute(
       accessibilityHighlights: [],
       ...(firstDepDate !== queryDate ? { departureDate: firstDepDate } : {}),
     });
+  }
+
+async function synthesizeShortBusRoutes(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  mode: AccessibilityMode,
+): Promise<AccessibleRoute[]> {
+  const straightDistM = Math.round(
+    haversineCoords([origin.lng, origin.lat], [destination.lng, destination.lat]),
+  );
+  if (straightDistM > 3500) return [];
+
+  const nearOrigin = {
+    location: {
+      $near: {
+        $geometry: { type: "Point" as const, coordinates: [origin.lng, origin.lat] },
+        $maxDistance: 500,
+      },
+    },
+  };
+  const nearDest = {
+    location: {
+      $near: {
+        $geometry: { type: "Point" as const, coordinates: [destination.lng, destination.lat] },
+        $maxDistance: 500,
+      },
+    },
+  };
+
+  try {
+    const [originStops, destStops] = await Promise.all([
+      BusStopModel.find(nearOrigin).lean<ITdxBusStop[]>(),
+      BusStopModel.find(nearDest).lean<ITdxBusStop[]>(),
+    ]);
+    if (!originStops.length || !destStops.length) return [];
+
+    const originRoutes = new Set(originStops.flatMap((s) => s.subRouteIds || []));
+    const destRoutes = new Set(destStops.flatMap((s) => s.subRouteIds || []));
+    const commonRoutes = Array.from(originRoutes).filter((r) => destRoutes.has(r));
+    if (!commonRoutes.length) return [];
+
+    const routes: AccessibleRoute[] = [];
+    const speed = walkSpeedMps(mode) * 60;
+
+    for (const routeName of commonRoutes.slice(0, 3)) {
+      const boardStop = originStops.find((s) => (s.subRouteIds || []).includes(routeName));
+      const alightStop = destStops.find((s) => (s.subRouteIds || []).includes(routeName));
+      if (!boardStop || !alightStop) continue;
+
+      const walk1Dist = Math.round(
+        haversineCoords([origin.lng, origin.lat], boardStop.location.coordinates),
+      );
+      const rideDist = Math.round(
+        haversineCoords(boardStop.location.coordinates, alightStop.location.coordinates),
+      );
+      const walk2Dist = Math.round(
+        haversineCoords(alightStop.location.coordinates, [destination.lng, destination.lat]),
+      );
+
+      const walk1Mins = Math.max(1, Math.ceil(walk1Dist / speed));
+      const rideMins = Math.max(2, Math.ceil(rideDist / 400));
+      const walk2Mins = Math.max(1, Math.ceil(walk2Dist / speed));
+      const totalMins = walk1Mins + rideMins + walk2Mins;
+
+      const legs: (WalkLeg | BusLeg)[] = [];
+
+      if (walk1Dist > 10) {
+        legs.push({
+          type: "WALK",
+          from: "出發地",
+          to: boardStop.stopName.Zh_tw,
+          distanceM: walk1Dist,
+          minutesEst: walk1Mins,
+          polyline: [
+            [origin.lng, origin.lat],
+            boardStop.location.coordinates as [number, number],
+          ],
+          a11yFacilities: [],
+          exitInfo: null,
+        });
+      }
+
+      legs.push({
+        type: "BUS",
+        routeName,
+        departureStop: boardStop.stopName.Zh_tw,
+        arrivalStop: alightStop.stopName.Zh_tw,
+        departureStopId: boardStop.stopUid,
+        arrivalStopId: alightStop.stopUid,
+        waitInfo: { time: hhmm(Date.now()), source: "schedule" },
+        estimatedWaitMinutes: 3,
+        direction: 0,
+        polyline: [
+          boardStop.location.coordinates as [number, number],
+          alightStop.location.coordinates as [number, number],
+        ],
+        departureStopA11y: [],
+        arrivalStopA11y: [],
+      });
+
+      if (walk2Dist > 10) {
+        legs.push({
+          type: "WALK",
+          from: alightStop.stopName.Zh_tw,
+          to: "目的地",
+          distanceM: walk2Dist,
+          minutesEst: walk2Mins,
+          polyline: [
+            alightStop.location.coordinates as [number, number],
+            [destination.lng, destination.lat],
+          ],
+          a11yFacilities: [],
+          exitInfo: null,
+        });
+      }
+
+      routes.push({
+        routeId: `direct-bus-${routeName}`,
+        routeName: `公車 ${routeName}`,
+        totalMinutes: totalMins,
+        transferCount: 0,
+        totalWalkDistanceM: walk1Dist + walk2Dist,
+        legs,
+        accessibilityHighlights: ["市區公車直達路線"],
+      });
+    }
+
+    return routes;
+  } catch {
+    return [];
+  }
+}
+
+  if (straightDistM <= 3500) {
+    const synthBusRoutes = await synthesizeShortBusRoutes(origin, destination, mode);
+    if (synthBusRoutes.length > 0) {
+      out.unshift(...synthBusRoutes);
+    }
   }
 
   console.log(
