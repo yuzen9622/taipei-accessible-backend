@@ -70,7 +70,7 @@ for url in $OTP_GTFS_URLS; do
   # the latter build a graph that NPEs on load). See clean-gtfs-feed.py.
   if [ "$i" -eq 1 ]; then
     log "patching feed $i with general (weekly) timetables"
-    python3 "$SCRIPT_DIR/patch_gtfs.py" "$out" || log "WARN: General timetable patching failed — continuing with static schedule"
+    python3 "$SCRIPT_DIR/patch_gtfs.py" "$out" || log "WARN: patch_gtfs.py exited non-zero — city bus per-stop timetables may not be applied (see the TDX error/body on stderr above); continuing with the unpatched static schedule"
   else
     log "skipping timetable patching for feed $i (city-specific static feed)"
   fi

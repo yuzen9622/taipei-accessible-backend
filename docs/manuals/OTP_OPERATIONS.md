@@ -275,3 +275,57 @@ Node 端固定使用 OTP 作為唯一路徑規劃引擎；設定 `OTP_BASE_URL` 
 ```
 
 每週滾動即可同時滿足：TRA calendar 的 45 天效期、TDX 班表改點、OSM 月度更新（腳本內建 30 天判斷）。
+
+---
+
+## 8. 市區公車班表 patch（`patch_gtfs.py`）與重建後驗證
+
+> 2026-07-20 新增。`build-otp-graph.sh` 在「清理 feed」之後、「TRA 注入」之前，會對 `feed-1.gtfs.zip` 跑 `src/scripts/patch_gtfs.py`，用 TDX 班表把市區公車 + 公路客運補成 180 天週期日曆的班次。本節是 §2.1 pipeline 沒細講的一環。
+
+### 8.1 patch_gtfs.py 做什麼（務必先懂它的破壞性語意）
+
+- **會先刪光 base feed 內所有 `route_type==3`（公車）班次，再只從 `CITIES` 名單（+ InterCity 公路客運）用 TDX `Bus/Schedule` 重建**，日曆改為 `CALENDAR_VALID_DAYS`（180）天週期。
+- 對「只有起站時刻（origin-only）」的路線，再抓 `Bus/DailyTimeTable` 補逐站；TDX 已把 **Taipei/NewTaipei/Tainan/Kinmen/Lienchiang 的 DailyTimeTable 下架（v2 400、v3 僅 Tainan 且為 origin-only）**，這些市自動級聯降級：v2→v3→`StopOfRoute` 合成（每站 +2 分近似）。其餘 17 市走 v2 真實 daily。
+- 純班距（`Frequencys`）路線本就 skip（`freq_only`），由 base feed 的 `frequencies.txt` 涵蓋。
+
+### 8.2 ⚠️ 最大的坑：不要縮短 `CITIES`
+
+因為是「先刪全部再只重建名單內」，**把 `patch_gtfs.py` 的 `CITIES` 改短 = 靜默刪掉其他縣市的公車**，而且建置仍會「成功」。2026-07-20 就發生過 `CITIES` 被改成只剩 `["Taipei","NewTaipei"]`，重建後 OTP 只剩台北/新北/公路客運三種公車、其餘 20 縣市全消失。**改 `CITIES` 前務必記得此語意；正常應維持完整 22 縣市。**
+
+```bash
+# 重建前自我檢查
+python3 -c "import sys;sys.path.insert(0,'src/scripts');import patch_gtfs as p;print(len(p.CITIES),'cities, CAL',p.CALENDAR_VALID_DAYS)"
+# 期望：22 cities, CAL 180
+```
+
+patch 成功時 log 會列出 **22 個縣市各自的 `schedule=…` 摘要** 與 `Generated 十萬+ new bus trips`。
+
+### 8.3 重建後兩層驗證（公車專用，補充 §5）
+
+對外埠是 **127.0.0.1:18080**（容器內 8080），backend 在 8000。
+
+```bash
+# (a) OTP 圖層：公車應涵蓋 ~22 縣市、~4000+ 條（只剩 TPE/NWT/THB 3 個 = CITIES 被縮了）
+curl -s -X POST http://localhost:18080/otp/routers/default/index/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ routes(transportModes:[BUS]){ gtfsId } }"}' \
+  | python3 -c "import sys,json;from collections import Counter;r=json.load(sys.stdin)['data']['routes'];c=Counter(x['gtfsId'].split(':')[1][:3] for x in r);print(len(c),'縣市 /',len(r),'條',dict(c))"
+
+# (b) 後端 API 層：用無捷運區（天母）強迫排公車，legs 應含 BUS
+curl -s -X POST http://localhost:8000/api/v1/a11y/accessible-route \
+  -H "Content-Type: application/json" \
+  -d '{"origin":{"latitude":25.1176,"longitude":121.5316},"destination":{"latitude":25.0478,"longitude":121.5170},"mode":"normal","travelMode":"transit"}' \
+  | python3 -c "import sys,json;print([l.get('type') for l in json.load(sys.stdin)['data']['routes'][0]['legs']])"
+```
+
+### 8.4 OTP 沒起來（exit 137）
+
+重建腳本結尾會原子換圖 + 重啟 otp 並等 healthcheck。但 otp 服務曾 `Exited(137)`（記憶體/被殺，serve `-Xmx` 見 `OTP_SERVE_XMX`）。若重建後 `docker ps` 沒有 otp：
+
+```bash
+docker ps -a | grep otp                 # 看是否 Exited(137)
+docker compose up -d otp                 # 重新拉起
+docker inspect otp --format '{{.State.Status}} {{.State.Health.Status}}'  # 等 running healthy
+```
+
+> 相關背景與 TDX v2→v3 遷移細節，另見 `docs/specs/FUNCTIONAL_SPEC_OTP2_INTEGRATION.md` 與 `patch_gtfs.py` 檔頭。
