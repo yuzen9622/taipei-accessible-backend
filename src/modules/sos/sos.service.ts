@@ -289,7 +289,11 @@ export async function acknowledgeSession(input: AcknowledgeSosInput): Promise<Se
         ok: true,
         httpCode: ResponseCode.OK,
         message: SOS_MSG.ALREADY_RESOLVED,
-        data: { sessionId: input.sessionId, handlingStatus: current.handlingStatus },
+        data: {
+          sessionId: input.sessionId,
+          handlingStatus: current.handlingStatus,
+          reason: SOS_REASON.ALREADY_RESOLVED,
+        },
       };
     }
     return {
@@ -500,7 +504,11 @@ export async function resolveSession(input: ResolveSosInput): Promise<ServiceRes
       ok: true,
       httpCode: ResponseCode.OK,
       message: SOS_MSG.RESOLVED,
-      data: { sessionId: input.sessionId, status: "resolved" },
+      data: {
+        sessionId: input.sessionId,
+        status: "resolved",
+        reason: SOS_REASON.ALREADY_RESOLVED,
+      },
     };
   }
 

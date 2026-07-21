@@ -6,20 +6,24 @@ import {
   replyAgentResult,
   replyMessages,
   replyText,
+  showLoadingAnimation,
   type RouteCardPayload,
 } from "../../adapters/line.adapter";
-import { LINE_MSG } from "../../constants/messages";
+import { LINE_MSG, SOS_MSG, SOS_REASON } from "../../constants/messages";
 import SosSession from "../../model/sos-session.model";
 import User from "../../model/user.model";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import {
   acknowledgeSession,
   claimSession,
+  getAuthorizedSessionForLineUser,
   resolveSession,
   updateHandlingStatus,
 } from "../sos/sos.service";
+import type { ServiceResult } from "../sos/sos.types";
 import { redisSetNx } from "../../config/redis";
 import { ResponseCode } from "../../types/code";
+import { stripLineMarkdown } from "../../utils/strip-line-markdown";
 import type {
   LineEvent,
   LineRoutePreviewData,
@@ -183,6 +187,7 @@ async function handleTextMessage(
   lineUserId?: string,
 ): Promise<void> {
   try {
+    if (lineUserId) await showLoadingAnimation(lineUserId).catch(() => {});
     const history = lineUserId ? await getLineChatHistory(lineUserId) : [];
     const messages: OAIMessage[] = [
       ...history.map((turn): OAIMessage => ({
@@ -195,7 +200,7 @@ async function handleTextMessage(
       lineUserId: lineUserId ?? "",
       messages,
     });
-    const speech = parseAgentSpeech(result.text);
+    const speech = stripLineMarkdown(parseAgentSpeech(result.text));
     const routeCard = routeCardFromToolResults(result.toolResults);
     await replyAgentResult(replyToken, speech, routeCard);
     if (lineUserId) await appendLineChatTurn(lineUserId, text, speech);
@@ -206,10 +211,31 @@ async function handleTextMessage(
 }
 
 /**
+ * Detects whether an SOS action observed an already-resolved / not-active session,
+ * so every postback action can be normalized to one unified "resolved" reply. Narrows
+ * `ServiceResult.data` (typed `unknown`) with an object guard before reading `reason`.
+ *
+ * @param result The result returned by an SOS action service.
+ * @returns True when the action saw a resolved / closed session.
+ */
+function observedResolved(result: ServiceResult): boolean {
+  const data = result.data;
+  if (typeof data !== "object" || data === null) return false;
+  const reason = (data as { reason?: unknown }).reason;
+  return (
+    reason === SOS_REASON.ALREADY_RESOLVED ||
+    reason === SOS_REASON.SESSION_NOT_ACTIVE
+  );
+}
+
+/**
  * Handles an SOS control postback from a notification or claim-controls message.
- * Each action maps to a deterministic SOS service call (never the agent); the
- * service owns authorization, idempotency, and closed-event handling, so this
- * only surfaces the resulting message to the contact.
+ * Each action maps to a deterministic SOS service call (never the agent). Malformed
+ * postbacks are answered with the generic info message without any session lookup;
+ * once the action is known-valid, an authorization-preserving pre-check replies with
+ * the unified "resolved" message for an already-closed session (and unauthorized
+ * callers get the standard permission reply), before the action runs. A resolution
+ * that races the action is normalized to the same unified reply.
  *
  * @param event The LINE postback event.
  */
@@ -227,15 +253,39 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
     await replyText(replyToken, LINE_MSG.INFO);
     return;
   }
+  if (
+    action !== "ack" &&
+    action !== "claim" &&
+    action !== "status" &&
+    action !== "resolve"
+  ) {
+    await replyText(replyToken, LINE_MSG.INFO);
+    return;
+  }
+  if (action === "status" && value !== "en_route" && value !== "arrived") {
+    await replyText(replyToken, LINE_MSG.INFO);
+    return;
+  }
 
   try {
-    if (action === "ack") {
-      const result = await acknowledgeSession({ sessionId: sid, lineUserId });
-      await replyText(replyToken, result.message);
+    const auth = await getAuthorizedSessionForLineUser(lineUserId, sid);
+    if (!auth?.session) {
+      await replyText(replyToken, SOS_MSG.NOT_AUTHORIZED_CONTACT);
       return;
     }
+    if (auth.session.status === "resolved") {
+      await replyText(replyToken, LINE_MSG.SOS_ALREADY_RESOLVED);
+      return;
+    }
+
+    await showLoadingAnimation(lineUserId).catch(() => {});
+
     if (action === "claim") {
       const result = await claimSession({ sessionId: sid, lineUserId });
+      if (observedResolved(result)) {
+        await replyText(replyToken, LINE_MSG.SOS_ALREADY_RESOLVED);
+        return;
+      }
       if (result.ok) {
         await replyMessages(replyToken, [
           { type: "text", text: result.message },
@@ -246,25 +296,25 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
       await replyText(replyToken, result.message);
       return;
     }
-    if (action === "status") {
-      if (value !== "en_route" && value !== "arrived") {
-        await replyText(replyToken, LINE_MSG.INFO);
-        return;
-      }
-      const result = await updateHandlingStatus({
+
+    let result: ServiceResult;
+    if (action === "ack") {
+      result = await acknowledgeSession({ sessionId: sid, lineUserId });
+    } else if (action === "status") {
+      result = await updateHandlingStatus({
         sessionId: sid,
         lineUserId,
-        handlingStatus: value,
+        handlingStatus: value as "en_route" | "arrived",
       });
-      await replyText(replyToken, result.message);
+    } else {
+      result = await resolveSession({ sessionId: sid, lineUserId });
+    }
+
+    if (observedResolved(result)) {
+      await replyText(replyToken, LINE_MSG.SOS_ALREADY_RESOLVED);
       return;
     }
-    if (action === "resolve") {
-      const result = await resolveSession({ sessionId: sid, lineUserId });
-      await replyText(replyToken, result.message);
-      return;
-    }
-    await replyText(replyToken, LINE_MSG.INFO);
+    await replyText(replyToken, result.message);
   } catch (error) {
     console.error("[line.service] postback handling failed", error);
     await replyText(replyToken, LINE_MSG.INFO);

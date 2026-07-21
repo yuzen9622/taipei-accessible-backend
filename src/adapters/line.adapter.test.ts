@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockReplyMessage = vi.fn();
+const mockShowLoadingAnimation = vi.fn();
 
 vi.mock("@line/bot-sdk", () => ({
   messagingApi: {
@@ -8,16 +9,18 @@ vi.mock("@line/bot-sdk", () => ({
       return {
         replyMessage: mockReplyMessage,
         multicast: vi.fn(),
+        showLoadingAnimation: mockShowLoadingAnimation,
       };
     }),
   },
 }));
 
-import { replyAgentResult } from "./line.adapter";
+import { replyAgentResult, showLoadingAnimation } from "./line.adapter";
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockReplyMessage.mockResolvedValue(undefined);
+  mockShowLoadingAnimation.mockResolvedValue({});
 });
 
 describe("line.adapter — agent replies", () => {
@@ -54,5 +57,49 @@ describe("line.adapter — agent replies", () => {
         }),
       ],
     });
+  });
+});
+
+describe("line.adapter — showLoadingAnimation", () => {
+  it("requests the maximum 60s loading animation for the chat", async () => {
+    await showLoadingAnimation("U1");
+
+    expect(mockShowLoadingAnimation).toHaveBeenCalledWith({
+      chatId: "U1",
+      loadingSeconds: 60,
+    });
+  });
+
+  it("swallows an immediately rejecting client call", async () => {
+    mockShowLoadingAnimation.mockRejectedValue(new Error("line down"));
+
+    await expect(showLoadingAnimation("U1")).resolves.toBeUndefined();
+  });
+
+  it("returns within the timeout bound when the client call never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      mockShowLoadingAnimation.mockReturnValue(new Promise<never>(() => {}));
+
+      const pending = showLoadingAnimation("U1");
+      await vi.advanceTimersByTimeAsync(2000);
+
+      await expect(pending).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves no pending timer when the client call settles quickly", async () => {
+    vi.useFakeTimers();
+    try {
+      mockShowLoadingAnimation.mockResolvedValue({});
+
+      await showLoadingAnimation("U1");
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

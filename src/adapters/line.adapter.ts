@@ -379,6 +379,40 @@ export async function pushSosUpdate(
   return lineUserIds.length;
 }
 
+const LOADING_ANIMATION_SECONDS = 60;
+const LOADING_ANIMATION_TIMEOUT_MS = 2000;
+
+/**
+ * Shows LINE's native loading ("typing") animation in a 1-on-1 chat while the bot
+ * prepares a reply. Best-effort and time-boxed: the SDK call is raced against a
+ * {@link LOADING_ANIMATION_TIMEOUT_MS} timeout so a hung request can never consume the
+ * reply-token window, and any (late) rejection is swallowed. The animation is
+ * dismissed automatically as soon as the user receives the reply, so we request the
+ * maximum supported duration.
+ *
+ * @param chatId The target user's LINE id (only valid for 1-on-1 chats).
+ */
+export async function showLoadingAnimation(chatId: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const call = getClient().showLoadingAnimation({
+      chatId,
+      loadingSeconds: LOADING_ANIMATION_SECONDS,
+    });
+    call.catch(() => {});
+    await Promise.race([
+      call,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, LOADING_ANIMATION_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (err) {
+    console.error("[line.adapter] showLoadingAnimation failed", err);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Replies to a webhook event with plain text via the (free) reply token.
  *

@@ -4,6 +4,7 @@ vi.mock("../../adapters/line.adapter", () => ({
   replyAgentResult: vi.fn().mockResolvedValue(undefined),
   replyText: vi.fn().mockResolvedValue(undefined),
   replyMessages: vi.fn().mockResolvedValue(undefined),
+  showLoadingAnimation: vi.fn().mockResolvedValue(undefined),
   buildClaimedControlsMessage: vi.fn((sessionId: string) => ({
     type: "text",
     text: "controls",
@@ -25,6 +26,7 @@ vi.mock("../sos/sos.service", () => ({
   claimSession: vi.fn(),
   updateHandlingStatus: vi.fn(),
   resolveSession: vi.fn(),
+  getAuthorizedSessionForLineUser: vi.fn(),
 }));
 
 vi.mock("../../config/redis", () => ({
@@ -62,12 +64,14 @@ import {
   replyAgentResult,
   replyMessages,
   replyText,
+  showLoadingAnimation,
 } from "../../adapters/line.adapter";
 import { runLineAgent } from "./line-agent.service";
 import { appendLineChatTurn, getLineChatHistory } from "./line-memory";
 import {
   acknowledgeSession,
   claimSession,
+  getAuthorizedSessionForLineUser,
   resolveSession,
   updateHandlingStatus,
 } from "../sos/sos.service";
@@ -76,7 +80,7 @@ import EmergencyContact from "../../model/emergency-contact.model";
 import SosSession from "../../model/sos-session.model";
 import User from "../../model/user.model";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
-import { LINE_MSG } from "../../constants/messages";
+import { LINE_MSG, SOS_MSG, SOS_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import type { LineEvent } from "./line.types";
 
@@ -99,6 +103,11 @@ beforeEach(() => {
   vi.mocked(replyAgentResult).mockResolvedValue(undefined);
   vi.mocked(replyText).mockResolvedValue(undefined);
   vi.mocked(replyMessages).mockResolvedValue(undefined);
+  vi.mocked(showLoadingAnimation).mockResolvedValue(undefined);
+  vi.mocked(getAuthorizedSessionForLineUser).mockResolvedValue({
+    session: { _id: "s1", userId: "u1", status: "active" } as any,
+    ownerName: "王小明",
+  });
   vi.mocked(buildClaimedControlsMessage).mockReturnValue({
     type: "text",
     text: "controls",
@@ -299,6 +308,49 @@ describe("line.service — text message (agent loop)", () => {
 
     expect(vi.mocked(replyText)).toHaveBeenCalledWith("r1", LINE_MSG.INFO);
   });
+
+  it("strips markdown from the agent reply before sending it to LINE", async () => {
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: "**台北**目前 `多雲`\n- 溫度 28 度",
+      toolResults: [],
+    });
+
+    await handleEvents([textEvent("台北天氣")]);
+
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
+      "r1",
+      "台北目前 多雲\n・ 溫度 28 度",
+      null,
+    );
+  });
+
+  it("shows the loading animation for a text message with a user id", async () => {
+    await handleEvents([textEvent("你好嗎")]);
+
+    expect(vi.mocked(showLoadingAnimation)).toHaveBeenCalledWith("U1");
+  });
+
+  it("skips the loading animation when the source has no user id", async () => {
+    await handleEvents([
+      {
+        type: "message",
+        replyToken: "r1",
+        message: { type: "text", text: "你好" },
+        source: { type: "group", groupId: "G1" },
+      } as unknown as LineEvent,
+    ]);
+
+    expect(vi.mocked(showLoadingAnimation)).not.toHaveBeenCalled();
+  });
+
+  it("does not block the reply when the loading animation call fails", async () => {
+    vi.mocked(showLoadingAnimation).mockRejectedValue(new Error("loading boom"));
+    vi.mocked(runLineAgent).mockResolvedValue({ text: "你好呀", toolResults: [] });
+
+    await handleEvents([textEvent("你好嗎")]);
+
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith("r1", "你好呀", null);
+  });
 });
 
 describe("line.service — postback (deterministic SOS controls)", () => {
@@ -372,6 +424,89 @@ describe("line.service — postback (deterministic SOS controls)", () => {
 
     expect(vi.mocked(acknowledgeSession)).not.toHaveBeenCalled();
     expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+  });
+
+  it("replies INFO for an unknown action without any session lookup", async () => {
+    await handleEvents([postbackEvent("action=bogus&sid=s1")]);
+
+    expect(vi.mocked(getAuthorizedSessionForLineUser)).not.toHaveBeenCalled();
+    expect(vi.mocked(acknowledgeSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+  });
+
+  it("replies INFO for an invalid status value without any session lookup", async () => {
+    await handleEvents([postbackEvent("action=status&sid=s1&v=bogus")]);
+
+    expect(vi.mocked(getAuthorizedSessionForLineUser)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateHandlingStatus)).not.toHaveBeenCalled();
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+  });
+
+  it("replies the unified resolved message and skips the action for a resolved session", async () => {
+    vi.mocked(getAuthorizedSessionForLineUser).mockResolvedValue({
+      session: { _id: "s1", userId: "u1", status: "resolved" } as any,
+      ownerName: "王小明",
+    });
+
+    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+
+    expect(vi.mocked(claimSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(showLoadingAnimation)).not.toHaveBeenCalled();
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.SOS_ALREADY_RESOLVED,
+    );
+  });
+
+  it("replies the standard permission message for an unauthorized contact", async () => {
+    vi.mocked(getAuthorizedSessionForLineUser).mockResolvedValue(null as any);
+
+    await handleEvents([postbackEvent("action=ack&sid=s1")]);
+
+    expect(vi.mocked(acknowledgeSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      SOS_MSG.NOT_AUTHORIZED_CONTACT,
+    );
+  });
+
+  it("normalizes a claim that races into resolution to the unified reply (no claim controls)", async () => {
+    vi.mocked(claimSession).mockResolvedValue({
+      ok: false,
+      httpCode: 200,
+      message: "此求救已結束",
+      data: { reason: SOS_REASON.SESSION_NOT_ACTIVE },
+    } as any);
+
+    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+
+    expect(vi.mocked(replyMessages)).not.toHaveBeenCalled();
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.SOS_ALREADY_RESOLVED,
+    );
+  });
+
+  it("normalizes an ack that races into resolution to the unified reply", async () => {
+    vi.mocked(acknowledgeSession).mockResolvedValue({
+      ok: true,
+      httpCode: 200,
+      message: "此事件已結案",
+      data: { reason: SOS_REASON.ALREADY_RESOLVED },
+    } as any);
+
+    await handleEvents([postbackEvent("action=ack&sid=s1")]);
+
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.SOS_ALREADY_RESOLVED,
+    );
+  });
+
+  it("shows the loading animation for an active claim postback", async () => {
+    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+
+    expect(vi.mocked(showLoadingAnimation)).toHaveBeenCalledWith("U1");
   });
 });
 
