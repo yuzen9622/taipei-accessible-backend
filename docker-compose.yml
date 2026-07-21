@@ -25,6 +25,9 @@ services:
       # .env's GCS_KEY_FILE is a host path; mount it (below) and point the
       # container at the in-container path so GCS auth works inside Docker.
       GCS_KEY_FILE: /secrets/gcs-key.json
+      # LINE conversation state (pending intent + chat history) lives in Redis;
+      # reach the redis service by name on the compose network.
+      REDIS_URL: redis://redis:6379
     volumes:
       # Bind the service-account JSON (host path from .env) read-only.
       - ${GCS_KEY_FILE}:/secrets/gcs-key.json:ro
@@ -34,10 +37,25 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       otp:
         condition: service_started
       valhalla:
         condition: service_started
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    # Ephemeral conversation cache (pending intent TTL 30m, chat history);
+    # no host port published — only the backend (same network) reaches it.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
 
   mongo:
