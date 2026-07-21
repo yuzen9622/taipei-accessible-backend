@@ -435,6 +435,89 @@ export function dataConfidenceFromRatio(ratio: number): DataConfidence {
 }
 
 /**
+ * Weather + air-quality conditions for a journey, resolved once per request. All
+ * fields optional so a partially-available upstream (e.g. weather ok, air down)
+ * still contributes what it has. `airQuality` holds the Chinese category string
+ * produced by `classifyPm25` (良好 / 普通 / 對敏感族群不健康 / 不健康 / 非常不健康).
+ */
+export interface EnvConditions {
+  precipitationProbability?: number;
+  temperature?: number;
+  airQuality?: string;
+}
+
+/**
+ * Mode multiplier for weather penalties (rain/heat). Wheelchair and elderly
+ * users are most affected by wet slopes and heat over long walks; a fully-abled
+ * traveller far less so. Air-quality penalty is NOT scaled (respiratory impact
+ * is broadly mode-independent).
+ */
+const ENV_MODE_FACTOR: Record<AccessibilityMode, number> = {
+  wheelchair: 1.0,
+  elderly: 1.0,
+  visual_impaired: 0.7,
+  normal: 0.5,
+};
+
+/**
+ * Maximum total environment penalty (points subtracted from the route score);
+ * also bounds `environmentScore` to the effective range 75–100.
+ */
+export const ENV_PENALTY_CAP = 25;
+
+/**
+ * Environment penalty magnitude (0 to ENV_PENALTY_CAP) from weather + air
+ * quality. Rain and heat are mode-scaled; heat only bites when the walk exceeds
+ * the mode's free distance; air quality applies unscaled to every mode. Missing
+ * factors contribute 0, so an empty/unavailable `env` yields 0.
+ *
+ * @param env Resolved weather/air conditions (any field may be absent).
+ * @param mode Accessibility mode driving the mode factor and heat gating.
+ * @param walkDistanceM Total walking distance in metres (gates the heat penalty).
+ * @returns The penalty magnitude, clamped to [0, ENV_PENALTY_CAP].
+ */
+export function environmentPenalty(
+  env: EnvConditions,
+  mode: AccessibilityMode = "normal",
+  walkDistanceM = 0,
+): number {
+  const factor = ENV_MODE_FACTOR[mode] ?? ENV_MODE_FACTOR.normal;
+
+  let rain = 0;
+  const pop = env.precipitationProbability;
+  if (typeof pop === "number") {
+    if (pop >= 70) rain = 12;
+    else if (pop >= 40) rain = 6;
+  }
+
+  let heat = 0;
+  const temp = env.temperature;
+  const freeM = (WALK_PENALTY[mode] ?? WALK_PENALTY.normal).freeM;
+  if (typeof temp === "number" && walkDistanceM > freeM) {
+    if (temp >= 36) heat = 10;
+    else if (temp >= 32) heat = 5;
+  }
+
+  let air = 0;
+  switch (env.airQuality) {
+    case "非常不健康":
+      air = 12;
+      break;
+    case "不健康":
+      air = 8;
+      break;
+    case "對敏感族群不健康":
+      air = 4;
+      break;
+    default:
+      air = 0;
+  }
+
+  const penalty = (rain + heat) * factor + air;
+  return Math.max(0, Math.min(ENV_PENALTY_CAP, penalty));
+}
+
+/**
  * Route-ranking cost — lower is better. NOT the user-facing score:
  * cost = travelTime + transferCount × 5 × modePenalty + (100 − a11yScore) × 0.3
  *        + walkPenalty.
@@ -508,7 +591,8 @@ export function scoreRoute(
   highlightCount: number,
   mode: AccessibilityMode = "normal",
   walkDistanceM = 0,
-  dataCoverageRatio = 1
+  dataCoverageRatio = 1,
+  env?: EnvConditions
 ): RouteAccessibilityScore {
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
   const facilityScore = scoreFacilitySet(facilityNodes);
@@ -566,10 +650,13 @@ export function scoreRoute(
 
   const walkPenalty = walkPenaltyScore(walkDistanceM, mode);
 
+  const envPenalty = env ? environmentPenalty(env, mode, walkDistanceM) : 0;
+
   const rawTotal =
     a11yScore * profile.a11yWeight +
     timeScore * profile.timeWeight -
-    walkPenalty;
+    walkPenalty -
+    envPenalty;
   const totalScore = Math.max(0, Math.min(100, Math.round(rawTotal)));
 
   const dataConfidence = dataConfidenceFromRatio(dataCoverageRatio);
@@ -577,18 +664,22 @@ export function scoreRoute(
   if (dataConfidence === "low")
     warnings.push("沿途無障礙資料不足，分數為保守估計");
   if (walkPenalty >= 20) warnings.push("步行距離較長，行動不便者請留意");
+  if (envPenalty >= 10) warnings.push("天候或空氣品質不佳，通行較費力");
+
+  const components: RouteAccessibilityScore["components"] = {
+    facilityScore: Math.round(adjustedFacilityScore),
+    timeScore: Math.round(timeScore),
+    criticalFeatureScore: Math.round(criticalFeatureScore),
+    walkPenalty: Math.round(walkPenalty),
+  };
+  if (env) components.environmentScore = Math.round(100 - envPenalty);
 
   return {
     totalScore,
     label: scoreLabel(totalScore),
     dataConfidence,
     warnings,
-    components: {
-      facilityScore: Math.round(adjustedFacilityScore),
-      timeScore: Math.round(timeScore),
-      criticalFeatureScore: Math.round(criticalFeatureScore),
-      walkPenalty: Math.round(walkPenalty),
-    },
+    components,
   };
 }
 

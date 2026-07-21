@@ -12,6 +12,8 @@ import {
   routeCost,
   prerankCost,
   scoreRoute,
+  environmentPenalty,
+  ENV_PENALTY_CAP,
 } from "./scoring";
 import type { IOsmA11y } from "../../types";
 
@@ -221,5 +223,73 @@ describe("walkSpeedMps — E2 mode-aware walk speed", () => {
     expect(wheelchairMin).toBeGreaterThan(13);
     expect(wheelchairMin).toBeLessThan(15);
     expect(footWalkMin).toBeLessThan(9);
+  });
+});
+
+describe("environmentPenalty", () => {
+  it("returns 0 for empty conditions", () => {
+    expect(environmentPenalty({}, "wheelchair", 500)).toBe(0);
+  });
+
+  it("applies rain tiers scaled by mode factor", () => {
+    expect(environmentPenalty({ precipitationProbability: 70 }, "wheelchair", 0)).toBe(12);
+    expect(environmentPenalty({ precipitationProbability: 40 }, "wheelchair", 0)).toBe(6);
+    expect(environmentPenalty({ precipitationProbability: 39 }, "wheelchair", 0)).toBe(0);
+    // normal mode factor 0.5
+    expect(environmentPenalty({ precipitationProbability: 40 }, "normal", 0)).toBe(3);
+  });
+
+  it("gates heat penalty on walk distance exceeding the mode free distance", () => {
+    // wheelchair freeM = 150; below → no heat penalty
+    expect(environmentPenalty({ temperature: 36 }, "wheelchair", 100)).toBe(0);
+    // above → 10 * factor 1.0
+    expect(environmentPenalty({ temperature: 36 }, "wheelchair", 500)).toBe(10);
+    expect(environmentPenalty({ temperature: 32 }, "wheelchair", 500)).toBe(5);
+    expect(environmentPenalty({ temperature: 31 }, "wheelchair", 500)).toBe(0);
+  });
+
+  it("applies air-quality penalty unscaled by mode", () => {
+    expect(environmentPenalty({ airQuality: "非常不健康" }, "normal", 0)).toBe(12);
+    expect(environmentPenalty({ airQuality: "不健康" }, "normal", 0)).toBe(8);
+    expect(environmentPenalty({ airQuality: "對敏感族群不健康" }, "normal", 0)).toBe(4);
+    expect(environmentPenalty({ airQuality: "良好" }, "normal", 0)).toBe(0);
+  });
+
+  it("clamps the combined penalty to ENV_PENALTY_CAP", () => {
+    const p = environmentPenalty(
+      { precipitationProbability: 90, temperature: 40, airQuality: "非常不健康" },
+      "wheelchair",
+      1000,
+    );
+    expect(p).toBe(ENV_PENALTY_CAP);
+  });
+});
+
+describe("scoreRoute environment factor", () => {
+  const nodes = [node("elevator", { elevator: "yes" })];
+
+  it("omits environmentScore and is unchanged when env is undefined", () => {
+    const r = scoreRoute(nodes, 20, 30, 10, 1, "wheelchair", 300, 1);
+    expect(r.components.environmentScore).toBeUndefined();
+  });
+
+  it("adds environmentScore and lowers totalScore when conditions are poor", () => {
+    const base = scoreRoute(nodes, 20, 30, 10, 1, "wheelchair", 300, 1);
+    const withEnv = scoreRoute(nodes, 20, 30, 10, 1, "wheelchair", 300, 1, {
+      airQuality: "非常不健康",
+      precipitationProbability: 80,
+    });
+    expect(withEnv.components.environmentScore).toBeDefined();
+    expect(withEnv.components.environmentScore!).toBeLessThan(100);
+    expect(withEnv.totalScore).toBeLessThan(base.totalScore);
+  });
+
+  it("environmentScore is 100 when conditions are ideal", () => {
+    const r = scoreRoute(nodes, 20, 30, 10, 1, "wheelchair", 300, 1, {
+      airQuality: "良好",
+      precipitationProbability: 0,
+      temperature: 24,
+    });
+    expect(r.components.environmentScore).toBe(100);
   });
 });

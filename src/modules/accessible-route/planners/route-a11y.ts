@@ -99,6 +99,81 @@ export function deriveHighlights(
 }
 
 /**
+ * Build a single mode-tailored Chinese sentence summarising a route's
+ * accessibility, for direct display (replacing the frontend's generic
+ * label-based copy). Wheelchair/normal emphasise elevator/ramp presence and walk
+ * distance; elderly emphasises walk distance and transfers; visual_impaired
+ * emphasises tactile paving / audio signals. Pure and always non-empty.
+ *
+ * @param input.mode Accessibility mode driving the emphasis.
+ * @param input.walkDistanceM Total walking distance in metres.
+ * @param input.transferCount Number of transfers in the route.
+ * @param input.facilities All OSM a11y nodes gathered along the route.
+ * @param input.label The route's score label (drives the closing verdict).
+ * @returns A one-sentence Chinese accessibility summary.
+ */
+export function buildAccessibilitySummary(input: {
+  mode: AccessibilityMode;
+  walkDistanceM: number;
+  transferCount: number;
+  facilities: IOsmA11y[];
+  label: "excellent" | "good" | "fair" | "poor" | "critical";
+}): string {
+  const { mode, walkDistanceM, transferCount, facilities, label } = input;
+
+  const hasElevator = facilities.some(
+    (n) =>
+      n.category === "elevator" ||
+      n.tags?.["elevator"] === "yes" ||
+      n.tags?.["highway"] === "elevator",
+  );
+  const hasRamp = facilities.some(
+    (n) => n.category === "ramp" || n.tags?.["ramp:wheelchair"] === "yes",
+  );
+  const hasTactilePaving = facilities.some(
+    (n) => n.tags?.["tactile_paving"] === "yes",
+  );
+  const hasAudioSignal = facilities.some(
+    (n) => n.tags?.["traffic_signals:sound"] === "yes",
+  );
+
+  const walkText = `步行約 ${Math.round(walkDistanceM)} 公尺`;
+  const transferText =
+    transferCount <= 0 ? "全程直達" : `需轉乘 ${transferCount} 次`;
+
+  const verdict = (good: string, ok: string, hard: string): string => {
+    if (label === "excellent" || label === "good") return good;
+    if (label === "fair") return ok;
+    return hard;
+  };
+
+  const parts: string[] = [];
+
+  if (mode === "visual_impaired") {
+    parts.push(
+      hasTactilePaving || hasAudioSignal
+        ? "沿途設有導盲磚或語音號誌"
+        : "沿途導盲設施資訊有限",
+    );
+    parts.push(transferText);
+    parts.push(verdict("適合視障者通行", "大致可行，請留意路口", "通行較困難，建議結伴"));
+  } else if (mode === "elderly") {
+    parts.push(walkText);
+    parts.push(transferText);
+    if (hasElevator) parts.push("車站設有電梯可搭乘");
+    parts.push(verdict("步行負擔低，適合長者", "步行負擔尚可，請適度休息", "步行或轉乘負擔較大，請斟酌"));
+  } else {
+    parts.push(
+      hasElevator ? "全程設有電梯" : hasRamp ? "沿途設有無障礙坡道" : "沿途無障礙設施資訊有限",
+    );
+    parts.push(walkText);
+    parts.push(verdict("適合輪椅通行", "大致可行，建議留意路況", "通行較困難，請斟酌"));
+  }
+
+  return parts.join("，");
+}
+
+/**
  * Attach board/alight a11y arrays to a transit leg (field name varies by type).
  *
  * @param leg The transit leg to annotate.

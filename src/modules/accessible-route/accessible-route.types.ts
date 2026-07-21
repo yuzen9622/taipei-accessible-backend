@@ -52,6 +52,7 @@ export interface RouteAccessibilityScore {
     timeScore: number;
     criticalFeatureScore: number;
     walkPenalty: number;
+    environmentScore?: number;
   };
 }
 
