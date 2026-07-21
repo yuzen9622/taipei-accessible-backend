@@ -88,6 +88,48 @@ async function loadNearbyCctv(
 }
 
 /**
+ * Lightweight weather + air-quality lookup for consumers that need only the
+ * conditions (e.g. route scoring's environment factor) — runs the same cached
+ * weather/air branches as `getEnvironmentInfo` but skips the uncached CCTV
+ * fetch. Never throws: any failed/unavailable source simply omits its field, so
+ * the worst case is an empty object.
+ *
+ * @param lat Query latitude.
+ * @param lng Query longitude.
+ * @returns `{ precipitationProbability?, temperature?, airQuality? }` — only the
+ *   fields that resolved successfully.
+ */
+export async function getWeatherAndAirQuality(
+  lat: number,
+  lng: number,
+): Promise<{
+  precipitationProbability?: number;
+  temperature?: number;
+  airQuality?: string;
+}> {
+  const [weather, airQuality] = await Promise.allSettled([
+    loadWeather(lat, lng),
+    loadAirQuality(lat, lng),
+  ]);
+
+  const result: {
+    precipitationProbability?: number;
+    temperature?: number;
+    airQuality?: string;
+  } = {};
+
+  if (weather.status === "fulfilled" && weather.value.status === "ok") {
+    result.temperature = weather.value.temperature;
+    result.precipitationProbability = weather.value.precipitationProbability;
+  }
+  if (airQuality.status === "fulfilled" && airQuality.value.status === "ok") {
+    result.airQuality = airQuality.value.quality;
+  }
+
+  return result;
+}
+
+/**
  * Aggregates weather, air quality and nearby CCTV for a coordinate. Each source
  * runs concurrently and degrades independently — a failing source yields an
  * `unavailable` block while the others still return their data.
