@@ -5,6 +5,7 @@ import DisabledParkingModel from "../../model/disabled-parking.model";
 import { IA11y, IOsmA11y, IBathroom, IDisabledParking } from "../../types";
 import * as campusService from "../campus/campus.service";
 import type { CampusFacilityPlace } from "../campus/campus.service";
+import { findNearby as findNearbyReports } from "../hazard-report/hazard-report.service";
 
 export type A11yPlace = Omit<IA11y, "_id"> & {
   _id?: unknown;
@@ -437,4 +438,217 @@ export async function findNearbyLimited(lat: number, lng: number, radiusM = 300)
 
 export async function findByOsmIds(ids: string[]) {
   return OsmA11y.find({ osmId: { $in: ids } }).lean();
+}
+
+export type QuickAssessMode =
+  | "wheelchair"
+  | "elderly"
+  | "visual_impaired"
+  | "normal";
+export type QuickAssessVerdict = "good" | "caution" | "difficult";
+
+export interface QuickAssessFacilityCount {
+  elevator: number;
+  ramp: number;
+  toilet: number;
+  parking: number;
+}
+
+export interface QuickAssessResult {
+  verdict: QuickAssessVerdict;
+  summary: string;
+  facilityCount: QuickAssessFacilityCount;
+  activeHazardReports: number;
+  wheelchairTagRatio: number | null;
+  radiusM: number;
+  mode: QuickAssessMode;
+}
+
+const QUICK_ASSESS_DEFAULT_RADIUS_M = 200;
+const QUICK_ASSESS_MIN_RADIUS_M = 50;
+const QUICK_ASSESS_MAX_RADIUS_M = 1000;
+
+/**
+ * Coarse "is this place worth going to" verdict from nearby facility counts and
+ * active hazard reports. Wheelchair/elderly additionally require a structural
+ * asset (elevator or ramp) for a "good" verdict; a heavy hazard load forces
+ * "difficult" regardless of facilities.
+ *
+ * @param counts Nearby facility counts by category.
+ * @param haz Number of active hazard reports nearby.
+ * @param mode Accessibility mode driving the structural requirement.
+ * @returns The verdict label.
+ */
+export function computeVerdict(
+  counts: QuickAssessFacilityCount,
+  haz: number,
+  mode: QuickAssessMode,
+): QuickAssessVerdict {
+  if (haz >= 3) return "difficult";
+  const structural = counts.elevator + counts.ramp;
+  const total = counts.elevator + counts.ramp + counts.toilet;
+
+  if (mode === "wheelchair" || mode === "elderly") {
+    if (structural >= 1 && total >= 3 && haz <= 1) return "good";
+    if (total >= 1) return "caution";
+    return "difficult";
+  }
+  if (total >= 3 && haz <= 1) return "good";
+  if (total >= 1) return "caution";
+  return "difficult";
+}
+
+const VERDICT_CLAUSE: Record<
+  QuickAssessMode,
+  Record<QuickAssessVerdict, string>
+> = {
+  wheelchair: {
+    good: "適合輪椅前往",
+    caution: "建議留意通行狀況",
+    difficult: "輪椅通行可能較困難",
+  },
+  elderly: {
+    good: "適合長者前往",
+    caution: "建議留意通行狀況",
+    difficult: "通行可能較困難",
+  },
+  visual_impaired: {
+    good: "周邊設施尚可，建議前往時留意路口",
+    caution: "建議留意通行狀況",
+    difficult: "通行可能較困難",
+  },
+  normal: {
+    good: "適合前往",
+    caution: "建議留意通行狀況",
+    difficult: "通行可能較困難",
+  },
+};
+
+/**
+ * Build the Chinese one-line summary for a quick-assess result from facility
+ * counts, hazard count, verdict and mode.
+ *
+ * @param counts Nearby facility counts by category.
+ * @param haz Number of active hazard reports nearby.
+ * @param verdict The computed verdict.
+ * @param mode Accessibility mode driving the closing clause.
+ * @param radiusM Search radius in metres (shown in the sentence).
+ * @returns A one-sentence Chinese summary.
+ */
+export function buildQuickAssessSummary(
+  counts: QuickAssessFacilityCount,
+  haz: number,
+  verdict: QuickAssessVerdict,
+  mode: QuickAssessMode,
+  radiusM: number,
+): string {
+  const items: string[] = [];
+  if (counts.elevator > 0) items.push(`${counts.elevator} 座電梯`);
+  if (counts.ramp > 0) items.push(`${counts.ramp} 座無障礙坡道`);
+  if (counts.toilet > 0) items.push(`${counts.toilet} 間無障礙廁所`);
+  if (counts.parking > 0) items.push(`${counts.parking} 格身障停車格`);
+
+  const facilityText =
+    items.length > 0
+      ? `附近 ${radiusM} 公尺內有${items.join("、")}`
+      : `附近 ${radiusM} 公尺內無障礙設施資訊有限`;
+
+  const hazardText = haz > 0 ? `，另有 ${haz} 則通行障礙回報` : "";
+  const verdictText = `，${VERDICT_CLAUSE[mode][verdict]}`;
+
+  return `${facilityText}${hazardText}${verdictText}`;
+}
+
+/**
+ * Aggregate existing nearby facilities, active hazard reports and OSM wheelchair
+ * tags around a coordinate into a coarse accessibility verdict — no new data
+ * source. Hazard-report failures degrade to a count of 0 rather than failing the
+ * whole assessment.
+ *
+ * @param input.lat Latitude.
+ * @param input.lng Longitude.
+ * @param input.mode Accessibility mode (default "wheelchair").
+ * @param input.radiusM Search radius in metres; clamped to [50, 1000], default 200.
+ * @returns The quick-assess result.
+ */
+export async function assessQuickAccess(input: {
+  lat: number;
+  lng: number;
+  mode?: QuickAssessMode;
+  radiusM?: number;
+}): Promise<QuickAssessResult> {
+  const { lat, lng } = input;
+  const mode = input.mode ?? "wheelchair";
+  const radiusM = Math.min(
+    QUICK_ASSESS_MAX_RADIUS_M,
+    Math.max(
+      QUICK_ASSESS_MIN_RADIUS_M,
+      input.radiusM ?? QUICK_ASSESS_DEFAULT_RADIUS_M,
+    ),
+  );
+
+  const geoQuery = makeGeoQuery(lng, lat, radiusM);
+  const [metro, osm, bathroom, parking, campus, hazard] = await Promise.all([
+    A11y.find({ location: geoQuery }).lean(),
+    OsmA11y.find({ location: geoQuery }).lean(),
+    BathroomModel.find({ type: "無障礙廁所", location: geoQuery }).lean(),
+    DisabledParkingModel.find({ location: geoQuery }).lean(),
+    campusService.findFacilitiesNearby(lat, lng, radiusM),
+    findNearbyReports({ lat, lng, radius: radiusM }).catch(() => null),
+  ]);
+
+  const counts: QuickAssessFacilityCount = {
+    elevator: 0,
+    ramp: 0,
+    toilet: 0,
+    parking: 0,
+  };
+  const bump = (category: A11yCategory) => {
+    if (category === "elevator") counts.elevator++;
+    else if (category === "ramp") counts.ramp++;
+    else if (category === "toilet") counts.toilet++;
+    else if (category === "parking") counts.parking++;
+  };
+
+  for (const doc of metro as IA11y[])
+    bump(classifyMetroCategory(doc["出入口電梯/無障礙坡道名稱"]));
+  for (const doc of osm as IOsmA11y[]) bump(mapOsmCategory(doc.category));
+  counts.toilet += (bathroom as IBathroom[]).length;
+  counts.parking += (parking as IDisabledParking[]).length;
+  for (const f of campus) bump(mapCampusCategory(f.type));
+
+  const taggedOsm = (osm as IOsmA11y[]).filter(
+    (d) => d.wheelchair != null,
+  );
+  const wheelchairTagRatio = taggedOsm.length
+    ? Math.round(
+        (taggedOsm.filter((d) => d.wheelchair === "yes").length /
+          taggedOsm.length) *
+          100,
+      ) / 100
+    : null;
+
+  const activeHazardReports =
+    hazard && hazard.ok && hazard.data
+      ? ((hazard.data as { total?: number }).total ?? 0)
+      : 0;
+
+  const verdict = computeVerdict(counts, activeHazardReports, mode);
+  const summary = buildQuickAssessSummary(
+    counts,
+    activeHazardReports,
+    verdict,
+    mode,
+    radiusM,
+  );
+
+  return {
+    verdict,
+    summary,
+    facilityCount: counts,
+    activeHazardReports,
+    wheelchairTagRatio,
+    radiusM,
+    mode,
+  };
 }
