@@ -180,48 +180,16 @@ function stepType(relativeDirection: string): NavInstructionType {
   return "turn";
 }
 
+import { formatWalkStepInstruction } from "../../utils/transit-text";
+
 function walkStepText(step: WalkStep, bearing: number | null): string {
   const upstreamText = step.instruction?.trim();
   if (upstreamText) return upstreamText;
-  const street = step.streetName?.trim() ?? "";
-  const named = hasStreetName(step);
-  const dir = (step.relativeDirection ?? "CONTINUE").toUpperCase();
-  switch (dir) {
-    case "DEPART": {
-      const compass =
-        bearing !== null ? `，方位約 ${bearing} 度（${degToCompassWord(bearing)}）` : "";
-      return named ? `請沿「${street}」出發${compass}` : `請出發${compass}`;
-    }
-    case "CONTINUE":
-    case "STRAIGHT":
-      return named ? `請繼續直行，沿「${street}」前進` : "請繼續直行";
-    case "LEFT":
-      return named ? `在「${street}」，請向左轉` : "請向左轉";
-    case "RIGHT":
-      return named ? `在「${street}」，請向右轉` : "請向右轉";
-    case "SLIGHTLY_LEFT":
-      return "請稍向左偏";
-    case "SLIGHTLY_RIGHT":
-      return "請稍向右偏";
-    case "HARD_LEFT":
-      return "請大幅向左轉";
-    case "HARD_RIGHT":
-      return "請大幅向右轉";
-    case "UTURN_LEFT":
-    case "UTURN_RIGHT":
-      return "請迴轉";
-    case "CIRCLE_CLOCKWISE":
-    case "CIRCLE_COUNTERCLOCKWISE":
-      return "請進入圓環，依指示繞行";
-    case "ELEVATOR":
-      return "請進入電梯";
-    case "ENTER_STATION":
-      return "請進入車站";
-    case "EXIT_STATION":
-      return "請離開車站";
-    default:
-      return named ? `請沿「${street}」前進` : "請繼續前行";
-  }
+  const compass =
+    bearing !== null && (step.relativeDirection ?? "").toUpperCase() === "DEPART"
+      ? `，方位約 ${bearing} 度（${degToCompassWord(bearing)}）`
+      : "";
+  return formatWalkStepInstruction(step) + compass;
 }
 
 function roadStepType(maneuver: string | undefined): NavInstructionType {

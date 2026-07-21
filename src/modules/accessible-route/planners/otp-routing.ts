@@ -19,6 +19,7 @@ import MetroStationModel from "../../../model/metro-station.model";
 import TrainStationModel from "../../../model/train-station.model";
 import BusStopModel from "../../../model/bus-stop.model";
 import { haversineCoords } from "../../../utils/geo";
+import { formatWalkStepInstruction } from "../../../utils/transit-text";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
 import { walkSpeedMps } from "../scoring";
@@ -647,17 +648,25 @@ function walkLegFrom(leg: OtpLeg, isFirst: boolean, isLast: boolean): WalkLeg {
     polyline: decodeOtpPolyline(leg.legGeometry?.points),
     a11yFacilities: [],
     exitInfo: null,
-    steps: (leg.steps ?? []).map(
-      (s): WalkStep => ({
-        relativeDirection: s.relativeDirection ?? "CONTINUE",
+    steps: (leg.steps ?? []).map((s): WalkStep => {
+      const relativeDirection = s.relativeDirection ?? "CONTINUE";
+      const streetName = s.streetName ?? "";
+      const bogusName = s.bogusName ?? false;
+      return {
+        instruction: formatWalkStepInstruction({
+          relativeDirection,
+          streetName,
+          bogusName,
+        }),
+        relativeDirection,
         absoluteDirection: s.absoluteDirection ?? null,
-        streetName: s.streetName ?? "",
-        bogusName: s.bogusName ?? false,
+        streetName,
+        bogusName,
         area: s.area ?? false,
         distanceM: Math.round(s.distance ?? 0),
         location: [s.lon ?? 0, s.lat ?? 0],
-      }),
-    ),
+      };
+    }),
   };
 }
 

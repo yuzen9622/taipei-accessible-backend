@@ -31,7 +31,18 @@ const walkItin = () => ({
           [25.033, 121.564],
         ]),
       },
-      steps: [],
+      steps: [
+        {
+          distance: 823,
+          lon: 121.565,
+          lat: 25.041,
+          relativeDirection: "DEPART",
+          absoluteDirection: "SOUTH",
+          streetName: "信義路",
+          area: false,
+          bogusName: false,
+        },
+      ],
     },
   ],
 });
@@ -58,6 +69,7 @@ describe("planOtpWalk", () => {
     expect(r.totalWalkDistanceM).toBe(823);
     expect(r.totalMinutes).toBe(12);
     expect(r.attribution).toBe("© OpenStreetMap contributors");
+    expect(r.legs[0].steps?.[0].instruction).toBe("請沿「信義路」出發");
 
     const query: string = post.mock.calls[0][1].query;
     expect(query).toContain("transportModes: [{ mode: WALK }]");

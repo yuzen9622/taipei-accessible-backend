@@ -157,3 +157,50 @@ export function detectBusApiType(fullName: string): {
   const formatRouteId = formatRouteName(fullName);
   return { type, routeId: formatRouteId };
 }
+
+/**
+ * 將 WalkStep 的方向與路名轉為中文導航指引文字
+ */
+export function formatWalkStepInstruction(step: {
+  relativeDirection?: string | null;
+  streetName?: string | null;
+  bogusName?: boolean | null;
+}): string {
+  const street = step.streetName?.trim() ?? "";
+  const named = !step.bogusName && street !== "";
+  const dir = (step.relativeDirection ?? "CONTINUE").toUpperCase();
+  switch (dir) {
+    case "DEPART":
+      return named ? `請沿「${street}」出發` : "請出發";
+    case "CONTINUE":
+    case "STRAIGHT":
+      return named ? `請繼續直行，沿「${street}」前進` : "請繼續直行";
+    case "LEFT":
+      return named ? `在「${street}」，請向左轉` : "請向左轉";
+    case "RIGHT":
+      return named ? `在「${street}」，請向右轉` : "請向右轉";
+    case "SLIGHTLY_LEFT":
+      return "請稍向左偏";
+    case "SLIGHTLY_RIGHT":
+      return "請稍向右偏";
+    case "HARD_LEFT":
+      return "請大幅向左轉";
+    case "HARD_RIGHT":
+      return "請大幅向右轉";
+    case "UTURN_LEFT":
+    case "UTURN_RIGHT":
+      return "請迴轉";
+    case "CIRCLE_CLOCKWISE":
+    case "CIRCLE_COUNTERCLOCKWISE":
+      return "請進入圓環，依指示繞行";
+    case "ELEVATOR":
+      return "請進入電梯";
+    case "ENTER_STATION":
+      return "請進入車站";
+    case "EXIT_STATION":
+      return "請離開車站";
+    default:
+      return named ? `請沿「${street}」前進` : "請繼續前行";
+  }
+}
+
