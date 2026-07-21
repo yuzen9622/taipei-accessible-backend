@@ -594,6 +594,54 @@ def synthesize_stop_rows(trip_id, timetable, key_uids, direction, daily_profiles
         })
     return rows
 
+def synthesize_stop_rows_from_sor(trip_id, timetable, key_uids, direction, sor_index,
+                                  profile_cache, fail_counter=None):
+    """StopOfRoute fallback for an origin-only timetable that has no >=2-stop daily
+    profile: synthesise full stop_times from the subroute's StopOfRoute stop
+    sequence and a Valhalla travel-time profile, anchored at the origin departure.
+    The per-subroute profile is computed once via build_travel_profile and memoised
+    in the shared profile_cache (keyed by the resolved (key_uid, direction)), so
+    every origin-only trip of the same subroute reuses one geometry. Returns rows,
+    or None when the timetable is not origin-only or the subroute has < 2 indexed
+    StopOfRoute stops (genuinely no data)."""
+    entries = valid_stop_entries(timetable)
+    if len(entries) != 1:
+        return None
+    origin = parse_hhmm(entries[0][1])
+    if origin is None or sor_index is None:
+        return None
+    stops = None
+    resolved_key = None
+    for key_uid in key_uids:
+        if key_uid and (key_uid, direction) in sor_index:
+            resolved_key = (key_uid, direction)
+            stops = sor_index[resolved_key]
+            break
+    if not stops or len(stops) < 2:
+        return None
+    if profile_cache is not None and resolved_key in profile_cache:
+        profile = profile_cache[resolved_key]
+    else:
+        coords = [(s["lat"], s["lon"]) for s in stops]
+        profile = build_travel_profile(coords, fail_counter)
+        if profile_cache is not None:
+            profile_cache[resolved_key] = profile
+    rows = []
+    prev_t = None
+    for i, s in enumerate(stops):
+        t = origin + round(profile[i] / 60)
+        if prev_t is not None and t <= prev_t:
+            t = prev_t + 1
+        prev_t = t
+        rows.append({
+            "trip_id": trip_id,
+            "arrival_time": fmt_gtfs_time(t),
+            "departure_time": fmt_gtfs_time(t),
+            "stop_id": s["StopUID"],
+            "stop_sequence": str(s["seq"]),
+        })
+    return rows
+
 def build_stop_of_route_index(sor_records):
     """Index StopOfRoute records by (SubRouteUID, Direction) -> ordered list of
     {StopUID, seq, lat, lon}. Stops without a StopUID or coordinates are dropped;
@@ -744,13 +792,16 @@ def _select_shape_id(matched_id, sub_route_uid, route_uid, direction,
 
 
 def _resolve_sor_stops(route, sor_index):
+    """Return ((key_uid, direction), stops) for the subroute's StopOfRoute entry,
+    or (None, None) when neither the SubRouteUID nor RouteUID is indexed. The key
+    is returned so callers can share a per-subroute profile_cache."""
     sub_route_uid = route.get("SubRouteUID")
     route_uid = route.get("RouteUID")
     direction = route.get("Direction", 0)
     for key_uid in (sub_route_uid, route_uid):
         if key_uid and (key_uid, direction) in sor_index:
-            return sor_index[(key_uid, direction)]
-    return None
+            return (key_uid, direction), sor_index[(key_uid, direction)]
+    return None, None
 
 
 def _emit_frequency_trip(route, matched_id, stops, profile, new_trips, new_stop_times,
@@ -835,38 +886,49 @@ def _emit_frequency_trip(route, matched_id, stops, profile, new_trips, new_stop_
 
 def _generate_frequency_trips(freq_pending, sor_index, new_trips, new_stop_times,
                               new_frequencies, seen_trips, service_patterns, stats,
-                              route_shape_by_route, tdx_shapes, new_shapes):
+                              route_shape_by_route, tdx_shapes, new_shapes,
+                              profile_cache, fail_counter):
     """Second pass over the freq-only subroutes collected during the schedule
     loop: resolve StopOfRoute stops, compute Valhalla travel profiles with a
-    bounded worker pool, then emit template trips + frequencies rows."""
+    bounded worker pool, then emit template trips + frequencies rows. Profiles are
+    memoised in the shared profile_cache (keyed by (key_uid, direction)) so a
+    subroute already profiled by the origin-only timetable fallback — or by an
+    earlier freq subroute — is never recomputed. fail_counter is the shared
+    Valhalla-fallback counter, folded into stats by the caller."""
     resolved = []
     for route, matched_id in freq_pending:
-        stops = _resolve_sor_stops(route, sor_index)
+        key, stops = _resolve_sor_stops(route, sor_index)
         if not stops or len(stops) < 2:
             stats["freq_no_stops"] += 1
             continue
-        resolved.append((route, matched_id, stops))
+        resolved.append((route, matched_id, key, stops))
 
     if not resolved:
         return
 
-    fail_counter = [0]
-    coords = [[(s["lat"], s["lon"]) for s in stops] for (_, _, stops) in resolved]
-    profiles = [None] * len(resolved)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=VALHALLA_CONCURRENCY) as ex:
-        future_to_idx = {ex.submit(build_travel_profile, c, fail_counter): i
-                         for i, c in enumerate(coords)}
-        for fut in concurrent.futures.as_completed(future_to_idx):
-            profiles[future_to_idx[fut]] = fut.result()
-    stats["freq_valhalla_fail"] += fail_counter[0]
+    to_compute = {}
+    for _, _, key, stops in resolved:
+        if key not in profile_cache and key not in to_compute:
+            to_compute[key] = [(s["lat"], s["lon"]) for s in stops]
+    if to_compute:
+        keys = list(to_compute)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=VALHALLA_CONCURRENCY) as ex:
+            future_to_key = {ex.submit(build_travel_profile, to_compute[k], fail_counter): k
+                             for k in keys}
+            for fut in concurrent.futures.as_completed(future_to_key):
+                profile_cache[future_to_key[fut]] = fut.result()
 
-    for (route, matched_id, stops), profile in zip(resolved, profiles):
-        _emit_frequency_trip(route, matched_id, stops, profile, new_trips, new_stop_times,
-                             new_frequencies, seen_trips, service_patterns, stats,
-                             route_shape_by_route, tdx_shapes, new_shapes)
+    for route, matched_id, key, stops in resolved:
+        _emit_frequency_trip(route, matched_id, stops, profile_cache[key], new_trips,
+                             new_stop_times, new_frequencies, seen_trips, service_patterns,
+                             stats, route_shape_by_route, tdx_shapes, new_shapes)
 
 
 def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_frequencies, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles, route_shape_by_route, tdx_shapes, new_shapes, sor_index):
+    # Shared across the origin-only timetable fallback and the frequency pass so a
+    # subroute's Valhalla travel-time profile is computed at most once per build.
+    profile_cache = {}
+    valhalla_fail_counter = [0]
     freq_pending = []
     for route in records:
         route_uid = route.get("RouteUID")
@@ -952,15 +1014,23 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_fre
                     "stop_sequence": str(seq)
                 } for stop_id, seq, arr, dep in norm]
             else:
-                # OTP rejects 0/1-stop trips; origin-only timetables are
-                # grafted onto the daily travel-time profile when one exists.
+                # OTP rejects 0/1-stop trips; origin-only timetables are grafted
+                # onto the daily travel-time profile when one exists, else onto a
+                # StopOfRoute + Valhalla profile anchored at the origin departure.
                 synth = synthesize_stop_rows(trip_id, tt, (sub_route_uid, route_uid), direction, daily_profiles)
                 if synth:
                     stop_rows = synth
                     stats["synthesized"] += 1
                 else:
-                    stats["short_trip"] += 1
-                    continue
+                    sor_synth = synthesize_stop_rows_from_sor(
+                        trip_id, tt, (sub_route_uid, route_uid), direction,
+                        sor_index, profile_cache, valhalla_fail_counter)
+                    if sor_synth:
+                        stop_rows = sor_synth
+                        stats["sor_synth"] += 1
+                    else:
+                        stats["short_trip"] += 1
+                        continue
 
             seen_trips.add(trip_id)
             service_patterns.add(pattern)
@@ -979,7 +1049,9 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_fre
 
     _generate_frequency_trips(
         freq_pending, sor_index, new_trips, new_stop_times, new_frequencies,
-        seen_trips, service_patterns, stats, route_shape_by_route, tdx_shapes, new_shapes)
+        seen_trips, service_patterns, stats, route_shape_by_route, tdx_shapes, new_shapes,
+        profile_cache, valhalla_fail_counter)
+    stats["freq_valhalla_fail"] += valhalla_fail_counter[0]
 
 def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_records, start_date):
     cal_start = start_date.strftime("%Y%m%d")
@@ -1071,8 +1143,8 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_re
     seen_trips = set()
     service_patterns = set()
     stats = {"freq_only": 0, "no_service_day": 0, "dup_trip": 0, "short_trip": 0,
-             "synthesized": 0, "missing_shape": 0, "freq_trips": 0, "freq_windows": 0,
-             "freq_valhalla_fail": 0, "freq_no_stops": 0}
+             "synthesized": 0, "sor_synth": 0, "missing_shape": 0, "freq_trips": 0,
+             "freq_windows": 0, "freq_valhalla_fail": 0, "freq_no_stops": 0}
     daily_profiles = build_daily_profiles(daily_records)
     sor_index = build_stop_of_route_index(sor_records)
     new_shapes = {}
@@ -1086,13 +1158,15 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_re
     print(f"Generated {len(new_trips)} new bus trips and {len(new_stop_times)} new stop times "
           f"({len(service_patterns)} weekly service patterns, valid {cal_start}–{cal_end}; "
           f"{stats['synthesized']} trips synthesized from daily travel-time profiles; "
+          f"{stats['sor_synth']} origin-only trips synthesized from StopOfRoute travel-time profiles; "
           f"{stats['missing_shape']} trips without original or fetched shape).")
     print(f"Frequency-based buses: {stats['freq_trips']} template trips, {stats['freq_windows']} windows "
           f"({stats['freq_valhalla_fail']} Valhalla-fallback profiles, "
           f"{stats['freq_no_stops']} skipped for missing StopOfRoute stops; "
           f"{stats['freq_only']} freq-only subroutes seen).")
     print(f"Skipped: {stats['no_service_day']} timetables with no service day, "
-          f"{stats['dup_trip']} duplicate trips, {stats['short_trip']} trips with < 2 stops and no daily profile.")
+          f"{stats['dup_trip']} duplicate trips, {stats['short_trip']} origin-only trips with "
+          f"no daily profile and no usable StopOfRoute stops.")
 
     # 7. Combine kept non-bus + new bus data
     final_trips = kept_trips + new_trips

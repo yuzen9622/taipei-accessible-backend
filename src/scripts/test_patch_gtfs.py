@@ -111,8 +111,8 @@ def _freq_route(route_uid="FREQ01", direction=0, windows=None, service_day=None)
 
 def _full_stats():
     return {"freq_only": 0, "no_service_day": 0, "dup_trip": 0, "short_trip": 0,
-            "synthesized": 0, "missing_shape": 0, "freq_trips": 0, "freq_windows": 0,
-            "freq_valhalla_fail": 0, "freq_no_stops": 0}
+            "synthesized": 0, "sor_synth": 0, "missing_shape": 0, "freq_trips": 0,
+            "freq_windows": 0, "freq_valhalla_fail": 0, "freq_no_stops": 0}
 
 
 def _write_fixture_zip(path, with_frequencies=False):
@@ -434,9 +434,9 @@ class GtfsOutputTests(unittest.TestCase):
 
     def _base_stats(self):
         return {"freq_only": 0, "no_service_day": 0, "dup_trip": 0,
-                "short_trip": 0, "synthesized": 0, "missing_shape": 0,
-                "freq_trips": 0, "freq_windows": 0, "freq_valhalla_fail": 0,
-                "freq_no_stops": 0}
+                "short_trip": 0, "synthesized": 0, "sor_synth": 0,
+                "missing_shape": 0, "freq_trips": 0, "freq_windows": 0,
+                "freq_valhalla_fail": 0, "freq_no_stops": 0}
 
     def test_partial_coverage_short_trip_and_trip(self):
         schedule = [_origin_only_route("TEST01"), _origin_only_route("TEST02")]
@@ -452,6 +452,101 @@ class GtfsOutputTests(unittest.TestCase):
         self.assertNotIn("TEST02_0", trip_routes)        # no profile -> skipped
         self.assertEqual(stats["short_trip"], 1)
         self.assertGreaterEqual(len(new_stop_times), 2)
+
+
+class SorSynthFallbackTests(unittest.TestCase):
+    """Origin-only timetable buses with no >=2-stop daily profile are rescued via
+    the StopOfRoute + Valhalla fallback (Valhalla mocked, no network)."""
+
+    def _process(self, schedule, sor_index, daily_profiles=None,
+                 route_ids=("TEST01_0",), profile_ctx=None):
+        new_trips, new_stop_times = [], []
+        stats = _full_stats()
+        ctx = profile_ctx or mock.patch("patch_gtfs.build_travel_profile", side_effect=_FIXED_PROFILE)
+        with ctx:
+            patch_gtfs.process_schedule_records_to_gtfs(
+                schedule, new_trips, new_stop_times, [], set(),
+                [{"route_id": r} for r in route_ids], set(route_ids), set(), stats,
+                daily_profiles or {}, {}, {}, {}, sor_index)
+        return new_trips, new_stop_times, stats
+
+    @staticmethod
+    def _times_by_trip(stimes):
+        by_trip = {}
+        for r in stimes:
+            by_trip.setdefault(r["trip_id"], []).append(r["departure_time"])
+        return by_trip
+
+    def test_origin_only_no_daily_rescued_by_sor(self):
+        sor_index = patch_gtfs.build_stop_of_route_index([_sor_route("TEST01", n_stops=3)])
+        trips, stimes, stats = self._process([_origin_only_route("TEST01", dep="06:00")], sor_index)
+        self.assertEqual(len(trips), 1)
+        self.assertEqual((stats["sor_synth"], stats["short_trip"], stats["synthesized"]), (1, 0, 0))
+        rows = [r for r in stimes if r["trip_id"] == trips[0]["trip_id"]]
+        self.assertEqual([r["stop_id"] for r in rows], ["S1", "S2", "S3"])
+        self.assertEqual([r["stop_sequence"] for r in rows], ["1", "2", "3"])
+        times = [r["departure_time"] for r in rows]
+        self.assertEqual(times[0], "06:00:00")                  # anchored at origin
+        self.assertEqual(times, ["06:00:00", "06:02:00", "06:04:00"])  # profile 0/120/240s
+        self.assertTrue(all(times[i] < times[i + 1] for i in range(len(times) - 1)))
+
+    def test_origin_only_no_sor_stays_short_trip(self):
+        # <2 resolvable StopOfRoute stops -> not indexed -> genuinely no data.
+        sor_index = patch_gtfs.build_stop_of_route_index([_sor_route("TEST01", n_stops=1)])
+        self.assertEqual(sor_index, {})
+        trips, stimes, stats = self._process([_origin_only_route("TEST01")], sor_index)
+        self.assertEqual(trips, [])
+        self.assertEqual(stimes, [])
+        self.assertEqual((stats["short_trip"], stats["sor_synth"]), (1, 0))
+
+    def test_empty_sor_index_no_crash(self):
+        trips, _, stats = self._process([_origin_only_route("TEST01")], {})
+        self.assertEqual(trips, [])
+        self.assertEqual((stats["short_trip"], stats["sor_synth"]), (1, 0))
+
+    def test_daily_profile_takes_precedence_over_sor(self):
+        daily_profiles = patch_gtfs.build_daily_profiles(
+            patch_gtfs._synthesize_from_stop_of_route([_sor_route("TEST01", 3)]))
+        sor_index = patch_gtfs.build_stop_of_route_index([_sor_route("TEST01", n_stops=3)])
+        with mock.patch("patch_gtfs.build_travel_profile", side_effect=_FIXED_PROFILE) as m:
+            trips, _, stats = self._process(
+                [_origin_only_route("TEST01")], sor_index, daily_profiles=daily_profiles)
+        self.assertEqual(len(trips), 1)
+        self.assertEqual((stats["synthesized"], stats["sor_synth"]), (1, 0))
+        m.assert_not_called()  # daily path took precedence; no StopOfRoute profile built
+
+    def test_profile_cache_computes_once_for_shared_subroute(self):
+        route = {
+            "RouteUID": "TEST01", "SubRouteUID": "TEST01", "RouteID": "TEST01",
+            "RouteName": {"Zh_tw": "TEST01"}, "Direction": 0,
+            "Timetables": [
+                {"TripID": "t1", "ServiceDay": {"Monday": 1}, "StopTimes": [
+                    {"StopUID": "S1", "StopSequence": 1, "ArrivalTime": "06:00", "DepartureTime": "06:00"}]},
+                {"TripID": "t2", "ServiceDay": {"Monday": 1}, "StopTimes": [
+                    {"StopUID": "S1", "StopSequence": 1, "ArrivalTime": "08:30", "DepartureTime": "08:30"}]},
+            ],
+        }
+        sor_index = patch_gtfs.build_stop_of_route_index([_sor_route("TEST01", n_stops=3)])
+        new_trips, stimes, stats = [], [], _full_stats()
+        with mock.patch("patch_gtfs.build_travel_profile", side_effect=_FIXED_PROFILE) as mocked:
+            patch_gtfs.process_schedule_records_to_gtfs(
+                [route], new_trips, stimes, [], set(),
+                [{"route_id": "TEST01_0"}], {"TEST01_0"}, set(), stats,
+                {}, {}, {}, {}, sor_index)
+        trips = new_trips
+        self.assertEqual(mocked.call_count, 1)     # one geometry per subroute
+        self.assertEqual(stats["sor_synth"], 2)    # both origin-only trips rescued
+        by_trip = self._times_by_trip(stimes)
+        self.assertEqual(len(by_trip), 2)
+        firsts = sorted(t[0] for t in by_trip.values())
+        self.assertEqual(firsts, ["06:00:00", "08:30:00"])  # distinct anchors
+
+        def offsets(times):
+            base = patch_gtfs.parse_hhmm(times[0][:5])
+            return [patch_gtfs.parse_hhmm(t[:5]) - base for t in times]
+        offs = [offsets(t) for t in by_trip.values()]
+        self.assertEqual(offs[0], offs[1])   # identical relative offsets
+        self.assertEqual(offs[0], [0, 2, 4])
 
 
 class MainExitTests(unittest.TestCase):
