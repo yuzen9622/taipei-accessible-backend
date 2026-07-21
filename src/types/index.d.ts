@@ -338,11 +338,44 @@ export interface ILineLinkCode {
   updatedAt: Date;
 }
 
+export type SosHandlingStatus =
+  | "notified"
+  | "acknowledged"
+  | "claimed"
+  | "en_route"
+  | "arrived"
+  | "resolved";
+
+export interface ISosAcknowledgement {
+  contactId?: string | null;
+  lineUserId: string;
+  name?: string | null;
+  at: Date;
+}
+
+export type SosTimelineType =
+  | "created"
+  | "notified"
+  | "acknowledged"
+  | "claimed"
+  | "status_update"
+  | "resolved";
+
+export interface ISosTimelineEntry {
+  type: SosTimelineType;
+  actorType: "victim" | "contact" | "system";
+  actorLineUserId?: string | null;
+  actorName?: string | null;
+  note?: string | null;
+  at: Date;
+}
+
 export interface ISosSession {
   _id: string;
   userId: string;
   type: "body" | "trapped" | "share_location";
   status: "active" | "resolved";
+  handlingStatus: SosHandlingStatus;
   lat: number;
   lng: number;
   address?: string | null;
@@ -350,6 +383,11 @@ export interface ISosSession {
   locationUpdatedAt: Date;
   resolvedAt?: Date | null;
   claimedBy?: string | null;
+  claimedByName?: string | null;
+  claimedByContactId?: string | null;
+  claimedAt?: Date | null;
+  acknowledgements: ISosAcknowledgement[];
+  timeline: ISosTimelineEntry[];
   staleAlertSent: boolean;
   createdAt: Date;
   updatedAt: Date;

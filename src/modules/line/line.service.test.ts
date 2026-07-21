@@ -3,48 +3,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../../adapters/line.adapter", () => ({
   replyAgentResult: vi.fn().mockResolvedValue(undefined),
   replyText: vi.fn().mockResolvedValue(undefined),
+  replyMessages: vi.fn().mockResolvedValue(undefined),
+  buildClaimedControlsMessage: vi.fn((sessionId: string) => ({
+    type: "text",
+    text: "controls",
+    _sid: sessionId,
+  })),
 }));
 
-vi.mock("../agent/history-adapter", () => ({
-  toGeminiHistory: vi.fn(() => ({ systemInstruction: "sys", contents: [] })),
-}));
-
-vi.mock("../agent/agent-manager.service", () => ({
-  summarizeWithContext: vi.fn(),
-}));
-
-vi.mock("../agent/intent-classifier.service", () => ({
-  classifyIntent: vi.fn(),
-}));
-
-vi.mock("../agent/action-registry", () => ({
-  getActionSpec: vi.fn(),
-}));
-
-vi.mock("../agent/action-executor.service", () => ({
-  executeAction: vi.fn(),
-}));
-
-vi.mock("../ai/agent-tools", () => ({
-  executeLocalTool: vi.fn(),
-}));
-
-vi.mock("./line-state", () => ({
-  getLineState: vi.fn(),
-  updateLineState: vi.fn(),
-  clearPendingIntent: vi.fn(),
-}));
-
-vi.mock("../../config/ai", () => ({
-  model: "test-model",
-}));
-
-vi.mock("../../config/ai/line-family-prompt", () => ({
-  LINE_FAMILY_SYSTEM_PROMPT: "family prompt",
-}));
-
-vi.mock("../../config/ai/chat-prompt", () => ({
-  withCurrentDate: (value: string) => value,
+vi.mock("./line-agent.service", () => ({
+  runLineAgent: vi.fn(),
 }));
 
 vi.mock("./line-memory", () => ({
@@ -52,18 +20,22 @@ vi.mock("./line-memory", () => ({
   appendLineChatTurn: vi.fn(),
 }));
 
+vi.mock("../sos/sos.service", () => ({
+  acknowledgeSession: vi.fn(),
+  claimSession: vi.fn(),
+  updateHandlingStatus: vi.fn(),
+  resolveSession: vi.fn(),
+}));
+
+vi.mock("../../config/redis", () => ({
+  redisSetNx: vi.fn(),
+}));
+
 vi.mock("../../model/emergency-contact.model", () => ({
   default: {
     find: vi.fn(),
     findOne: vi.fn(),
-    exists: vi.fn(),
     updateMany: vi.fn(),
-  },
-}));
-
-vi.mock("../../model/line-link-code.model", () => ({
-  default: {
-    exists: vi.fn(),
   },
 }));
 
@@ -85,16 +57,21 @@ vi.mock("../accessible-route/accessible-route.service", () => ({
 }));
 
 import { getRoutePreview, handleEvents } from "./line.service";
-import { replyAgentResult, replyText } from "../../adapters/line.adapter";
-import { classifyIntent } from "../agent/intent-classifier.service";
-import { getActionSpec } from "../agent/action-registry";
-import { executeAction } from "../agent/action-executor.service";
-import { summarizeWithContext } from "../agent/agent-manager.service";
 import {
-  clearPendingIntent,
-  getLineState,
-  updateLineState,
-} from "./line-state";
+  buildClaimedControlsMessage,
+  replyAgentResult,
+  replyMessages,
+  replyText,
+} from "../../adapters/line.adapter";
+import { runLineAgent } from "./line-agent.service";
+import { appendLineChatTurn, getLineChatHistory } from "./line-memory";
+import {
+  acknowledgeSession,
+  claimSession,
+  resolveSession,
+  updateHandlingStatus,
+} from "../sos/sos.service";
+import { redisSetNx } from "../../config/redis";
 import EmergencyContact from "../../model/emergency-contact.model";
 import SosSession from "../../model/sos-session.model";
 import User from "../../model/user.model";
@@ -102,8 +79,6 @@ import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-r
 import { LINE_MSG } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import type { LineEvent } from "./line.types";
-import type { ActionSpec } from "../agent/agent-intent.types";
-import { appendLineChatTurn, getLineChatHistory } from "./line-memory";
 
 const contactModel = EmergencyContact as unknown as {
   find: ReturnType<typeof vi.fn>;
@@ -118,39 +93,40 @@ const userModel = User as unknown as {
   findById: ReturnType<typeof vi.fn>;
 };
 
-function makeSpec(overrides: Partial<ActionSpec> = {}): ActionSpec {
-  return {
-    requiredSlots: () => [],
-    askFor: {},
-    steps: [],
-    allowList: [],
-    needsUserLocation: false,
-    ...overrides,
-  };
-}
-
 beforeEach(() => {
   vi.resetAllMocks();
   delete process.env.PUBLIC_LIFF_ROUTE_BASE_URL;
   vi.mocked(replyAgentResult).mockResolvedValue(undefined);
   vi.mocked(replyText).mockResolvedValue(undefined);
+  vi.mocked(replyMessages).mockResolvedValue(undefined);
+  vi.mocked(buildClaimedControlsMessage).mockReturnValue({
+    type: "text",
+    text: "controls",
+  } as any);
   vi.mocked(getLineChatHistory).mockResolvedValue([]);
   vi.mocked(appendLineChatTurn).mockResolvedValue(undefined);
-  vi.mocked(getLineState).mockResolvedValue(null);
-  vi.mocked(updateLineState).mockResolvedValue({ ok: true });
-  vi.mocked(clearPendingIntent).mockResolvedValue({ ok: true });
-  vi.mocked(classifyIntent).mockResolvedValue({
-    action: "smalltalk",
-    slots: {},
-    confidence: "high",
+  vi.mocked(runLineAgent).mockResolvedValue({ text: "ok", toolResults: [] });
+  vi.mocked(redisSetNx).mockResolvedValue(true);
+  vi.mocked(acknowledgeSession).mockResolvedValue({
+    ok: true,
+    httpCode: 200,
+    message: "已確認收到通知",
   });
-  vi.mocked(getActionSpec).mockReturnValue(makeSpec());
-  vi.mocked(executeAction).mockResolvedValue({
-    kind: "speech",
-    speech: "ok",
-    toolResults: [],
+  vi.mocked(claimSession).mockResolvedValue({
+    ok: true,
+    httpCode: 200,
+    message: "你已承接此事件",
   });
-  vi.mocked(summarizeWithContext).mockResolvedValue("哈囉");
+  vi.mocked(updateHandlingStatus).mockResolvedValue({
+    ok: true,
+    httpCode: 200,
+    message: "已更新處理狀態",
+  });
+  vi.mocked(resolveSession).mockResolvedValue({
+    ok: true,
+    httpCode: 200,
+    message: "已解除求救",
+  });
   contactModel.find.mockReturnValue({
     select: () => ({ lean: () => Promise.resolve([]) }),
   });
@@ -171,12 +147,13 @@ beforeEach(() => {
   });
 });
 
-function textEvent(text: string): LineEvent {
+function textEvent(text: string, webhookEventId?: string): LineEvent {
   return {
     type: "message",
     replyToken: "r1",
     message: { type: "text", text },
     source: { type: "user", userId: "U1" },
+    ...(webhookEventId ? { webhookEventId } : {}),
   } as unknown as LineEvent;
 }
 
@@ -195,6 +172,15 @@ function locationEvent(replyToken: string): LineEvent {
   } as unknown as LineEvent;
 }
 
+function postbackEvent(data: string): LineEvent {
+  return {
+    type: "postback",
+    replyToken: "rp",
+    source: { type: "user", userId: "U1" },
+    postback: { data },
+  } as unknown as LineEvent;
+}
+
 describe("line.service — follow", () => {
   it("replies the welcome message", async () => {
     await handleEvents([
@@ -208,43 +194,19 @@ describe("line.service — follow", () => {
   });
 });
 
-describe("line.service — handleResolvedIntent branches", () => {
-  it("app_info action replies the fixed app-info message", async () => {
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "app_info",
-      slots: {},
-      confidence: "high",
+describe("line.service — text message (agent loop)", () => {
+  it("runs the agent, replies the speech, and persists the turn", async () => {
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: "你好呀",
+      toolResults: [],
     });
-
-    await handleEvents([textEvent("這個服務是什麼")]);
-
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("r1", LINE_MSG.APP_INFO);
-    expect(vi.mocked(executeAction)).not.toHaveBeenCalled();
-  });
-
-  it("unknown action replies the clarify prompt", async () => {
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "unknown",
-      slots: {},
-      confidence: "low",
-    });
-
-    await handleEvents([textEvent("嗯嗯")]);
-
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("r1", LINE_MSG.CLARIFY);
-  });
-
-  it("smalltalk summarizes with context and persists the turn", async () => {
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "smalltalk",
-      slots: {},
-      confidence: "high",
-    });
-    vi.mocked(summarizeWithContext).mockResolvedValue("你好呀");
 
     await handleEvents([textEvent("你好嗎")]);
 
-    expect(vi.mocked(summarizeWithContext)).toHaveBeenCalled();
+    expect(vi.mocked(runLineAgent)).toHaveBeenCalledWith({
+      lineUserId: "U1",
+      messages: [{ role: "user", content: "你好嗎" }],
+    });
     expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
       "r1",
       "你好呀",
@@ -257,79 +219,43 @@ describe("line.service — handleResolvedIntent branches", () => {
     );
   });
 
-  it("asks for a missing required slot and persists a collecting_slots intent", async () => {
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "weather.query",
-      slots: {},
-      confidence: "high",
-    });
-    vi.mocked(getActionSpec).mockReturnValue(
-      makeSpec({
-        requiredSlots: () => ["query"],
-        askFor: { query: "請問要查哪個地區的天氣？" },
-        needsUserLocation: true,
-      }),
-    );
+  it("prepends prior chat history to the agent messages", async () => {
+    vi.mocked(getLineChatHistory).mockResolvedValue([
+      { role: "user", content: "先前問題" },
+      { role: "assistant", content: "先前回答" },
+    ]);
 
-    await handleEvents([textEvent("天氣如何")]);
+    await handleEvents([textEvent("接續問題")]);
 
-    expect(vi.mocked(executeAction)).not.toHaveBeenCalled();
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
-      "r1",
-      "請問要查哪個地區的天氣？",
-    );
-
-    const call = vi.mocked(updateLineState).mock.calls.at(-1)!;
-    expect(call[0]).toBe("U1");
-    const content = (call[1] as (prev: unknown) => unknown)(null);
-    expect(content).toEqual({
-      pendingIntent: {
-        kind: "collecting_slots",
-        action: "weather.query",
-        filledSlots: {},
-        location: undefined,
-        awaitingSlot: "query",
-        missingSlots: ["query"],
-      },
-      lastSharedLocation: undefined,
+    expect(vi.mocked(runLineAgent)).toHaveBeenCalledWith({
+      lineUserId: "U1",
+      messages: [
+        { role: "user", content: "先前問題" },
+        { role: "assistant", content: "先前回答" },
+        { role: "user", content: "接續問題" },
+      ],
     });
   });
 
-  it("asks with a recoverable message when persisting the pending intent fails", async () => {
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "weather.query",
-      slots: {},
-      confidence: "high",
+  it("unwraps a JSON speech envelope from the agent text", async () => {
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: JSON.stringify({ speech: "台北目前多雲。" }),
+      toolResults: [],
     });
-    vi.mocked(getActionSpec).mockReturnValue(
-      makeSpec({
-        requiredSlots: () => ["query"],
-        askFor: { query: "請問要查哪個地區的天氣？" },
-      }),
-    );
-    vi.mocked(updateLineState).mockResolvedValue({ ok: false });
 
-    await handleEvents([textEvent("天氣如何")]);
+    await handleEvents([textEvent("台北天氣")]);
 
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
       "r1",
-      LINE_MSG.RECOVERABLE_ASK,
+      "台北目前多雲。",
+      null,
     );
   });
 
-  it("runs a fully-slotted action and returns a plan route card from the tool result", async () => {
+  it("surfaces a route card built from a plan tool result", async () => {
     process.env.PUBLIC_LIFF_ROUTE_BASE_URL = "https://liff.example.com/route";
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "route.plan",
-      slots: { destination: "台北車站" },
-      confidence: "high",
-    });
-    vi.mocked(getActionSpec).mockReturnValue(
-      makeSpec({ needsUserLocation: true, allowList: ["planAccessibleRoute"] }),
-    );
-    vi.mocked(executeAction).mockResolvedValue({
-      kind: "speech",
-      speech: "我幫你找到可前往的路線。",
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: "我幫你找到可前往的路線。",
       toolResults: [
         {
           name: "planAccessibleRoute",
@@ -337,7 +263,6 @@ describe("line.service — handleResolvedIntent branches", () => {
           result: {
             ok: true,
             sessionId: "s1",
-            ownerName: "王小明",
             destination: { address: "台北車站" },
             routes: [
               {
@@ -360,164 +285,15 @@ describe("line.service — handleResolvedIntent branches", () => {
         origin: "你的位置",
         destination: "台北車站",
         options: [
-          {
-            label: "無障礙路線",
-            time: "約 12 分鐘",
-            detail: "步行 → 公車 307",
-          },
+          { label: "無障礙路線", time: "約 12 分鐘", detail: "步行 → 公車 307" },
         ],
         liffUrl: "https://liff.example.com/route?sessionId=s1",
       },
     );
   });
 
-  it("builds a SOS route card whose origin is the shared location", async () => {
-    process.env.PUBLIC_LIFF_ROUTE_BASE_URL = "https://liff.example.com/route";
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "sos.route",
-      slots: {},
-      confidence: "high",
-    });
-    vi.mocked(getActionSpec).mockReturnValue(
-      makeSpec({ allowList: ["getActiveSosContext", "planRouteToSosVictim"] }),
-    );
-    vi.mocked(executeAction).mockResolvedValue({
-      kind: "speech",
-      speech: "我幫你找到可前往的路線。",
-      toolResults: [
-        {
-          name: "planRouteToSosVictim",
-          args: { sessionId: "s1" },
-          result: {
-            ok: true,
-            sessionId: "s1",
-            ownerName: "王小明",
-            destination: { address: "台北車站" },
-            routes: [
-              {
-                routeName: "無障礙路線",
-                totalMinutes: 12,
-                legs: [{ type: "WALK" }, { type: "BUS", routeName: "307" }],
-              },
-            ],
-          },
-        },
-      ],
-    });
-
-    await handleEvents([textEvent("我要過去")]);
-
-    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
-      "r1",
-      "我幫你找到可前往的路線。",
-      {
-        origin: "你分享的位置",
-        destination: "台北車站",
-        options: [
-          {
-            label: "無障礙路線",
-            time: "約 12 分鐘",
-            detail: "步行 → 公車 307",
-          },
-        ],
-        liffUrl: "https://liff.example.com/route?sessionId=s1",
-      },
-    );
-  });
-
-  it("replies plain speech with a null card when the outcome has no route tool result", async () => {
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "weather.query",
-      slots: { query: "台北" },
-      confidence: "high",
-    });
-    vi.mocked(executeAction).mockResolvedValue({
-      kind: "speech",
-      speech: "台北目前多雲。",
-      toolResults: [
-        { name: "getEnvironmentInfo", args: {}, result: { ok: true } },
-      ],
-    });
-
-    await handleEvents([textEvent("台北天氣")]);
-
-    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
-      "r1",
-      "台北目前多雲。",
-      null,
-    );
-    expect(vi.mocked(appendLineChatTurn)).toHaveBeenCalledWith(
-      "U1",
-      "台北天氣",
-      "台北目前多雲。",
-    );
-  });
-
-  it("replies a canned message and persists the turn", async () => {
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "sos.location",
-      slots: {},
-      confidence: "high",
-    });
-    vi.mocked(executeAction).mockResolvedValue({
-      kind: "canned",
-      speech: "目前沒有進行中的求救。",
-    });
-
-    await handleEvents([textEvent("他現在在哪")]);
-
-    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
-      "r1",
-      "目前沒有進行中的求救。",
-      null,
-    );
-    expect(vi.mocked(appendLineChatTurn)).toHaveBeenCalledWith(
-      "U1",
-      "他現在在哪",
-      "目前沒有進行中的求救。",
-    );
-  });
-
-  it("clarify outcome persists candidates and replies the clarify message", async () => {
-    vi.mocked(classifyIntent).mockResolvedValue({
-      action: "sos.route",
-      slots: {},
-      confidence: "high",
-    });
-    vi.mocked(executeAction).mockResolvedValue({
-      kind: "clarify",
-      message: "目前有多筆進行中的求救，請回覆編號選擇：\n1. 王小明｜台北車站",
-      persist: {
-        awaitingSlot: "sosSessionId",
-        candidates: [{ id: "s1", label: "王小明｜台北車站" }],
-      },
-    });
-
-    await handleEvents([textEvent("我要過去")]);
-
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
-      "r1",
-      "目前有多筆進行中的求救，請回覆編號選擇：\n1. 王小明｜台北車站",
-    );
-
-    const call = vi.mocked(updateLineState).mock.calls.at(-1)!;
-    const content = (call[1] as (prev: unknown) => unknown)(null);
-    expect(content).toEqual({
-      pendingIntent: {
-        kind: "collecting_slots",
-        action: "sos.route",
-        filledSlots: {},
-        location: undefined,
-        awaitingSlot: "sosSessionId",
-        candidates: [{ id: "s1", label: "王小明｜台北車站" }],
-        missingSlots: ["sosSessionId"],
-      },
-      lastSharedLocation: undefined,
-    });
-  });
-
-  it("falls back to the fixed info reply when classification throws", async () => {
-    vi.mocked(classifyIntent).mockRejectedValue(new Error("boom"));
+  it("falls back to the fixed info reply when the agent throws", async () => {
+    vi.mocked(runLineAgent).mockRejectedValue(new Error("boom"));
 
     await handleEvents([textEvent("他現在在哪")]);
 
@@ -525,8 +301,104 @@ describe("line.service — handleResolvedIntent branches", () => {
   });
 });
 
+describe("line.service — postback (deterministic SOS controls)", () => {
+  it("ack delegates to acknowledgeSession and surfaces the message", async () => {
+    await handleEvents([postbackEvent("action=ack&sid=s1")]);
+
+    expect(vi.mocked(acknowledgeSession)).toHaveBeenCalledWith({
+      sessionId: "s1",
+      lineUserId: "U1",
+    });
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", "已確認收到通知");
+  });
+
+  it("claim success replies the message plus the claim-controls message", async () => {
+    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+
+    expect(vi.mocked(claimSession)).toHaveBeenCalledWith({
+      sessionId: "s1",
+      lineUserId: "U1",
+    });
+    expect(vi.mocked(buildClaimedControlsMessage)).toHaveBeenCalledWith("s1");
+    expect(vi.mocked(replyMessages)).toHaveBeenCalledWith("rp", [
+      { type: "text", text: "你已承接此事件" },
+      { type: "text", text: "controls" },
+    ]);
+  });
+
+  it("claim failure surfaces the service message via replyText", async () => {
+    vi.mocked(claimSession).mockResolvedValue({
+      ok: false,
+      httpCode: 200,
+      message: "此事件已由他人承接",
+    } as any);
+
+    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+
+    expect(vi.mocked(replyMessages)).not.toHaveBeenCalled();
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", "此事件已由他人承接");
+  });
+
+  it("status delegates handlingStatus to updateHandlingStatus", async () => {
+    await handleEvents([postbackEvent("action=status&sid=s1&v=en_route")]);
+
+    expect(vi.mocked(updateHandlingStatus)).toHaveBeenCalledWith({
+      sessionId: "s1",
+      lineUserId: "U1",
+      handlingStatus: "en_route",
+    });
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", "已更新處理狀態");
+  });
+
+  it("rejects an invalid status value", async () => {
+    await handleEvents([postbackEvent("action=status&sid=s1&v=bogus")]);
+
+    expect(vi.mocked(updateHandlingStatus)).not.toHaveBeenCalled();
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+  });
+
+  it("resolve delegates to resolveSession", async () => {
+    await handleEvents([postbackEvent("action=resolve&sid=s1")]);
+
+    expect(vi.mocked(resolveSession)).toHaveBeenCalledWith({
+      sessionId: "s1",
+      lineUserId: "U1",
+    });
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", "已解除求救");
+  });
+
+  it("replies the info message when sid or user id is missing", async () => {
+    await handleEvents([postbackEvent("action=ack")]);
+
+    expect(vi.mocked(acknowledgeSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+  });
+});
+
+describe("line.service — webhook dedup", () => {
+  it("skips an event whose webhookEventId was already processed", async () => {
+    vi.mocked(redisSetNx).mockResolvedValue(false);
+
+    await handleEvents([textEvent("你好", "evt-1")]);
+
+    expect(vi.mocked(redisSetNx)).toHaveBeenCalledWith(
+      "line:evt:evt-1",
+      3600,
+    );
+    expect(vi.mocked(runLineAgent)).not.toHaveBeenCalled();
+  });
+
+  it("processes an event when the webhookEventId is fresh", async () => {
+    vi.mocked(redisSetNx).mockResolvedValue(true);
+
+    await handleEvents([textEvent("你好", "evt-2")]);
+
+    expect(vi.mocked(runLineAgent)).toHaveBeenCalled();
+  });
+});
+
 describe("line.service — location message", () => {
-  it("stores the shared location and asks for a domain choice when nothing consumes it", async () => {
+  it("caches the shared location on bound contacts and acknowledges", async () => {
     await handleEvents([locationEvent("r2")]);
 
     expect(contactModel.updateMany).toHaveBeenCalledWith(
@@ -539,55 +411,9 @@ describe("line.service — location message", () => {
         },
       },
     );
-
-    const call = vi.mocked(updateLineState).mock.calls.at(-1)!;
-    const content = (call[1] as (prev: unknown) => unknown)(null) as {
-      pendingIntent: { kind: string; location: { lat: number; lng: number } };
-    };
-    expect(content.pendingIntent.kind).toBe("awaiting_domain_choice");
-    expect(content.pendingIntent.location).toMatchObject({
-      lat: 25.0478,
-      lng: 121.5171,
-    });
-
     expect(vi.mocked(replyText)).toHaveBeenCalledWith(
       "r2",
       "收到您的位置！請問要查這個位置的天氣、找附近無障礙設施，還是規劃前往路線呢？",
-    );
-  });
-
-  it("resumes a pending location-hungry action when a location arrives", async () => {
-    vi.mocked(getLineState).mockResolvedValue({
-      version: 1,
-      updatedAt: "2026-07-21T00:00:00.000Z",
-      pendingIntent: {
-        kind: "collecting_slots",
-        action: "route.plan",
-        filledSlots: { destination: "台北車站" },
-        awaitingSlot: "location",
-        missingSlots: ["location"],
-      },
-    });
-    vi.mocked(getActionSpec).mockReturnValue(
-      makeSpec({
-        requiredSlots: (ctx) => (ctx.location ? [] : ["location"]),
-        needsUserLocation: true,
-        allowList: ["planAccessibleRoute"],
-      }),
-    );
-    vi.mocked(executeAction).mockResolvedValue({
-      kind: "speech",
-      speech: "路線已規劃完成。",
-      toolResults: [],
-    });
-
-    await handleEvents([locationEvent("r2")]);
-
-    expect(vi.mocked(executeAction)).toHaveBeenCalled();
-    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
-      "r2",
-      "路線已規劃完成。",
-      null,
     );
   });
 });

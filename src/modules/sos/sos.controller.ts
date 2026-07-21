@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
 import * as service from "./sos.service";
+import { onSosUpdate } from "./sos-events";
 import type { ServiceResult, SosType } from "./sos.types";
 
 function send(res: Response, result: ServiceResult) {
@@ -60,4 +61,49 @@ async function getPublicSession(req: Request, res: Response) {
   return send(res, result);
 }
 
-export { createSession, updateLocation, resolveSession, getPublicSession };
+async function getSession(req: Request, res: Response) {
+  const params = req.validated?.params as { id: string };
+  const result = await service.getSessionForOwner({
+    userId: req.auth!.userId,
+    sessionId: params.id,
+  });
+  return send(res, result);
+}
+
+async function streamSession(req: Request, res: Response) {
+  const params = req.validated?.params as { id: string };
+  const sessionId = params.id;
+  const result = await service.getSessionForOwner({
+    userId: req.auth!.userId,
+    sessionId,
+  });
+  if (!result.ok) return send(res, result);
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  res.write(`event: update\ndata: ${JSON.stringify(result.data)}\n\n`);
+
+  const unsubscribe = onSosUpdate(sessionId, (snapshot) => {
+    res.write(`event: update\ndata: ${JSON.stringify(snapshot)}\n\n`);
+  });
+  const heartbeat = setInterval(() => res.write(": ping\n\n"), 25000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    res.end();
+  });
+}
+
+export {
+  createSession,
+  updateLocation,
+  resolveSession,
+  getPublicSession,
+  getSession,
+  streamSession,
+};

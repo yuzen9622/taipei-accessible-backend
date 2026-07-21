@@ -1,30 +1,24 @@
 import { webhook } from "@line/bot-sdk";
 import { Types } from "mongoose";
-import { executeLocalTool } from "../ai/agent-tools";
-import { toGeminiHistory } from "../agent/history-adapter";
-import { summarizeWithContext } from "../agent/agent-manager.service";
-import { classifyIntent } from "../agent/intent-classifier.service";
-import { getActionSpec } from "../agent/action-registry";
-import { executeAction } from "../agent/action-executor.service";
-import type {
-  Action,
-  ActionCtx,
-  ClassifierPending,
-} from "../agent/agent-intent.types";
-import { LINE_FAMILY_SYSTEM_PROMPT } from "../../config/ai/line-family-prompt";
-import { withCurrentDate } from "../../config/ai/chat-prompt";
 import EmergencyContact from "../../model/emergency-contact.model";
-import LineLinkCode from "../../model/line-link-code.model";
 import {
+  buildClaimedControlsMessage,
   replyAgentResult,
+  replyMessages,
   replyText,
   type RouteCardPayload,
 } from "../../adapters/line.adapter";
 import { LINE_MSG } from "../../constants/messages";
-import { model } from "../../config/ai";
 import SosSession from "../../model/sos-session.model";
 import User from "../../model/user.model";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
+import {
+  acknowledgeSession,
+  claimSession,
+  resolveSession,
+  updateHandlingStatus,
+} from "../sos/sos.service";
+import { redisSetNx } from "../../config/redis";
 import { ResponseCode } from "../../types/code";
 import type {
   LineEvent,
@@ -32,15 +26,11 @@ import type {
   LineServiceResult,
 } from "./line.types";
 import type { AccessibilityMode, TravelMode } from "../../types/route";
+import type { OAIMessage } from "../../types/openai-chat";
 import { appendLineChatTurn, getLineChatHistory } from "./line-memory";
-import type { LineChatMessage } from "./line-memory";
-import {
-  clearPendingIntent,
-  getLineState,
-  updateLineState,
-  type PendingIntent,
-  type SharedLocation,
-} from "./line-state";
+import { runLineAgent } from "./line-agent.service";
+
+const EVENT_DEDUP_TTL_SEC = 3600;
 
 function getUserId(event: LineEvent): string | undefined {
   const source = event.source as webhook.UserSource | undefined;
@@ -103,9 +93,9 @@ function describeRouteLegs(legs: unknown): string | undefined {
 
 /**
  * Build a route card from collected tool results. Handles both the SOS route
- * tool and the general accessible-route planner (F4 — route.plan keeps a card).
+ * tool and the general accessible-route planner so the agent can surface a card.
  *
- * @param toolResults Collected tool results from the action executor.
+ * @param toolResults Collected tool results from the agent loop.
  * @returns A route card payload, or null when no usable route result exists.
  */
 function routeCardFromToolResults(
@@ -161,196 +151,30 @@ function routeCardFromToolResults(
 }
 
 /**
- * Read-only, non-consuming probe for a bare 6-char code (no bind context). Used
- * by the classifier: a hit lets the bind action complete; a miss is fail-closed.
+ * Extracts speech text from the agent result. The family agent may answer with a
+ * plain string or a JSON envelope carrying a `speech` field; both are handled.
  *
- * @param code Normalized 6-char code.
- * @returns True when a live emergency-contact or LINE-account code matches.
+ * @param text The raw agent text output.
+ * @returns The speech to reply with, falling back to the fixed info message.
  */
-async function probeBindCode(code: string): Promise<boolean> {
-  try {
-    const [emergency, link] = await Promise.all([
-      EmergencyContact.exists({
-        bindStatus: "pending",
-        bindCode: code,
-        bindCodeExpiresAt: { $gt: new Date() },
-      }),
-      LineLinkCode.exists({ code, expiresAt: { $gt: new Date() } }),
-    ]);
-    return Boolean(emergency || link);
-  } catch {
-    return false;
-  }
-}
-
-function toClassifierPending(
-  pending?: PendingIntent,
-): ClassifierPending | undefined {
-  if (!pending) return undefined;
-  if (pending.kind === "awaiting_bind_code") return { kind: "awaiting_bind_code" };
-  if (pending.kind === "awaiting_domain_choice")
-    return { kind: "awaiting_domain_choice" };
-  return {
-    kind: "collecting_slots",
-    action: pending.action,
-    awaitingSlot: pending.awaitingSlot,
-    candidates: pending.candidates,
-  };
-}
-
-function summarizeContext(
-  history: LineChatMessage[],
-  userText: string,
-): { systemInstruction?: string; contents: ReturnType<typeof toGeminiHistory>["contents"] } {
-  return toGeminiHistory([
-    { role: "system", content: withCurrentDate(LINE_FAMILY_SYSTEM_PROMPT) },
-    ...history,
-    ...(userText ? [{ role: "user" as const, content: userText }] : []),
-  ]);
-}
-
-interface ResolvedIntent {
-  replyToken: string;
-  lineUserId?: string;
-  action: Action;
-  slots: Record<string, string | number>;
-  location?: SharedLocation;
-  history: LineChatMessage[];
-  userText?: string;
-}
-
-function missingSlotsFor(
-  requiredList: string[],
-  ctx: ActionCtx,
-): string[] {
-  return requiredList.filter((slot) => {
-    if (slot === "location") return !ctx.location;
-    const value = ctx.slots[slot];
-    return value === undefined || value === "";
-  });
-}
-
-async function persistReplyTurn(
-  lineUserId: string | undefined,
-  userText: string | undefined,
-  speech: string,
-): Promise<void> {
-  if (!lineUserId) return;
-  await clearPendingIntent(lineUserId);
-  await appendLineChatTurn(lineUserId, userText || "(位置訊息)", speech);
-}
-
-/**
- * Single structured entry point: text and location handlers both converge here.
- * Never fabricates text, never re-classifies. Checks slots, then either asks
- * for one missing slot, runs the action's forced steps, or clarifies.
- *
- * @param input The resolved action, slots, optional shared location and history.
- */
-async function handleResolvedIntent(input: ResolvedIntent): Promise<void> {
-  const { replyToken, lineUserId, action, slots, location, history } = input;
-  const userText = input.userText;
-  const { systemInstruction, contents } = summarizeContext(
-    history,
-    userText ?? "",
-  );
-
-  if (action === "app_info") {
-    await replyText(replyToken, LINE_MSG.APP_INFO);
-    return;
-  }
-  if (action === "unknown") {
-    await replyText(replyToken, LINE_MSG.CLARIFY);
-    return;
-  }
-  if (action === "smalltalk") {
-    let speech = "";
+function parseAgentSpeech(text: string | undefined): string {
+  if (!text) return LINE_MSG.INFO;
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) {
     try {
-      speech = await summarizeWithContext({ contents, systemInstruction, model });
-    } catch (error) {
-      console.error("[line.service] smalltalk summarize failed", error);
-    }
-    await replyAgentResult(replyToken, speech || LINE_MSG.INFO, null);
-    await persistReplyTurn(lineUserId, userText, speech || LINE_MSG.INFO);
-    return;
-  }
-
-  const spec = getActionSpec(action);
-  const ctx: ActionCtx = {
-    slots: { ...slots },
-    location: location ? { lat: location.lat, lng: location.lng } : undefined,
-    prev: [],
-  };
-
-  const missing = missingSlotsFor(spec.requiredSlots(ctx), ctx);
-  if (missing.length) {
-    const awaitingSlot = missing[0];
-    const ask = spec.askFor[awaitingSlot] ?? LINE_MSG.CLARIFY;
-    if (lineUserId) {
-      const write = await updateLineState(lineUserId, (prev) => ({
-        pendingIntent: {
-          kind: "collecting_slots",
-          action,
-          filledSlots: ctx.slots,
-          location,
-          awaitingSlot,
-          missingSlots: missing,
-        },
-        lastSharedLocation: location ?? prev?.lastSharedLocation,
-      }));
-      if (!write.ok) {
-        await replyText(replyToken, LINE_MSG.RECOVERABLE_ASK);
-        return;
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (
+        isRecord(parsed) &&
+        typeof parsed.speech === "string" &&
+        parsed.speech.trim()
+      ) {
+        return parsed.speech;
       }
+    } catch {
+      return text;
     }
-    await replyText(replyToken, ask);
-    return;
   }
-
-  const userLocation =
-    spec.needsUserLocation && ctx.location
-      ? { latitude: ctx.location.lat, longitude: ctx.location.lng }
-      : undefined;
-  const outcome = await executeAction(spec, ctx, {
-    execTool: (name, args) =>
-      executeLocalTool(name, args, userLocation, undefined, { lineUserId }),
-    summarize: (seedParts) =>
-      summarizeWithContext({ contents, systemInstruction, model, seedParts }),
-  });
-
-  if (outcome.kind === "canned") {
-    await replyAgentResult(replyToken, outcome.speech, null);
-    await persistReplyTurn(lineUserId, userText, outcome.speech);
-    return;
-  }
-
-  if (outcome.kind === "clarify") {
-    if (lineUserId && outcome.persist) {
-      const write = await updateLineState(lineUserId, (prev) => ({
-        pendingIntent: {
-          kind: "collecting_slots",
-          action,
-          filledSlots: ctx.slots,
-          location,
-          awaitingSlot: outcome.persist!.awaitingSlot,
-          candidates: outcome.persist!.candidates,
-          missingSlots: [outcome.persist!.awaitingSlot],
-        },
-        lastSharedLocation: location ?? prev?.lastSharedLocation,
-      }));
-      if (!write.ok) {
-        await replyText(replyToken, LINE_MSG.RECOVERABLE_ASK);
-        return;
-      }
-    }
-    await replyText(replyToken, outcome.message);
-    return;
-  }
-
-  const routeCard = routeCardFromToolResults(outcome.toolResults);
-  const speech = outcome.speech || LINE_MSG.INFO;
-  await replyAgentResult(replyToken, speech, routeCard);
-  await persistReplyTurn(lineUserId, userText, speech);
+  return text;
 }
 
 async function handleTextMessage(
@@ -359,44 +183,22 @@ async function handleTextMessage(
   lineUserId?: string,
 ): Promise<void> {
   try {
-    const [history, state] = await Promise.all([
-      lineUserId ? getLineChatHistory(lineUserId) : Promise.resolve([]),
-      lineUserId ? getLineState(lineUserId) : Promise.resolve(null),
-    ]);
-    const pending = state?.pendingIntent;
-
-    const intent = await classifyIntent(
-      { text, pending: toClassifierPending(pending) },
-      { probeBindCode },
-    );
-
-    const action = intent.action;
-    let slots: Record<string, string | number> = { ...intent.slots };
-    let location: SharedLocation | undefined = state?.lastSharedLocation;
-
-    if (pending?.kind === "collecting_slots") {
-      if (action === pending.action) {
-        slots = { ...pending.filledSlots, ...intent.slots };
-        location = pending.location ?? location;
-      } else if (lineUserId) {
-        await clearPendingIntent(lineUserId);
-      }
-    } else if (pending?.kind === "awaiting_domain_choice") {
-      location = pending.location ?? location;
-      if (lineUserId) await clearPendingIntent(lineUserId);
-    } else if (pending?.kind === "awaiting_bind_code" && action !== "bind.code") {
-      if (lineUserId) await clearPendingIntent(lineUserId);
-    }
-
-    await handleResolvedIntent({
-      replyToken,
-      lineUserId,
-      action,
-      slots,
-      location,
-      history,
-      userText: text,
+    const history = lineUserId ? await getLineChatHistory(lineUserId) : [];
+    const messages: OAIMessage[] = [
+      ...history.map((turn): OAIMessage => ({
+        role: turn.role,
+        content: turn.content,
+      })),
+      { role: "user", content: text },
+    ];
+    const result = await runLineAgent({
+      lineUserId: lineUserId ?? "",
+      messages,
     });
+    const speech = parseAgentSpeech(result.text);
+    const routeCard = routeCardFromToolResults(result.toolResults);
+    await replyAgentResult(replyToken, speech, routeCard);
+    if (lineUserId) await appendLineChatTurn(lineUserId, text, speech);
   } catch (error) {
     console.error("[line.service] family agent failed", error);
     await replyText(replyToken, LINE_MSG.INFO);
@@ -404,18 +206,69 @@ async function handleTextMessage(
 }
 
 /**
- * @param spec The pending action's spec.
- * @param filledSlots Slots already collected on the pending intent.
- * @returns True when supplying a shared location would advance the action.
+ * Handles an SOS control postback from a notification or claim-controls message.
+ * Each action maps to a deterministic SOS service call (never the agent); the
+ * service owns authorization, idempotency, and closed-event handling, so this
+ * only surfaces the resulting message to the contact.
+ *
+ * @param event The LINE postback event.
  */
-function locationAdvancesAction(
-  action: Action,
-  filledSlots: Record<string, string | number>,
-): boolean {
-  const spec = getActionSpec(action);
-  const ctx: ActionCtx = { slots: { ...filledSlots }, prev: [] };
-  const missing = missingSlotsFor(spec.requiredSlots(ctx), ctx);
-  return spec.needsUserLocation === true && missing.length > 0;
+async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
+  const replyToken = event.replyToken;
+  if (!replyToken) return;
+
+  const params = new URLSearchParams(event.postback.data);
+  const action = params.get("action");
+  const sid = params.get("sid");
+  const value = params.get("v");
+  const lineUserId = getUserId(event);
+
+  if (!sid || !lineUserId) {
+    await replyText(replyToken, LINE_MSG.INFO);
+    return;
+  }
+
+  try {
+    if (action === "ack") {
+      const result = await acknowledgeSession({ sessionId: sid, lineUserId });
+      await replyText(replyToken, result.message);
+      return;
+    }
+    if (action === "claim") {
+      const result = await claimSession({ sessionId: sid, lineUserId });
+      if (result.ok) {
+        await replyMessages(replyToken, [
+          { type: "text", text: result.message },
+          buildClaimedControlsMessage(sid),
+        ]);
+        return;
+      }
+      await replyText(replyToken, result.message);
+      return;
+    }
+    if (action === "status") {
+      if (value !== "en_route" && value !== "arrived") {
+        await replyText(replyToken, LINE_MSG.INFO);
+        return;
+      }
+      const result = await updateHandlingStatus({
+        sessionId: sid,
+        lineUserId,
+        handlingStatus: value,
+      });
+      await replyText(replyToken, result.message);
+      return;
+    }
+    if (action === "resolve") {
+      const result = await resolveSession({ sessionId: sid, lineUserId });
+      await replyText(replyToken, result.message);
+      return;
+    }
+    await replyText(replyToken, LINE_MSG.INFO);
+  } catch (error) {
+    console.error("[line.service] postback handling failed", error);
+    await replyText(replyToken, LINE_MSG.INFO);
+  }
 }
 
 async function handleLocationMessage(
@@ -440,45 +293,6 @@ async function handleLocationMessage(
 
   if (!replyToken) return;
 
-  const shared: SharedLocation = {
-    lat: message.latitude,
-    lng: message.longitude,
-    ts: new Date().toISOString(),
-  };
-  const [history, state] = await Promise.all([
-    getLineChatHistory(lineUserId),
-    getLineState(lineUserId),
-  ]);
-  const pending = state?.pendingIntent;
-
-  if (
-    pending?.kind === "collecting_slots" &&
-    locationAdvancesAction(pending.action, pending.filledSlots)
-  ) {
-    await updateLineState(lineUserId, (prev) => ({
-      pendingIntent: prev?.pendingIntent,
-      lastSharedLocation: shared,
-    }));
-    await handleResolvedIntent({
-      replyToken,
-      lineUserId,
-      action: pending.action,
-      slots: pending.filledSlots,
-      location: shared,
-      history,
-      userText: "",
-    });
-    return;
-  }
-
-  const write = await updateLineState(lineUserId, () => ({
-    pendingIntent: { kind: "awaiting_domain_choice", location: shared },
-    lastSharedLocation: shared,
-  }));
-  if (!write.ok) {
-    await replyText(replyToken, LINE_MSG.RECOVERABLE_ASK);
-    return;
-  }
   await replyText(
     replyToken,
     "收到您的位置！請問要查這個位置的天氣、找附近無障礙設施，還是規劃前往路線呢？",
@@ -489,6 +303,9 @@ async function handleEvent(event: LineEvent): Promise<void> {
   switch (event.type) {
     case "follow":
       if (event.replyToken) await replyText(event.replyToken, LINE_MSG.WELCOME);
+      return;
+    case "postback":
+      await handlePostback(event);
       return;
     case "message": {
       const message = event.message;
@@ -522,6 +339,14 @@ async function handleEvent(event: LineEvent): Promise<void> {
 export async function handleEvents(events: LineEvent[]): Promise<void> {
   for (const event of events) {
     try {
+      const eventId = (event as { webhookEventId?: string }).webhookEventId;
+      if (eventId) {
+        const fresh = await redisSetNx(
+          `line:evt:${eventId}`,
+          EVENT_DEDUP_TTL_SEC,
+        );
+        if (!fresh) continue;
+      }
       await handleEvent(event);
     } catch (err) {
       console.error("[line.service] event handling failed", err);

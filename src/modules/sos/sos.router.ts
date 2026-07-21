@@ -6,6 +6,8 @@ import {
   updateLocation,
   resolveSession,
   getPublicSession,
+  getSession,
+  streamSession,
 } from "./sos.controller";
 import {
   CreateSosSchema,
@@ -42,6 +44,20 @@ export function createSosRouter(): Router {
     "/sessions/:id/public",
     validateRequest({ params: SessionIdParamSchema }),
     getPublicSession,
+  );
+
+  router.get(
+    "/sessions/:id/stream",
+    middleware,
+    validateRequest({ params: SessionIdParamSchema }),
+    streamSession,
+  );
+
+  router.get(
+    "/sessions/:id",
+    middleware,
+    validateRequest({ params: SessionIdParamSchema }),
+    getSession,
   );
 
   return router;

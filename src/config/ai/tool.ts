@@ -718,4 +718,81 @@ export const lineFamilyTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "confirmSosReceived",
+      description:
+        "代表目前這個 LINE 使用者確認『已收到』指定 SOS 事件的通知，讓求救者端與其他家人知道你看到了。使用者說『我知道了』『收到』『我看到了』時使用。sessionId 省略時自動採用進行中的求救事件。",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "SOS session ID，來自 getActiveSosContext 的結果；省略則採用進行中的事件",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "claimSosEvent",
+      description:
+        "代表目前這個 LINE 使用者『承接』指定 SOS 事件，宣告由你負責處理，其他家人會被告知此事件已有人接手。使用者說『我來處理』『我過去』『交給我』時使用。sessionId 省略時自動採用進行中的求救事件。",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "SOS session ID，來自 getActiveSosContext 的結果；省略則採用進行中的事件",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "updateSosHandlingStatus",
+      description:
+        "更新目前這個 LINE 使用者對指定 SOS 事件的處理進度（前往中或已抵達），可附上備註。使用者說『我出發了』『在路上』『我到了』時使用。sessionId 省略時自動採用進行中的求救事件。",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "SOS session ID，來自 getActiveSosContext 的結果；省略則採用進行中的事件",
+          },
+          status: {
+            type: "string",
+            enum: ["en_route", "arrived"],
+            description: "en_route=前往中，arrived=已抵達",
+          },
+          note: {
+            type: "string",
+            description: "可選的處理備註，例如『預計 10 分鐘到』",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "resolveSosEvent",
+      description:
+        "代表目前這個 LINE 使用者將指定 SOS 事件標記為『已解除／結案』，並通知其他家人。只有在確認求救者已安全時使用。使用者說『沒事了』『已經找到人』『可以結案』時使用。sessionId 省略時自動採用進行中的求救事件。",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "SOS session ID，來自 getActiveSosContext 的結果；省略則採用進行中的事件",
+          },
+        },
+      },
+    },
+  },
 ];

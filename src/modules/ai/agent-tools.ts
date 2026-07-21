@@ -11,6 +11,13 @@ import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { buildBindUrl } from "../../adapters/line.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
+import {
+  getAuthorizedSessionForLineUser,
+  acknowledgeSession,
+  claimSession,
+  updateHandlingStatus,
+  resolveSession as resolveSosSession,
+} from "../sos/sos.service";
 import { slimFacility } from "../accessible-route/facility-slim";
 import EmergencyContact from "../../model/emergency-contact.model";
 import LineLinkCode from "../../model/line-link-code.model";
@@ -135,38 +142,6 @@ async function getLineContacts(lineUserId: string): Promise<Array<{ userId: stri
   })
     .select("userId name")
     .lean();
-}
-
-async function getAuthorizedSessionForLineUser(
-  lineUserId: string,
-  sessionId: string,
-): Promise<{
-  session: {
-    _id: string;
-    userId: string;
-    type: "body" | "trapped" | "share_location";
-    status: "active" | "resolved";
-    lat: number;
-    lng: number;
-    address?: string | null;
-    shareToken: string;
-    locationUpdatedAt: Date;
-    resolvedAt?: Date | null;
-    createdAt: Date;
-    updatedAt: Date;
-  } | null;
-  ownerName: string;
-} | null> {
-  const contacts = await getLineContacts(lineUserId);
-  if (!contacts.length) return null;
-  const ownerIds = new Set(contacts.map((contact) => contact.userId));
-  const session = await SosSession.findById(sessionId).lean();
-  if (!session || !ownerIds.has(String(session.userId))) return null;
-  const owner = await User.findById(session.userId).select("name").lean();
-  return {
-    session,
-    ownerName: owner?.name ?? "未知使用者",
-  };
 }
 
 async function getLatestSharedLineLocation(lineUserId: string): Promise<{
@@ -1326,6 +1301,101 @@ export async function getSosEnvironmentInfo(args: {
   }
 }
 
+async function resolveActiveSosSessionId(lineUserId: string): Promise<string | null> {
+  const contacts = await getLineContacts(lineUserId);
+  if (!contacts.length) return null;
+  const userIds = contacts.map((contact) => contact.userId);
+  const session = await SosSession.findOne({ userId: { $in: userIds }, status: "active" })
+    .sort({ updatedAt: -1 })
+    .select("_id")
+    .lean();
+  return session ? String(session._id) : null;
+}
+
+export async function confirmSosReceived(args: {
+  sessionId?: string;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "LINE 使用者未識別" });
+  }
+  const sessionId = args.sessionId?.trim() || (await resolveActiveSosSessionId(lineUserId));
+  if (!sessionId) {
+    return JSON.stringify({ ok: false, error: "找不到進行中的求救事件" });
+  }
+  try {
+    const result = await acknowledgeSession({ sessionId, lineUserId });
+    return JSON.stringify({ ok: result.ok, message: result.message, data: result.data });
+  } catch (error: any) {
+    console.error("[agent-tool:confirmSosReceived]", error);
+    return JSON.stringify({ ok: false, error: "確認收到通知失敗" });
+  }
+}
+
+export async function claimSosEvent(args: {
+  sessionId?: string;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "LINE 使用者未識別" });
+  }
+  const sessionId = args.sessionId?.trim() || (await resolveActiveSosSessionId(lineUserId));
+  if (!sessionId) {
+    return JSON.stringify({ ok: false, error: "找不到進行中的求救事件" });
+  }
+  try {
+    const result = await claimSession({ sessionId, lineUserId });
+    return JSON.stringify({ ok: result.ok, message: result.message, data: result.data });
+  } catch (error: any) {
+    console.error("[agent-tool:claimSosEvent]", error);
+    return JSON.stringify({ ok: false, error: "承接事件失敗" });
+  }
+}
+
+export async function updateSosHandlingStatus(args: {
+  sessionId?: string;
+  status?: string;
+  note?: string;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "LINE 使用者未識別" });
+  }
+  const sessionId = args.sessionId?.trim() || (await resolveActiveSosSessionId(lineUserId));
+  if (!sessionId) {
+    return JSON.stringify({ ok: false, error: "找不到進行中的求救事件" });
+  }
+  const handlingStatus = args.status === "en_route" || args.status === "arrived" ? args.status : undefined;
+  try {
+    const result = await updateHandlingStatus({
+      sessionId,
+      lineUserId,
+      handlingStatus,
+      note: args.note,
+    });
+    return JSON.stringify({ ok: result.ok, message: result.message, data: result.data });
+  } catch (error: any) {
+    console.error("[agent-tool:updateSosHandlingStatus]", error);
+    return JSON.stringify({ ok: false, error: "更新處理狀態失敗" });
+  }
+}
+
+export async function resolveSosEvent(args: {
+  sessionId?: string;
+}, lineUserId?: string): Promise<string> {
+  if (!lineUserId) {
+    return JSON.stringify({ ok: false, error: "LINE 使用者未識別" });
+  }
+  const sessionId = args.sessionId?.trim() || (await resolveActiveSosSessionId(lineUserId));
+  if (!sessionId) {
+    return JSON.stringify({ ok: false, error: "找不到進行中的求救事件" });
+  }
+  try {
+    const result = await resolveSosSession({ sessionId, lineUserId });
+    return JSON.stringify({ ok: result.ok, message: result.message, data: result.data });
+  } catch (error: any) {
+    console.error("[agent-tool:resolveSosEvent]", error);
+    return JSON.stringify({ ok: false, error: "解除事件失敗" });
+  }
+}
+
 function collectGroundingSources(chunks?: GroundingChunk[]): Array<{
   title: string | null;
   url: string;
@@ -1689,6 +1759,34 @@ export async function executeLocalTool(
           sessionId: args.sessionId as string,
           radius: args.radius as number | undefined,
         },
+        options.lineUserId,
+      );
+
+    case "confirmSosReceived":
+      return confirmSosReceived(
+        { sessionId: args.sessionId as string | undefined },
+        options.lineUserId,
+      );
+
+    case "claimSosEvent":
+      return claimSosEvent(
+        { sessionId: args.sessionId as string | undefined },
+        options.lineUserId,
+      );
+
+    case "updateSosHandlingStatus":
+      return updateSosHandlingStatus(
+        {
+          sessionId: args.sessionId as string | undefined,
+          status: args.status as string | undefined,
+          note: args.note as string | undefined,
+        },
+        options.lineUserId,
+      );
+
+    case "resolveSosEvent":
+      return resolveSosEvent(
+        { sessionId: args.sessionId as string | undefined },
         options.lineUserId,
       );
 
