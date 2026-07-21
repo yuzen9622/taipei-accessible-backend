@@ -125,6 +125,9 @@ export const SOS_REASON = {
   SESSION_NOT_ACTIVE: "SESSION_NOT_ACTIVE",
   SESSION_NOT_FOUND: "SESSION_NOT_FOUND",
   TRACKING_EXPIRED: "TRACKING_EXPIRED",
+  ALREADY_CLAIMED: "ALREADY_CLAIMED",
+  ALREADY_RESOLVED: "ALREADY_RESOLVED",
+  NOT_AUTHORIZED_CONTACT: "NOT_AUTHORIZED_CONTACT",
 } as const;
 
 export const SOS_MSG = {
@@ -132,11 +135,17 @@ export const SOS_MSG = {
   ALREADY_ACTIVE: "已有進行中的求救",
   RESOLVED: "已解除求救",
   PUBLIC_OK: "OK",
+  ACKNOWLEDGED: "已確認收到通知",
+  CLAIMED: "你已承接此事件",
+  STATUS_UPDATED: "已更新處理狀態",
   NOT_SESSION_OWNER: "無權更新此求救紀錄",
   SESSION_NOT_ACTIVE: "此求救已結束",
   SESSION_NOT_FOUND: "找不到該求救紀錄",
   TRACKING_NOT_FOUND: "找不到此追蹤連結",
   TRACKING_EXPIRED: "此追蹤連結已失效",
+  ALREADY_CLAIMED: "此事件已由其他家人承接",
+  ALREADY_RESOLVED: "此事件已結案",
+  NOT_AUTHORIZED_CONTACT: "你沒有此事件的權限",
 } as const;
 
 export const SOS_TYPE_LABEL: Record<"body" | "trapped" | "share_location", string> = {

@@ -17,7 +17,15 @@ export type { FindAccessibleRoutesOptions, PlanRouteRequest, PlanRouteResult };
 import type { IOsmA11y } from "../../types";
 import { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
-import { scoreRoute, routeCost, prerankCost, MODE_PROFILES } from "./scoring";
+import {
+  scoreRoute,
+  routeCost,
+  prerankCost,
+  MODE_PROFILES,
+  type EnvConditions,
+} from "./scoring";
+import { buildAccessibilitySummary } from "./planners/route-a11y";
+import { getWeatherAndAirQuality } from "../environment/environment.service";
 import { haversineMeters } from "../../utils/geo";
 
 import type {
@@ -128,6 +136,7 @@ function legDataCoverageRatio(r: AccessibleRoute): number {
 export function scoreAndRank(
   routes: AccessibleRoute[],
   mode: AccessibilityMode = "normal",
+  env?: EnvConditions,
 ): AccessibleRoute[] {
   const maxTime = Math.max(...routes.map((r) => r.totalMinutes), 1);
   const minTime = Math.min(...routes.map((r) => r.totalMinutes), maxTime);
@@ -145,6 +154,7 @@ export function scoreAndRank(
         mode,
         walkDistanceM,
         legDataCoverageRatio(r),
+        env,
       );
       r.accessibilityScore = result.totalScore;
       r.accessibilityLabel = result.label;
@@ -152,6 +162,13 @@ export function scoreAndRank(
       r.dataConfidence = result.dataConfidence;
       r.scoreWarnings = result.warnings;
       r.totalWalkDistanceM = walkDistanceM;
+      r.accessibilitySummary = buildAccessibilitySummary({
+        mode,
+        walkDistanceM,
+        transferCount: r.transferCount,
+        facilities,
+        label: result.label,
+      });
       return {
         route: r,
         cost: routeCost(
@@ -459,8 +476,17 @@ async function finalizeRoutes(
   }
   t.enrich = Date.now() - t0;
   t0 = Date.now();
+  // One weather/air lookup per request (cached, CCTV-free); an environment
+  // factor into the score. Never let an env failure break routing.
+  let env: EnvConditions | undefined;
+  try {
+    env = await getWeatherAndAirQuality(destination.lat, destination.lng);
+  } catch (err) {
+    console.warn("[accessible-route] environment lookup failed", err);
+    env = undefined;
+  }
   // Stage 3: score with the enriched facility data + rank → final top-3.
-  const top = scoreAndRank(topN, mode).slice(0, 3);
+  const top = scoreAndRank(topN, mode, env).slice(0, 3);
   t.rank = Date.now() - t0;
   t0 = Date.now();
   try {

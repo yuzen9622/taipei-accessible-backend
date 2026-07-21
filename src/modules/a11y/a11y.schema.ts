@@ -18,6 +18,34 @@ export const NearbyA11yQuerySchema = z
   })
   .strict();
 
+export const QuickAssessQuerySchema = z
+  .object({
+    lat: z
+      .string()
+      .regex(/^-?\d+(\.\d+)?$/, "Must be a valid latitude")
+      .openapi({ example: "25.0330" }),
+    lng: z
+      .string()
+      .regex(/^-?\d+(\.\d+)?$/, "Must be a valid longitude")
+      .openapi({ example: "121.5654" }),
+    mode: z
+      .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
+      .optional()
+      .openapi({
+        example: "wheelchair",
+        description: "通行模式，預設 wheelchair",
+      }),
+    radius: z
+      .string()
+      .regex(/^\d+$/, "Must be a positive integer (metres)")
+      .optional()
+      .openapi({
+        example: "200",
+        description: "搜尋半徑（公尺），預設 200，範圍 50–1000",
+      }),
+  })
+  .strict();
+
 export const A11yPlaceQuerySchema = z
   .object({
     osmId: z
@@ -368,6 +396,63 @@ registry.registerPath({
     200: {
       description: "鄰近無障礙、廁所、OSM 與停車格資料",
       content: { "application/json": { schema: NearbyA11yResponseSchema } },
+    },
+    400: { description: "缺少或無效的經緯度" },
+    500: { description: "伺服器錯誤" },
+  },
+});
+
+export const QuickAssessDataSchema = z
+  .object({
+    verdict: z
+      .enum(["good", "caution", "difficult"])
+      .openapi({ example: "good", description: "整體通行評估" }),
+    summary: z.string().openapi({
+      example: "附近 200 公尺內有 3 座電梯、2 間無障礙廁所，適合輪椅前往",
+    }),
+    facilityCount: z
+      .object({
+        elevator: z.number().openapi({ example: 3 }),
+        ramp: z.number().openapi({ example: 1 }),
+        toilet: z.number().openapi({ example: 2 }),
+        parking: z.number().openapi({ example: 0 }),
+      })
+      .openapi("QuickAssessFacilityCount"),
+    activeHazardReports: z
+      .number()
+      .openapi({ example: 1, description: "半徑內未過期的通行障礙回報數" }),
+    wheelchairTagRatio: z
+      .number()
+      .nullable()
+      .openapi({
+        example: 0.72,
+        description:
+          "帶 wheelchair 標記的 OSM 設施中標記為 yes 的比例；無帶標記設施時為 null",
+      }),
+    radiusM: z.number().openapi({ example: 200 }),
+    mode: z
+      .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
+      .openapi({ example: "wheelchair" }),
+  })
+  .openapi("QuickAssessData");
+
+export const QuickAssessResponseSchema = ApiResponseSchema(
+  QuickAssessDataSchema,
+  "QuickAssessResponse"
+);
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/quick-assess",
+  tags: ["Accessibility"],
+  summary: "目的地快速通行評估",
+  description:
+    "不需規劃路線，聚合指定座標半徑內（預設 200 公尺）的無障礙設施密度、未過期障礙回報數與 OSM 輪椅標記，回傳依 mode 客製的通行評估（good / caution / difficult）與中文摘要。純聚合既有資料，無新資料源。",
+  request: { query: QuickAssessQuerySchema },
+  responses: {
+    200: {
+      description: "快速通行評估結果",
+      content: { "application/json": { schema: QuickAssessResponseSchema } },
     },
     400: { description: "缺少或無效的經緯度" },
     500: { description: "伺服器錯誤" },

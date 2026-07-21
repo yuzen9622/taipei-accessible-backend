@@ -206,6 +206,8 @@ export interface AccessibleRoute {
     timeScore: number;
     criticalFeatureScore: number;
     walkPenalty: number;
+    environmentScore?: number;
   };
+  accessibilitySummary?: string;
   attribution?: string;
 }

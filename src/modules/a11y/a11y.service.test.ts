@@ -569,3 +569,67 @@ describe("A11yFacilitySchema", () => {
     expect(res.success).toBe(false);
   });
 });
+
+import { computeVerdict, buildQuickAssessSummary } from "./a11y.service";
+import type { QuickAssessFacilityCount } from "./a11y.service";
+
+const counts = (
+  o: Partial<QuickAssessFacilityCount> = {},
+): QuickAssessFacilityCount => ({
+  elevator: 0,
+  ramp: 0,
+  toilet: 0,
+  parking: 0,
+  ...o,
+});
+
+describe("computeVerdict", () => {
+  it("wheelchair: good needs a structural asset + total>=3 + few hazards", () => {
+    expect(
+      computeVerdict(counts({ elevator: 2, toilet: 1 }), 0, "wheelchair"),
+    ).toBe("good");
+  });
+  it("wheelchair: only toilets (no structural) is caution, not good", () => {
+    expect(computeVerdict(counts({ toilet: 3 }), 0, "wheelchair")).toBe("caution");
+  });
+  it("caution when at least one facility but not enough for good", () => {
+    expect(computeVerdict(counts({ elevator: 1 }), 0, "wheelchair")).toBe("caution");
+  });
+  it("difficult when nothing nearby", () => {
+    expect(computeVerdict(counts(), 0, "wheelchair")).toBe("difficult");
+  });
+  it("heavy hazard load forces difficult regardless of facilities", () => {
+    expect(
+      computeVerdict(counts({ elevator: 5, toilet: 5 }), 3, "wheelchair"),
+    ).toBe("difficult");
+  });
+  it("normal mode does not require a structural asset for good", () => {
+    expect(computeVerdict(counts({ toilet: 3 }), 0, "normal")).toBe("good");
+  });
+});
+
+describe("buildQuickAssessSummary", () => {
+  it("lists non-zero facilities with units and a verdict clause", () => {
+    const s = buildQuickAssessSummary(
+      counts({ elevator: 3, toilet: 2 }),
+      0,
+      "good",
+      "wheelchair",
+      200,
+    );
+    expect(s).toContain("200 公尺");
+    expect(s).toContain("3 座電梯");
+    expect(s).toContain("2 間無障礙廁所");
+    expect(s).toContain("適合輪椅前往");
+  });
+  it("appends the hazard clause only when hazards exist", () => {
+    const withHaz = buildQuickAssessSummary(counts({ elevator: 1 }), 2, "caution", "wheelchair", 200);
+    expect(withHaz).toContain("2 則通行障礙回報");
+    const noHaz = buildQuickAssessSummary(counts({ elevator: 1 }), 0, "caution", "wheelchair", 200);
+    expect(noHaz).not.toContain("通行障礙回報");
+  });
+  it("states limited info when no facilities nearby", () => {
+    const s = buildQuickAssessSummary(counts(), 0, "difficult", "wheelchair", 200);
+    expect(s).toContain("資訊有限");
+  });
+});

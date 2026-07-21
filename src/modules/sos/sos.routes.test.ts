@@ -6,6 +6,7 @@ vi.mock("./sos.service", () => ({
   updateLocation: vi.fn(),
   resolveSession: vi.fn(),
   getPublicById: vi.fn(),
+  getSessionForOwner: vi.fn(),
 }));
 
 import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
@@ -17,6 +18,7 @@ const app = buildTestApp();
 const BASE = "/api/v1/sos/sessions";
 const auth = buildAuthorizationHeader();
 const TOKEN_32 = "9f3a1c000000000000000000000000e0";
+const OID = "6a4e797394fbb1b1721c8b81";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -119,5 +121,90 @@ describe("GET /sos/sessions/:id/public", () => {
     const res = await request(app).get(`${BASE}/6a4e797394fbb1b1721c8b81/public`);
     expect(res.status).toBe(410);
     expect(res.body.data.reason).toBe(SOS_REASON.TRACKING_EXPIRED);
+  });
+});
+
+describe("GET /sos/sessions/:id (owner snapshot)", () => {
+  it("rejects without a token with 403 (service not called)", async () => {
+    const res = await request(app).get(`${BASE}/${OID}`);
+    expect(res.status).toBe(ResponseCode.FORBIDDEN);
+    expect(vi.mocked(service.getSessionForOwner)).not.toHaveBeenCalled();
+  });
+
+  it("returns the snapshot for the owner", async () => {
+    const snapshot = { sessionId: OID, status: "active", handlingStatus: "acknowledged" };
+    vi.mocked(service.getSessionForOwner).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: SOS_MSG.PUBLIC_OK,
+      data: snapshot,
+    });
+    const res = await request(app).get(`${BASE}/${OID}`).set("Authorization", auth);
+    expect(res.status).toBe(200);
+    expect(res.body.data.handlingStatus).toBe("acknowledged");
+    expect(vi.mocked(service.getSessionForOwner)).toHaveBeenCalledWith({
+      userId: "test-user-id",
+      sessionId: OID,
+    });
+  });
+
+  it("forwards a 403 NOT_SESSION_OWNER result from the service", async () => {
+    vi.mocked(service.getSessionForOwner).mockResolvedValue({
+      ok: false,
+      httpCode: ResponseCode.FORBIDDEN,
+      message: SOS_MSG.NOT_SESSION_OWNER,
+      data: { reason: SOS_REASON.NOT_SESSION_OWNER },
+    });
+    const res = await request(app).get(`${BASE}/${OID}`).set("Authorization", auth);
+    expect(res.status).toBe(403);
+    expect(res.body.data.reason).toBe(SOS_REASON.NOT_SESSION_OWNER);
+  });
+});
+
+describe("GET /sos/sessions/:id/stream (SSE)", () => {
+  it("rejects without a token with 403 (service not called)", async () => {
+    const res = await request(app).get(`${BASE}/${OID}/stream`);
+    expect(res.status).toBe(ResponseCode.FORBIDDEN);
+    expect(vi.mocked(service.getSessionForOwner)).not.toHaveBeenCalled();
+  });
+
+  // SSE limitation: the stream never completes on its own (25s heartbeat +
+  // open connection), so we cannot `await` the request normally. Instead we
+  // intercept the raw response via `.parse`, assert on the status/headers, then
+  // destroy the socket — that fires the controller's `req.on("close")` handler,
+  // which clears the heartbeat interval and ends the response, keeping the
+  // suite from hanging. We assert headers + status only, not the streamed body.
+  it("returns 200 text/event-stream for the owner, then releases the socket", async () => {
+    vi.mocked(service.getSessionForOwner).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: SOS_MSG.PUBLIC_OK,
+      data: { sessionId: OID, status: "active", handlingStatus: "notified" },
+    });
+
+    const raw = await new Promise<{ statusCode: number; contentType: string }>((resolve, reject) => {
+      const req = request(app)
+        .get(`${BASE}/${OID}/stream`)
+        .set("Authorization", auth)
+        .buffer(false)
+        .parse((res: NodeJS.ReadableStream & { statusCode: number; headers: Record<string, string> }) => {
+          resolve({ statusCode: res.statusCode, contentType: res.headers["content-type"] ?? "" });
+          res.destroy();
+        });
+      req.on("error", () => {
+        // aborting the stream surfaces an ECONNRESET/"aborted" error — expected.
+      });
+      req.end(() => {
+        // no-op; resolution happens in the parser above.
+      });
+      setTimeout(() => reject(new Error("SSE stream did not respond in time")), 4000);
+    });
+
+    expect(raw.statusCode).toBe(200);
+    expect(raw.contentType).toContain("text/event-stream");
+    expect(vi.mocked(service.getSessionForOwner)).toHaveBeenCalledWith({
+      userId: "test-user-id",
+      sessionId: OID,
+    });
   });
 });

@@ -460,6 +460,11 @@ const ScoreComponentsSchema = z
       description:
         "依模式扣分的步行距離懲罰（0 至模式上限；輪椅 35、長者 30、視障 25、一般 15）",
     }),
+    environmentScore: z.number().optional().openapi({
+      example: 88,
+      description:
+        "環境條件分數（有效區間 75–100，越高越佳；已納入 totalScore）。綜合降雨機率、長步行段高溫、空氣品質；僅在成功取得天氣/空品資料時出現，缺少時前端沿用既有 fallback。",
+    }),
   }).strict()
   .openapi("ScoreComponents");
 
@@ -507,6 +512,14 @@ export const AccessibleRouteSchema = z
     scoreComponents: ScoreComponentsSchema.optional().openapi({
       description: "accessibilityScore 的子項目拆解",
     }),
+    accessibilitySummary: z
+      .string()
+      .optional()
+      .openapi({
+        example: "全程設有電梯，步行約 450 公尺、路面大致平坦，適合輪椅通行",
+        description:
+          "依 mode 客製的單句中文通行結論（輪椅重電梯坡道、視障重導盲/語音號誌、長者重步行距離與轉乘）；前端可直接顯示，取代等級對照的通用文案。",
+      }),
     dataConfidence: z
       .enum(["high", "medium", "low"])
       .optional()

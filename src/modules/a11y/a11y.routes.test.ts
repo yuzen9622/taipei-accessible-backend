@@ -9,6 +9,7 @@ vi.mock("./a11y.service", async () => {
     findBathroomFacilities: vi.fn(),
     findRampFacilities: vi.fn(),
     findElevatorFacilities: vi.fn(),
+    assessQuickAccess: vi.fn(),
   };
 });
 
@@ -165,5 +166,35 @@ describe("a11y facility list routes", () => {
   it("GET /all-places is removed and returns 404", async () => {
     const res = await request(app).get(`${BASE}/all-places`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /quick-assess", () => {
+  it("returns 200 with the service result echoed through the envelope", async () => {
+    const result = {
+      verdict: "good",
+      summary: "附近 200 公尺內有 3 座電梯，適合輪椅前往",
+      facilityCount: { elevator: 3, ramp: 1, toilet: 2, parking: 0 },
+      activeHazardReports: 1,
+      wheelchairTagRatio: 0.72,
+      radiusM: 200,
+      mode: "wheelchair",
+    };
+    vi.mocked(service.assessQuickAccess).mockResolvedValue(result as any);
+
+    const res = await request(app).get(
+      `${BASE}/quick-assess?lat=25.033&lng=121.565&mode=wheelchair`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, status: "success", code: 200 });
+    expect(res.body.data).toEqual(result);
+    expect(vi.mocked(service.assessQuickAccess)).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 400 when lat/lng are missing", async () => {
+    const res = await request(app).get(`${BASE}/quick-assess`);
+    expect(res.status).toBe(400);
+    expect(vi.mocked(service.assessQuickAccess)).not.toHaveBeenCalled();
   });
 });

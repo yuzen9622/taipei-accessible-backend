@@ -27,7 +27,37 @@ export interface UpdateLocationInput {
   address?: string;
 }
 
+/**
+ * Resolve accepts EITHER a web owner (`userId`) OR a bound LINE contact
+ * (`lineUserId`) — exactly one identity is present per call.
+ */
 export interface ResolveSosInput {
+  sessionId: string;
+  userId?: string;
+  lineUserId?: string;
+}
+
+export interface AcknowledgeSosInput {
+  sessionId: string;
+  lineUserId: string;
+}
+
+export interface ClaimSosInput {
+  sessionId: string;
+  lineUserId: string;
+}
+
+/** Family-settable handling states (subset of SosHandlingStatus). */
+export type FamilyHandlingStatus = "en_route" | "arrived";
+
+export interface UpdateSosStatusInput {
+  sessionId: string;
+  lineUserId: string;
+  handlingStatus?: FamilyHandlingStatus;
+  note?: string;
+}
+
+export interface GetSosForOwnerInput {
   userId: string;
   sessionId: string;
 }

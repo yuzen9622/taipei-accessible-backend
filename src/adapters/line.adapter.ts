@@ -53,7 +53,24 @@ export interface RouteCardPayload {
 }
 
 /**
- * Builds the SOS notification Flex Message (§7.5).
+ * Extracts the SOS session id from a tracking URL. The tracking URL is built by
+ * the SOS service as `${base}/zh-TW?sos=<sessionId>`, so the id is read from the
+ * `sos` query parameter without coupling this adapter to the service layer.
+ *
+ * @param trackingUrl The public tracking URL embedded in the notification.
+ * @returns The session id, or undefined when the URL cannot be parsed.
+ */
+function extractSessionId(trackingUrl: string): string | undefined {
+  try {
+    return new URL(trackingUrl).searchParams.get("sos") ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Builds the SOS notification Flex Message (§7.5). Adds postback action buttons
+ * so a bound contact can acknowledge or claim the event directly from the card.
  *
  * @param payload SOS details used to populate the card.
  * @returns A LINE Flex Message ready to push.
@@ -83,6 +100,45 @@ function buildSosNotificationFlex(
     bodyContents.push({ type: "text", text: `位置：${payload.address}`, wrap: true });
   }
 
+  const sessionId = extractSessionId(payload.trackingUrl);
+  const footerContents: messagingApi.FlexComponent[] = [];
+  if (sessionId) {
+    footerContents.push(
+      {
+        type: "button",
+        style: "primary",
+        color: "#D0021B",
+        action: {
+          type: "postback",
+          label: "我收到了",
+          data: `action=ack&sid=${sessionId}`,
+          displayText: "我收到通知了",
+        },
+      },
+      {
+        type: "button",
+        style: "primary",
+        color: "#1F4E79",
+        action: {
+          type: "postback",
+          label: "我來處理",
+          data: `action=claim&sid=${sessionId}`,
+          displayText: "我來處理這件事",
+        },
+      },
+    );
+  }
+  footerContents.push({
+    type: "button",
+    style: sessionId ? "link" : "primary",
+    ...(sessionId ? {} : { color: "#D0021B" }),
+    action: {
+      type: "uri",
+      label: LINE_MSG.VIEW_LOCATION,
+      uri: payload.trackingUrl,
+    },
+  });
+
   return {
     type: "flex",
     altText: `${LINE_MSG.SOS_NOTIFY_TITLE}（${SOS_TYPE_LABEL[payload.type]}）`,
@@ -92,19 +148,56 @@ function buildSosNotificationFlex(
       footer: {
         type: "box",
         layout: "vertical",
-        contents: [
-          {
-            type: "button",
-            style: "primary",
-            color: "#D0021B",
-            action: {
-              type: "uri",
-              label: LINE_MSG.VIEW_LOCATION,
-              uri: payload.trackingUrl,
-            },
-          },
-        ],
+        contents: footerContents,
       },
+    },
+  };
+}
+
+/**
+ * Builds the control message replied to a contact right after they claim an SOS
+ * event. Quick-reply postback buttons let the claimer update the handling status
+ * or resolve the alert without typing.
+ *
+ * @param sessionId The claimed session id, embedded in each postback payload.
+ * @returns A LINE text message carrying quick-reply postback actions.
+ */
+export function buildClaimedControlsMessage(
+  sessionId: string,
+): messagingApi.TextMessage {
+  return {
+    type: "text",
+    text: "可使用下方按鈕更新處理狀態，或在抵達後解除警報。",
+    quickReply: {
+      items: [
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "前往中",
+            data: `action=status&sid=${sessionId}&v=en_route`,
+            displayText: "我正在前往",
+          },
+        },
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "已抵達",
+            data: `action=status&sid=${sessionId}&v=arrived`,
+            displayText: "我已抵達現場",
+          },
+        },
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "解除警報",
+            data: `action=resolve&sid=${sessionId}`,
+            displayText: "解除警報",
+          },
+        },
+      ],
     },
   };
 }
@@ -258,6 +351,30 @@ export async function sendSosResolved(
     });
   } catch (err) {
     console.error("[line.adapter] sendSosResolved failed", err);
+  }
+  return lineUserIds.length;
+}
+
+/**
+ * Multicasts a plain-text SOS status update to bound contacts (best-effort;
+ * push failures are swallowed so they never block the originating action).
+ *
+ * @param lineUserIds Recipient LINE user ids.
+ * @param message The status update text.
+ * @returns The number of recipients the update was attempted for.
+ */
+export async function pushSosUpdate(
+  lineUserIds: string[],
+  message: string,
+): Promise<number> {
+  if (lineUserIds.length === 0) return 0;
+  try {
+    await getClient().multicast({
+      to: lineUserIds,
+      messages: [{ type: "text", text: message }],
+    });
+  } catch (err) {
+    console.error("[line.adapter] pushSosUpdate failed", err);
   }
   return lineUserIds.length;
 }

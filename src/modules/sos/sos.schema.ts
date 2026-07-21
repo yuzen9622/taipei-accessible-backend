@@ -86,6 +86,48 @@ export const SosPublicResponseSchema = ApiResponse(
   "SosPublicResponse",
 );
 
+export const SosSnapshotResponseSchema = ApiResponse(
+  z.object({
+    sessionId: z.string().openapi({ example: "66b0abc123def4567890abcd" }),
+    status: z.enum(["active", "resolved"]).openapi({ example: "active" }),
+    handlingStatus: z
+      .string()
+      .openapi({ example: "acknowledged" }),
+    claimedBy: z.string().nullable().openapi({ example: null }),
+    claimedByName: z.string().nullable().openapi({ example: "王小明" }),
+    claimedAt: z.string().nullable().openapi({ example: null }),
+    acknowledgements: z
+      .array(
+        z.object({
+          lineUserId: z.string(),
+          name: z.string().nullable(),
+          at: z.string(),
+        }),
+      )
+      .openapi({ example: [] }),
+    timeline: z
+      .array(
+        z.object({
+          type: z.string(),
+          actorType: z.string(),
+          actorName: z.string().nullable(),
+          note: z.string().nullable(),
+          at: z.string(),
+        }),
+      )
+      .openapi({ example: [] }),
+    location: z.object({
+      lat: z.number().openapi({ example: 25.033 }),
+      lng: z.number().openapi({ example: 121.5654 }),
+      address: z.string().nullable().openapi({ example: "台北市信義區市府路1號" }),
+      updatedAt: z.string().openapi({ example: "2026-07-19T08:30:00.000Z" }),
+    }),
+    resolvedAt: z.string().nullable().openapi({ example: null }),
+    updatedAt: z.string().openapi({ example: "2026-07-19T08:30:00.000Z" }),
+  }),
+  "SosSnapshotResponse",
+);
+
 export const SosErrorResponseSchema = z
   .object({
     ok: z.boolean().openapi({ example: false }),
@@ -100,6 +142,9 @@ export const SosErrorResponseSchema = z
             "SESSION_NOT_ACTIVE",
             "SESSION_NOT_FOUND",
             "TRACKING_EXPIRED",
+            "ALREADY_CLAIMED",
+            "ALREADY_RESOLVED",
+            "NOT_AUTHORIZED_CONTACT",
           ])
           .openapi({ example: "SESSION_NOT_FOUND" }),
       })
@@ -187,6 +232,60 @@ registry.registerPath({
     400: {
       description: "求救已結束",
       content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+    401: {
+      description: "Token 過期",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+    403: {
+      description: "非本人或無效 Token",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+    404: {
+      description: "找不到求救紀錄",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/sos/sessions/{id}",
+  tags: ["SOS"],
+  summary: "查詢求救事件快照（限本人）",
+  security: [{ bearerAuth: [] }],
+  request: { params: SessionIdParamSchema },
+  responses: {
+    200: {
+      description: "事件快照（含處理狀態、承接人、確認清單與時間軸）",
+      content: { "application/json": { schema: SosSnapshotResponseSchema } },
+    },
+    401: {
+      description: "Token 過期",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+    403: {
+      description: "非本人或無效 Token",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+    404: {
+      description: "找不到求救紀錄",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/sos/sessions/{id}/stream",
+  tags: ["SOS"],
+  summary: "訂閱求救事件即時更新（SSE，限本人）",
+  security: [{ bearerAuth: [] }],
+  request: { params: SessionIdParamSchema },
+  responses: {
+    200: {
+      description: "text/event-stream：每次事件推送 `event: update` 與 JSON 快照",
+      content: { "text/event-stream": { schema: z.string() } },
     },
     401: {
       description: "Token 過期",

@@ -87,6 +87,26 @@ async function nearbyParking(req: Request, res: Response<ApiResponse<any>>) {
   }
 }
 
+async function quickAssess(req: Request, res: Response<ApiResponse<any>>) {
+  try {
+    const { lat, lng, mode, radius } = (req.validated?.query ?? {}) as {
+      lat: string;
+      lng: string;
+      mode?: a11yService.QuickAssessMode;
+      radius?: string;
+    };
+    const result = await a11yService.assessQuickAccess({
+      lat: Number(lat),
+      lng: Number(lng),
+      mode,
+      radiusM: radius != null ? Number(radius) : undefined,
+    });
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
+  } catch (error) {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, (error as string) || ERROR_MESSAGE.INTERNAL);
+  }
+}
+
 export {
   getAllFacilities,
   getBathrooms,
@@ -95,4 +115,5 @@ export {
   nearbyA11y,
   nearbyParking,
   getA11yPlace,
+  quickAssess,
 };

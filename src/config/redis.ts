@@ -69,6 +69,27 @@ export async function redisSet(
 }
 
 /**
+ * Atomically sets a key only if it does not already exist, with a TTL in seconds.
+ * Returns true when the key was newly set (caller should proceed), false when it
+ * already existed (a duplicate). On unavailable / error it FAILS OPEN (returns
+ * true) so an emergency event is never dropped just because Redis is down —
+ * downstream idempotency guards (atomic Mongo updates) absorb any reprocessing.
+ *
+ * @param key The dedup key.
+ * @param ttlSec Time-to-live in seconds.
+ * @returns true if newly set or Redis unavailable; false if the key already existed.
+ */
+export async function redisSetNx(key: string, ttlSec: number): Promise<boolean> {
+  if (!redisClient) return true;
+  try {
+    const res = await redisClient.set(key, "1", "EX", ttlSec, "NX");
+    return res === "OK";
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Deletes a key. No-ops on unavailable / error.
  *
  * @param key The cache key to delete.

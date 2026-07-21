@@ -24,6 +24,7 @@ vi.mock("./planners/route-a11y", () => ({
   attachA11yToLeg: vi.fn(),
   deriveHighlights: vi.fn(),
   enrichLegIndoor: vi.fn(),
+  buildAccessibilitySummary: vi.fn().mockReturnValue(""),
 }));
 
 // The transit branch dynamic-imports both from the OTP planner.
