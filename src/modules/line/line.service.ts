@@ -2,11 +2,19 @@ import { webhook } from "@line/bot-sdk";
 import { Types } from "mongoose";
 import { executeLocalTool } from "../ai/agent-tools";
 import { toGeminiHistory } from "../agent/history-adapter";
-import { runToolLoop } from "../agent/agent-manager.service";
-import { lineFamilyTools } from "../../config/ai/tool";
+import { summarizeWithContext } from "../agent/agent-manager.service";
+import { classifyIntent } from "../agent/intent-classifier.service";
+import { getActionSpec } from "../agent/action-registry";
+import { executeAction } from "../agent/action-executor.service";
+import type {
+  Action,
+  ActionCtx,
+  ClassifierPending,
+} from "../agent/agent-intent.types";
 import { LINE_FAMILY_SYSTEM_PROMPT } from "../../config/ai/line-family-prompt";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
 import EmergencyContact from "../../model/emergency-contact.model";
+import LineLinkCode from "../../model/line-link-code.model";
 import {
   replyAgentResult,
   replyText,
@@ -23,19 +31,16 @@ import type {
   LineRoutePreviewData,
   LineServiceResult,
 } from "./line.types";
-import type { RunToolLoopResult } from "../../types/agent";
 import type { AccessibilityMode, TravelMode } from "../../types/route";
+import { appendLineChatTurn, getLineChatHistory } from "./line-memory";
+import type { LineChatMessage } from "./line-memory";
 import {
-  appendLineChatTurn,
-  getLineChatHistory,
-} from "./line-memory";
-
-interface BoundFamilyContext {
-  userId: string;
-  lastLineLat?: number | null;
-  lastLineLng?: number | null;
-  lastLineLocationUpdatedAt?: Date | null;
-}
+  clearPendingIntent,
+  getLineState,
+  updateLineState,
+  type PendingIntent,
+  type SharedLocation,
+} from "./line-state";
 
 function getUserId(event: LineEvent): string | undefined {
   const source = event.source as webhook.UserSource | undefined;
@@ -74,71 +79,6 @@ function fail<T = never>(
   return { ok: false, httpCode, message };
 }
 
-function parseStructuredAgentText(text: string): {
-  speech: string;
-  uiType?: string;
-  uiData?: Record<string, unknown>;
-} {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{")) return { speech: trimmed };
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (!isRecord(parsed)) return { speech: trimmed };
-    return {
-      speech: asString(parsed.speech) ?? trimmed,
-      uiType: asString(parsed.ui_type),
-      uiData: isRecord(parsed.ui_data) ? parsed.ui_data : undefined,
-    };
-  } catch {
-    return { speech: trimmed };
-  }
-}
-
-function routeOptionsFromStructuredData(
-  uiData: Record<string, unknown>,
-  toolResults: RunToolLoopResult["toolResults"],
-): RouteCardPayload | null {
-  const origin = asString(uiData.origin);
-  const destination = asString(uiData.destination);
-  if (!origin || !destination) return null;
-
-  const candidates: Array<[string, unknown]> = [
-    ["機車", uiData.scooter_time],
-    ["汽車", uiData.car_time],
-    ["大眾運輸", uiData.transit_time],
-  ];
-  const options = candidates
-    .map(([label, value]) => {
-      const time = asString(value);
-      return time ? { label, time } : null;
-    })
-    .filter((value): value is { label: string; time: string } =>
-      Boolean(value),
-    );
-
-  if (!options.length) return null;
-
-  let sessionId = asString(uiData.sessionId);
-  if (!sessionId) {
-    const routeResult = [...toolResults]
-      .reverse()
-      .find(
-        (entry) =>
-          entry.name === "planRouteToSosVictim" && isRecord(entry.result),
-      );
-    if (routeResult && isRecord(routeResult.result)) {
-      sessionId = asString(routeResult.result.sessionId);
-    }
-  }
-
-  return {
-    origin,
-    destination,
-    options,
-    liffUrl: asString(uiData.liff_url) ?? routePreviewUrl(sessionId),
-  };
-}
-
 function describeRouteLegs(legs: unknown): string | undefined {
   if (!Array.isArray(legs)) return undefined;
   const labels = legs
@@ -161,23 +101,28 @@ function describeRouteLegs(legs: unknown): string | undefined {
   return labels.length ? labels.join(" → ") : undefined;
 }
 
+/**
+ * Build a route card from collected tool results. Handles both the SOS route
+ * tool and the general accessible-route planner (F4 — route.plan keeps a card).
+ *
+ * @param toolResults Collected tool results from the action executor.
+ * @returns A route card payload, or null when no usable route result exists.
+ */
 function routeCardFromToolResults(
-  toolResults: RunToolLoopResult["toolResults"],
+  toolResults: Array<{ name: string; result: unknown }>,
 ): RouteCardPayload | null {
-  const routeResult = [...toolResults]
+  const entry = [...toolResults]
     .reverse()
     .find(
-      (entry) =>
-        entry.name === "planRouteToSosVictim" && isRecord(entry.result),
+      (item) =>
+        (item.name === "planRouteToSosVictim" ||
+          item.name === "planAccessibleRoute") &&
+        isRecord(item.result) &&
+        item.result.ok === true,
     );
-  if (
-    !routeResult ||
-    !isRecord(routeResult.result) ||
-    routeResult.result.ok !== true
-  )
-    return null;
+  if (!entry || !isRecord(entry.result)) return null;
 
-  const result = routeResult.result;
+  const result = entry.result;
   const routes = Array.isArray(result.routes) ? result.routes : [];
   const options = routes
     .slice(0, 3)
@@ -200,100 +145,212 @@ function routeCardFromToolResults(
 
   if (!options.length) return null;
 
+  const isSos = entry.name === "planRouteToSosVictim";
   const destination = isRecord(result.destination)
     ? (asString(result.destination.address) ??
+      asString(result.destination.name) ??
       asString(result.ownerName) ??
-      "求救者位置")
-    : (asString(result.ownerName) ?? "求救者位置");
+      "目的地")
+    : (asString(result.ownerName) ?? "目的地");
   return {
-    origin: "你分享的位置",
+    origin: isSos ? "你分享的位置" : "你的位置",
     destination,
     options,
     liffUrl: routePreviewUrl(asString(result.sessionId)),
   };
 }
 
-function buildAgentReply(result: RunToolLoopResult): {
-  speech: string;
-  routeCard?: RouteCardPayload | null;
-} {
-  const structured = parseStructuredAgentText(result.text ?? "");
+/**
+ * Read-only, non-consuming probe for a bare 6-char code (no bind context). Used
+ * by the classifier: a hit lets the bind action complete; a miss is fail-closed.
+ *
+ * @param code Normalized 6-char code.
+ * @returns True when a live emergency-contact or LINE-account code matches.
+ */
+async function probeBindCode(code: string): Promise<boolean> {
+  try {
+    const [emergency, link] = await Promise.all([
+      EmergencyContact.exists({
+        bindStatus: "pending",
+        bindCode: code,
+        bindCodeExpiresAt: { $gt: new Date() },
+      }),
+      LineLinkCode.exists({ code, expiresAt: { $gt: new Date() } }),
+    ]);
+    return Boolean(emergency || link);
+  } catch {
+    return false;
+  }
+}
 
-  const structuredRouteCard =
-    structured.uiType === "route_card" && structured.uiData
-      ? routeOptionsFromStructuredData(
-          structured.uiData,
-          result.toolResults ?? [],
-        )
-      : null;
+function toClassifierPending(
+  pending?: PendingIntent,
+): ClassifierPending | undefined {
+  if (!pending) return undefined;
+  if (pending.kind === "awaiting_bind_code") return { kind: "awaiting_bind_code" };
+  if (pending.kind === "awaiting_domain_choice")
+    return { kind: "awaiting_domain_choice" };
   return {
-    speech: structured.speech || LINE_MSG.INFO,
-    routeCard:
-      structuredRouteCard ?? routeCardFromToolResults(result.toolResults ?? []),
+    kind: "collecting_slots",
+    action: pending.action,
+    awaitingSlot: pending.awaitingSlot,
+    candidates: pending.candidates,
   };
 }
 
-function formatLineLocationTime(value: Date): string {
-  return new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Asia/Taipei",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(value);
+function summarizeContext(
+  history: LineChatMessage[],
+  userText: string,
+): { systemInstruction?: string; contents: ReturnType<typeof toGeminiHistory>["contents"] } {
+  return toGeminiHistory([
+    { role: "system", content: withCurrentDate(LINE_FAMILY_SYSTEM_PROMPT) },
+    ...history,
+    ...(userText ? [{ role: "user" as const, content: userText }] : []),
+  ]);
 }
 
-async function buildLineUserContext(lineUserId: string): Promise<string> {
-  try {
-    const contacts = (await EmergencyContact.find({
-      lineUserId,
-      bindStatus: "bound",
-    })
-      .select("userId lastLineLat lastLineLng lastLineLocationUpdatedAt")
-      .lean()) as BoundFamilyContext[];
+interface ResolvedIntent {
+  replyToken: string;
+  lineUserId?: string;
+  action: Action;
+  slots: Record<string, string | number>;
+  location?: SharedLocation;
+  history: LineChatMessage[];
+  userText?: string;
+}
 
-    if (!contacts.length) {
-      return "【你服務的對象】此聯絡人尚未綁定家人。上次分享的位置：尚未分享過位置。";
-    }
+function missingSlotsFor(
+  requiredList: string[],
+  ctx: ActionCtx,
+): string[] {
+  return requiredList.filter((slot) => {
+    if (slot === "location") return !ctx.location;
+    const value = ctx.slots[slot];
+    return value === undefined || value === "";
+  });
+}
 
-    const familyUsers = await User.find({
-      _id: { $in: contacts.map((contact) => contact.userId) },
-    })
-      .select("_id name")
-      .lean();
-    const familyNames = familyUsers
-      .map((familyUser) => familyUser.name?.trim())
-      .filter((name): name is string => Boolean(name));
-    const familySummary =
-      familyNames.length === contacts.length
-        ? familyNames.join("、")
-        : `已綁定 ${contacts.length} 位家人`;
-    const latestLocation = contacts
-      .filter(
-        (contact) =>
-          typeof contact.lastLineLat === "number" &&
-          typeof contact.lastLineLng === "number",
-      )
-      .sort(
-        (left, right) =>
-          (right.lastLineLocationUpdatedAt?.getTime() ?? 0) -
-          (left.lastLineLocationUpdatedAt?.getTime() ?? 0),
-      )[0];
-    const locationSummary = latestLocation
-      ? `${latestLocation.lastLineLat},${latestLocation.lastLineLng}${
-          latestLocation.lastLineLocationUpdatedAt
-            ? `（${formatLineLocationTime(latestLocation.lastLineLocationUpdatedAt)} 分享）`
-            : "（分享時間不明）"
-        }`
-      : "尚未分享過位置";
+async function persistReplyTurn(
+  lineUserId: string | undefined,
+  userText: string | undefined,
+  speech: string,
+): Promise<void> {
+  if (!lineUserId) return;
+  await clearPendingIntent(lineUserId);
+  await appendLineChatTurn(lineUserId, userText || "(位置訊息)", speech);
+}
 
-    return `【你服務的對象】此聯絡人已綁定家人：${familySummary}。上次分享的位置：${locationSummary}。`;
-  } catch (error) {
-    console.error("[line.service] failed to build LINE user context", error);
-    return "";
+/**
+ * Single structured entry point: text and location handlers both converge here.
+ * Never fabricates text, never re-classifies. Checks slots, then either asks
+ * for one missing slot, runs the action's forced steps, or clarifies.
+ *
+ * @param input The resolved action, slots, optional shared location and history.
+ */
+async function handleResolvedIntent(input: ResolvedIntent): Promise<void> {
+  const { replyToken, lineUserId, action, slots, location, history } = input;
+  const userText = input.userText;
+  const { systemInstruction, contents } = summarizeContext(
+    history,
+    userText ?? "",
+  );
+
+  if (action === "app_info") {
+    await replyText(replyToken, LINE_MSG.APP_INFO);
+    return;
   }
+  if (action === "unknown") {
+    await replyText(replyToken, LINE_MSG.CLARIFY);
+    return;
+  }
+  if (action === "smalltalk") {
+    let speech = "";
+    try {
+      speech = await summarizeWithContext({ contents, systemInstruction, model });
+    } catch (error) {
+      console.error("[line.service] smalltalk summarize failed", error);
+    }
+    await replyAgentResult(replyToken, speech || LINE_MSG.INFO, null);
+    await persistReplyTurn(lineUserId, userText, speech || LINE_MSG.INFO);
+    return;
+  }
+
+  const spec = getActionSpec(action);
+  const ctx: ActionCtx = {
+    slots: { ...slots },
+    location: location ? { lat: location.lat, lng: location.lng } : undefined,
+    prev: [],
+  };
+
+  const missing = missingSlotsFor(spec.requiredSlots(ctx), ctx);
+  if (missing.length) {
+    const awaitingSlot = missing[0];
+    const ask = spec.askFor[awaitingSlot] ?? LINE_MSG.CLARIFY;
+    if (lineUserId) {
+      const write = await updateLineState(lineUserId, (prev) => ({
+        pendingIntent: {
+          kind: "collecting_slots",
+          action,
+          filledSlots: ctx.slots,
+          location,
+          awaitingSlot,
+          missingSlots: missing,
+        },
+        lastSharedLocation: location ?? prev?.lastSharedLocation,
+      }));
+      if (!write.ok) {
+        await replyText(replyToken, LINE_MSG.RECOVERABLE_ASK);
+        return;
+      }
+    }
+    await replyText(replyToken, ask);
+    return;
+  }
+
+  const userLocation =
+    spec.needsUserLocation && ctx.location
+      ? { latitude: ctx.location.lat, longitude: ctx.location.lng }
+      : undefined;
+  const outcome = await executeAction(spec, ctx, {
+    execTool: (name, args) =>
+      executeLocalTool(name, args, userLocation, undefined, { lineUserId }),
+    summarize: (seedParts) =>
+      summarizeWithContext({ contents, systemInstruction, model, seedParts }),
+  });
+
+  if (outcome.kind === "canned") {
+    await replyAgentResult(replyToken, outcome.speech, null);
+    await persistReplyTurn(lineUserId, userText, outcome.speech);
+    return;
+  }
+
+  if (outcome.kind === "clarify") {
+    if (lineUserId && outcome.persist) {
+      const write = await updateLineState(lineUserId, (prev) => ({
+        pendingIntent: {
+          kind: "collecting_slots",
+          action,
+          filledSlots: ctx.slots,
+          location,
+          awaitingSlot: outcome.persist!.awaitingSlot,
+          candidates: outcome.persist!.candidates,
+          missingSlots: [outcome.persist!.awaitingSlot],
+        },
+        lastSharedLocation: location ?? prev?.lastSharedLocation,
+      }));
+      if (!write.ok) {
+        await replyText(replyToken, LINE_MSG.RECOVERABLE_ASK);
+        return;
+      }
+    }
+    await replyText(replyToken, outcome.message);
+    return;
+  }
+
+  const routeCard = routeCardFromToolResults(outcome.toolResults);
+  const speech = outcome.speech || LINE_MSG.INFO;
+  await replyAgentResult(replyToken, speech, routeCard);
+  await persistReplyTurn(lineUserId, userText, speech);
 }
 
 async function handleTextMessage(
@@ -302,49 +359,63 @@ async function handleTextMessage(
   lineUserId?: string,
 ): Promise<void> {
   try {
-    const [history, lineUserContext] = lineUserId
-      ? await Promise.all([
-          getLineChatHistory(lineUserId),
-          buildLineUserContext(lineUserId),
-        ])
-      : [[], ""];
-    const { systemInstruction, contents } = toGeminiHistory([
-      { role: "system", content: withCurrentDate(LINE_FAMILY_SYSTEM_PROMPT) },
-      ...(lineUserContext
-        ? [{ role: "system" as const, content: lineUserContext }]
-        : []),
-      ...history,
-      { role: "user", content: text },
+    const [history, state] = await Promise.all([
+      lineUserId ? getLineChatHistory(lineUserId) : Promise.resolve([]),
+      lineUserId ? getLineState(lineUserId) : Promise.resolve(null),
     ]);
+    const pending = state?.pendingIntent;
 
-    const result = await runToolLoop(
-      contents,
-      systemInstruction,
-      model,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      false,
-      false,
-      (name, args, userLocation, userId, options) =>
-        executeLocalTool(name, args, userLocation, userId, {
-          ...options,
-          lineUserId,
-        }),
-      { extraTools: lineFamilyTools },
+    const intent = await classifyIntent(
+      { text, pending: toClassifierPending(pending) },
+      { probeBindCode },
     );
 
-    const reply = buildAgentReply(result);
-    await replyAgentResult(replyToken, reply.speech, reply.routeCard);
-    if (lineUserId) {
-      await appendLineChatTurn(lineUserId, text, reply.speech);
+    const action = intent.action;
+    let slots: Record<string, string | number> = { ...intent.slots };
+    let location: SharedLocation | undefined = state?.lastSharedLocation;
+
+    if (pending?.kind === "collecting_slots") {
+      if (action === pending.action) {
+        slots = { ...pending.filledSlots, ...intent.slots };
+        location = pending.location ?? location;
+      } else if (lineUserId) {
+        await clearPendingIntent(lineUserId);
+      }
+    } else if (pending?.kind === "awaiting_domain_choice") {
+      location = pending.location ?? location;
+      if (lineUserId) await clearPendingIntent(lineUserId);
+    } else if (pending?.kind === "awaiting_bind_code" && action !== "bind.code") {
+      if (lineUserId) await clearPendingIntent(lineUserId);
     }
+
+    await handleResolvedIntent({
+      replyToken,
+      lineUserId,
+      action,
+      slots,
+      location,
+      history,
+      userText: text,
+    });
   } catch (error) {
     console.error("[line.service] family agent failed", error);
     await replyText(replyToken, LINE_MSG.INFO);
   }
+}
+
+/**
+ * @param spec The pending action's spec.
+ * @param filledSlots Slots already collected on the pending intent.
+ * @returns True when supplying a shared location would advance the action.
+ */
+function locationAdvancesAction(
+  action: Action,
+  filledSlots: Record<string, string | number>,
+): boolean {
+  const spec = getActionSpec(action);
+  const ctx: ActionCtx = { slots: { ...filledSlots }, prev: [] };
+  const missing = missingSlotsFor(spec.requiredSlots(ctx), ctx);
+  return spec.needsUserLocation === true && missing.length > 0;
 }
 
 async function handleLocationMessage(
@@ -367,13 +438,51 @@ async function handleLocationMessage(
     },
   );
 
-  if (replyToken) {
-    await handleTextMessage(
+  if (!replyToken) return;
+
+  const shared: SharedLocation = {
+    lat: message.latitude,
+    lng: message.longitude,
+    ts: new Date().toISOString(),
+  };
+  const [history, state] = await Promise.all([
+    getLineChatHistory(lineUserId),
+    getLineState(lineUserId),
+  ]);
+  const pending = state?.pendingIntent;
+
+  if (
+    pending?.kind === "collecting_slots" &&
+    locationAdvancesAction(pending.action, pending.filledSlots)
+  ) {
+    await updateLineState(lineUserId, (prev) => ({
+      pendingIntent: prev?.pendingIntent,
+      lastSharedLocation: shared,
+    }));
+    await handleResolvedIntent({
       replyToken,
-      `我的目前位置為${message.latitude}, ${message.longitude}，我要過去`,
       lineUserId,
-    );
+      action: pending.action,
+      slots: pending.filledSlots,
+      location: shared,
+      history,
+      userText: "",
+    });
+    return;
   }
+
+  const write = await updateLineState(lineUserId, () => ({
+    pendingIntent: { kind: "awaiting_domain_choice", location: shared },
+    lastSharedLocation: shared,
+  }));
+  if (!write.ok) {
+    await replyText(replyToken, LINE_MSG.RECOVERABLE_ASK);
+    return;
+  }
+  await replyText(
+    replyToken,
+    "收到您的位置！請問要查這個位置的天氣、找附近無障礙設施，還是規劃前往路線呢？",
+  );
 }
 
 async function handleEvent(event: LineEvent): Promise<void> {

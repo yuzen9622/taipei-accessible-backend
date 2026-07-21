@@ -10,12 +10,15 @@ import { openAiChatTools, memoryTools } from "../../config/ai/tool";
  * @param userId Authenticated user id.
  * @param memoryEnabled When true, memory tools are appended to the catalogue.
  * @param extraTools Additional OpenAI tool specs to append (e.g. LINE family).
+ * @param allowList Declaration filter. `undefined` declares every tool (legacy
+ *   AUTO); any array (including `[]` → zero tools) is a membership filter.
  * @returns A single-entry Tool list holding every function declaration
  */
 export function buildGeminiTools(
   userId?: string,
   memoryEnabled = false,
   extraTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [],
+  allowList?: string[],
 ): Tool[] {
   const specs =
     userId && memoryEnabled
@@ -26,6 +29,7 @@ export function buildGeminiTools(
       (t): t is Extract<OpenAI.Chat.Completions.ChatCompletionTool, { type: "function" }> =>
         t.type === "function",
     )
+    .filter((t) => allowList === undefined || allowList.includes(t.function.name))
     .map((t) => ({
       name: t.function.name,
       description: t.function.description,

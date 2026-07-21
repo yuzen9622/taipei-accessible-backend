@@ -30,13 +30,19 @@ export type { AgentInput, AgentResult, RouteOnceResult, RunToolLoopResult };
 function buildRoutingConfig(
   systemInstruction: string | undefined,
   tools: Tool[],
+  forcing?: { allowedFunctionNames?: string[] },
 ): GenerateContentConfig {
+  const functionCallingConfig =
+    forcing?.allowedFunctionNames && forcing.allowedFunctionNames.length
+      ? {
+          mode: FunctionCallingConfigMode.ANY,
+          allowedFunctionNames: forcing.allowedFunctionNames,
+        }
+      : { mode: FunctionCallingConfigMode.AUTO };
   return {
     systemInstruction,
     tools,
-    toolConfig: {
-      functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
-    },
+    toolConfig: { functionCallingConfig },
     temperature: AGENT_TEMPERATURE,
   };
 }
@@ -120,19 +126,40 @@ export async function runToolLoop(
   allowMemoryWrite: boolean,
   explicitMemoryRequest: boolean,
   execTool: AgentToolExecutor,
-  options: { extraTools?: OpenAI.Chat.Completions.ChatCompletionTool[] } = {},
+  options: {
+    extraTools?: OpenAI.Chat.Completions.ChatCompletionTool[];
+    toolAllowList?: string[];
+    allowedFunctionNames?: string[];
+    seedParts?: string[];
+  } = {},
 ): Promise<RunToolLoopResult> {
   const MAX_ROUNDS = 5;
   const toolCache = new Map<string, string>();
   const extraTools = options.extraTools ?? [];
-  const tools = buildGeminiTools(userId, memoryToolsEnabled, extraTools);
+  const tools = buildGeminiTools(
+    userId,
+    memoryToolsEnabled,
+    extraTools,
+    options.toolAllowList,
+  );
   const toolResults: RunToolLoopResult["toolResults"] = [];
+
+  if (options.seedParts?.length) {
+    contents.push({
+      role: "user",
+      parts: options.seedParts.map((text) => ({ text })),
+    });
+  }
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const response = await googleGenAi.models.generateContent({
       model: useModel,
       contents,
-      config: buildRoutingConfig(systemInstruction, tools),
+      config: buildRoutingConfig(
+        systemInstruction,
+        tools,
+        round === 0 ? { allowedFunctionNames: options.allowedFunctionNames } : undefined,
+      ),
     });
 
     const calls = response.functionCalls;
@@ -151,6 +178,18 @@ export async function runToolLoop(
       const args = (call.args ?? {}) as Record<string, unknown>;
 
       onToolCall?.(name, args);
+
+      // Execution-layer authorization boundary. `undefined` keeps the legacy
+      // AUTO path (no interception); any array (including `[]` = deny-all) is a
+      // membership check — an unauthorized tool is never executed.
+      if (options.toolAllowList !== undefined && !options.toolAllowList.includes(name)) {
+        console.warn(`[agent-manager] blocked unauthorized tool: ${name}`);
+        const blocked = { error: "tool_not_allowed" };
+        onToolResult?.(name, blocked);
+        toolResults.push({ name, args, result: blocked });
+        responseParts.push({ functionResponse: { name, response: blocked } });
+        continue;
+      }
 
       const cacheKey = stableCacheKey(name, args);
       let resultStr: string;
@@ -192,6 +231,36 @@ export async function runToolLoop(
     config: buildFinalConfig(systemInstruction, tools),
   });
   return { text: finalResp.text ?? "", toolResults };
+}
+
+/**
+ * NONE/text-only completion: append optional seed parts (e.g. serialized tool
+ * results) as a user turn, then run a single `generateContent` with function
+ * calling disabled so the model can ONLY emit text. Calls no tools and has no
+ * side effects — used by the LINE deterministic path to summarize after the
+ * executor has already run every step.
+ *
+ * @param params contents/systemInstruction/model plus optional seedParts.
+ * @returns The model's text answer (possibly empty).
+ */
+export async function summarizeWithContext(params: {
+  contents: Content[];
+  systemInstruction: string | undefined;
+  model: string;
+  seedParts?: string[];
+}): Promise<string> {
+  const contents = params.seedParts?.length
+    ? [
+        ...params.contents,
+        { role: "user" as const, parts: params.seedParts.map((text) => ({ text })) },
+      ]
+    : params.contents;
+  const response = await googleGenAi.models.generateContent({
+    model: params.model,
+    contents,
+    config: buildFinalConfig(params.systemInstruction, []),
+  });
+  return response.text ?? "";
 }
 
 /**

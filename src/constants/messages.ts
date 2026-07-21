@@ -154,4 +154,10 @@ export const LINE_MSG = {
   SOS_NOTIFY_TITLE: "緊急求救通知",
   SOS_RESOLVED_TITLE: "求救已解除",
   VIEW_LOCATION: "查看即時位置",
+  APP_INFO:
+    "這是無障礙緊急家人助理 LINE 帳號。你可以在這裡查詢已綁定家人的求救狀態與位置，也能查天氣、空氣品質、公車、火車、地點與無障礙設施。若收到 6 碼綁定碼，直接輸入即可完成綁定。",
+  CLARIFY:
+    "請問您想查公車、火車、天氣、地點、無障礙設施還是路線規劃呢？",
+  RECOVERABLE_ASK:
+    "系統暫時有點忙，麻煩您再說一次剛剛的需求，謝謝！",
 } as const;

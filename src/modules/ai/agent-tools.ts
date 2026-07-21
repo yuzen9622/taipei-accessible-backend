@@ -950,7 +950,11 @@ export async function bindEmergencyContactCode(args: {
       bindCodeExpiresAt: { $gt: new Date() },
     });
     if (!contact) {
-      return JSON.stringify({ ok: false, error: "找不到可用的緊急聯絡人綁定碼" });
+      return JSON.stringify({
+        ok: false,
+        errorCode: "NO_EMERGENCY_BIND_CODE",
+        error: "找不到可用的緊急聯絡人綁定碼",
+      });
     }
 
     contact.bindStatus = "bound";
@@ -985,7 +989,11 @@ export async function bindLineAccountCode(args: {
   try {
     const linkCode = await LineLinkCode.findOne({ code, expiresAt: { $gt: new Date() } });
     if (!linkCode) {
-      return JSON.stringify({ ok: false, error: "找不到可用的 LINE 帳號綁定碼" });
+      return JSON.stringify({
+        ok: false,
+        errorCode: "NO_LINE_BIND_CODE",
+        error: "找不到可用的 LINE 帳號綁定碼",
+      });
     }
 
     const existingBoundUser = await User.findOne({ lineUserId }).select("_id name").lean();
