@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
-const { connect } = vi.hoisted(() => ({ connect: vi.fn() }));
+const { connect, getRouteByToken } = vi.hoisted(() => ({
+  connect: vi.fn(),
+  getRouteByToken: vi.fn(),
+}));
 vi.mock("../../config/ai", () => ({ googleGenAi: { live: { connect } } }));
 vi.mock("../agent/tool-catalog", () => ({ buildGeminiTools: vi.fn(() => []) }));
 vi.mock("../ai/agent-tools", () => ({ executeLocalTool: vi.fn() }));
+vi.mock("../accessible-route/route-token.service", () => ({ getRouteByToken }));
+vi.mock("./transcript-corrector", () => ({
+  correctUserTranscript: vi.fn(async (t: string) => t.replace("珠北", "竹北")),
+}));
 
 import { createLiveBridge } from "./live-bridge";
 import { executeLocalTool } from "../ai/agent-tools";
@@ -19,8 +26,36 @@ function makeWs(): WebSocket {
 }
 
 function makeSession() {
-  return { sendRealtimeInput: vi.fn(), sendToolResponse: vi.fn(), close: vi.fn() };
+  return {
+    sendRealtimeInput: vi.fn(),
+    sendClientContent: vi.fn(),
+    sendToolResponse: vi.fn(),
+    close: vi.fn(),
+  };
 }
+
+const start = [121, 25] as [number, number];
+const end = [121.001, 25] as [number, number];
+const walkRoute = {
+  routeId: "r",
+  routeName: "walk",
+  totalMinutes: 2,
+  transferCount: 0,
+  accessibilityHighlights: [],
+  legs: [{
+    type: "WALK",
+    from: "A",
+    to: "B",
+    distanceM: 100,
+    minutesEst: 2,
+    polyline: [start, end],
+    a11yFacilities: [],
+    steps: [
+      { relativeDirection: "DEPART", absoluteDirection: null, streetName: "路", bogusName: false, area: false, distanceM: 50, location: start, instruction: "向前走" },
+      { relativeDirection: "CONTINUE", absoluteDirection: null, streetName: "路", bogusName: false, area: false, distanceM: 50, location: end, instruction: "抵達路口" },
+    ],
+  }],
+} as any;
 
 describe("createLiveBridge transcript forwarding", () => {
   beforeEach(() => {
@@ -45,15 +80,41 @@ describe("createLiveBridge transcript forwarding", () => {
       },
     });
 
+    await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(2));
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
       type: "transcript",
       role: "user",
       text: "帶我去火車站",
+      final: false,
     }));
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
       type: "transcript",
       role: "model",
       text: "好的，我幫您查詢",
+    }));
+  });
+
+  it("accumulates interim user fragments and emits one corrected final on finished", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return makeSession();
+    });
+    const ws = makeWs();
+
+    await createLiveBridge({ ws, userId: "voice-user" });
+    onmessage?.({ serverContent: { inputTranscription: { text: "我想去珠北" } } });
+    onmessage?.({ serverContent: { inputTranscription: { text: "車站", finished: true } } });
+
+    await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(3));
+    expect(ws.send).toHaveBeenNthCalledWith(1, JSON.stringify({
+      type: "transcript", role: "user", text: "我想去珠北", final: false,
+    }));
+    expect(ws.send).toHaveBeenNthCalledWith(2, JSON.stringify({
+      type: "transcript", role: "user", text: "車站", final: false,
+    }));
+    expect(ws.send).toHaveBeenNthCalledWith(3, JSON.stringify({
+      type: "transcript", role: "user", text: "我想去竹北車站", final: true,
     }));
   });
 });
@@ -96,6 +157,288 @@ describe("createLiveBridge Live config", () => {
     process.env.GEMINI_LIVE_LANGUAGE_CODE = "zh_TW";
     await createLiveBridge({ ws: makeWs(), userId: "u" });
     expect(connect.mock.calls[0][0].config.speechConfig).toBeUndefined();
+  });
+
+  it("adds navigation functions only to the Live tool config", async () => {
+    await createLiveBridge({ ws: makeWs(), userId: "u" });
+    const declarations = connect.mock.calls[0][0].config.tools.at(-1).functionDeclarations;
+    expect(declarations.map((item: any) => item.name)).toEqual([
+      "startNavigation", "stopNavigation", "repeatNavStep", "getActiveNavigationContext",
+    ]);
+  });
+});
+
+describe("createLiveBridge navigation turn arbiter", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getRouteByToken.mockResolvedValue(walkRoute);
+  });
+
+  it("sends a navigation tool response before the queued verbatim speech turn", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws: makeWs(), userId: "u", userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.armRouteToken("cap");
+    onmessage?.({ toolCall: { functionCalls: [{ id: "nav-1", name: "startNavigation", args: {} }] } });
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledOnce());
+    expect(session.sendToolResponse.mock.invocationCallOrder[0])
+      .toBeLessThan(session.sendClientContent.mock.invocationCallOrder[0]);
+    expect(session.sendClientContent.mock.calls[0][0].turns).toContain("請逐字唸出以下導航指引");
+  });
+
+  it("waits for a real idle boundary while ordinary model output is active", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await bridge.armRouteToken("cap");
+    onmessage?.({ serverContent: { modelTurn: { parts: [{ text: "一般回覆" }] } } });
+    bridge.updatePosition({ latitude: 25, longitude: 121 });
+    onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledOnce());
+  });
+
+  it("prioritizes interrupted over turnComplete and replays the whole sentence only at a later idle boundary", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws: makeWs(), userId: "u", userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.armRouteToken("cap");
+    onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledOnce());
+    onmessage?.({ serverContent: { interrupted: true, turnComplete: true } });
+    await Promise.resolve();
+    expect(session.sendClientContent).toHaveBeenCalledOnce();
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledTimes(2));
+    expect(session.sendClientContent.mock.calls[1][0].turns)
+      .toBe(session.sendClientContent.mock.calls[0][0].turns);
+  });
+
+  it("does not overlap turns on timeout and closes after consecutive timeout strikes", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      const bridge = await createLiveBridge({
+        ws, userId: "u", userLocation: { latitude: 25, longitude: 121 },
+      });
+      await bridge.armRouteToken("cap");
+      onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
+      await vi.advanceTimersByTimeAsync(0);
+      onmessage?.({ serverContent: { turnComplete: true } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session.sendClientContent).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(session.sendClientContent).toHaveBeenCalledOnce();
+      expect(ws.close).toHaveBeenCalledWith(4410, "live-turn-timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps queued navigation speech behind every toolCall already enqueued", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    let resolveFirst!: (value: string) => void;
+    let resolveSecond!: (value: string) => void;
+    const first = new Promise<string>((resolve) => { resolveFirst = resolve; });
+    const second = new Promise<string>((resolve) => { resolveSecond = resolve; });
+    vi.mocked(executeLocalTool).mockImplementation((name) => name === "slowFirst" ? first : second);
+
+    const bridge = await createLiveBridge({
+      ws: makeWs(), userId: "u", userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.armRouteToken("cap");
+    onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+
+    onmessage?.({ toolCall: { functionCalls: [{ id: "a", name: "slowFirst", args: {} }] } });
+    onmessage?.({ serverContent: { turnComplete: true } });
+    onmessage?.({ toolCall: { functionCalls: [{ id: "b", name: "slowSecond", args: {} }] } });
+    resolveFirst(JSON.stringify({ ok: true }));
+    await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledWith(
+      "slowSecond", {}, { latitude: 25, longitude: 121 }, "u",
+    ));
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+
+    resolveSecond(JSON.stringify({ ok: true }));
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledTimes(3));
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledOnce());
+  });
+
+  it("keeps only the latest asynchronously resolved route token", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    const ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    let resolveOld!: (value: typeof walkRoute) => void;
+    let resolveNew!: (value: typeof walkRoute) => void;
+    const oldLookup = new Promise<typeof walkRoute>((resolve) => { resolveOld = resolve; });
+    const newLookup = new Promise<typeof walkRoute>((resolve) => { resolveNew = resolve; });
+    getRouteByToken.mockImplementation((token) => token === "old" ? oldLookup : newLookup);
+    const oldRoute = structuredClone(walkRoute);
+    oldRoute.legs[0].steps[0].instruction = "舊路線";
+    const newRoute = structuredClone(walkRoute);
+    newRoute.legs[0].steps[0].instruction = "新路線";
+
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+    const oldArm = bridge.armRouteToken("old");
+    const newArm = bridge.armRouteToken("new");
+    resolveNew(newRoute);
+    await newArm;
+    resolveOld(oldRoute);
+    await oldArm;
+    onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+
+    const messages = vi.mocked(ws.send).mock.calls
+      .map(([value]) => value)
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => JSON.parse(value));
+    const startMessage = messages.find((message) => message.type === "nav.start");
+    expect(startMessage.steps[0].instruction).toBe("新路線");
+  });
+
+  it("processes the latest position on the trailing edge without a third update", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("cap");
+      onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
+      await vi.advanceTimersByTimeAsync(0);
+      onmessage?.({ serverContent: { turnComplete: true } });
+      await vi.advanceTimersByTimeAsync(0);
+
+      bridge.updatePosition({ latitude: start[1], longitude: start[0] });
+      onmessage?.({ serverContent: { turnComplete: true } });
+      await vi.advanceTimersByTimeAsync(0);
+      bridge.updatePosition({ latitude: end[1], longitude: end[0] });
+      await vi.advanceTimersByTimeAsync(500);
+
+      const messages = vi.mocked(ws.send).mock.calls
+        .map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+      expect(messages.some((message) => message.type === "nav.arrived")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns active navigation context without sending it through the general tool executor", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const transitRoute = structuredClone(walkRoute);
+    transitRoute.routeName = "bus route";
+    transitRoute.legs = [
+      walkRoute.legs[0],
+      {
+        type: "BUS",
+        routeName: "307",
+        departureStop: "甲站",
+        arrivalStop: "乙站",
+        waitInfo: { time: null, source: "unavailable" },
+        estimatedWaitMinutes: 0,
+        direction: 1,
+        polyline: [end, [121.01, 25]],
+        departureStopA11y: [],
+        arrivalStopA11y: [],
+      },
+    ];
+    getRouteByToken.mockResolvedValue(transitRoute);
+    const bridge = await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await bridge.armRouteToken("cap");
+    onmessage?.({ toolCall: { functionCalls: [{ id: "start", name: "startNavigation", args: {} }] } });
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    onmessage?.({ toolCall: { functionCalls: [{ id: "context", name: "getActiveNavigationContext", args: {} }] } });
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledTimes(2));
+
+    const output = session.sendToolResponse.mock.calls[1][0]
+      .functionResponses[0].response.output;
+    expect(JSON.parse(output)).toMatchObject({
+      active: true,
+      destination: "乙站",
+      transit: {
+        relation: "upcoming",
+        mode: "BUS",
+        routeName: "307",
+        from: "甲站",
+        direction: 1,
+      },
+    });
+    expect(executeLocalTool).not.toHaveBeenCalled();
+  });
+
+  it("passes the latest navigation position to ordinary realtime tools", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    vi.mocked(executeLocalTool).mockResolvedValue(JSON.stringify({ ok: true }));
+    const bridge = await createLiveBridge({
+      ws: makeWs(),
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
+    });
+    bridge.updatePosition({ latitude: 25.05, longitude: 121.55, accuracy: 8 });
+    onmessage?.({ toolCall: { functionCalls: [{ id: "weather", name: "getEnvironmentInfo", args: {} }] } });
+    await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledWith(
+      "getEnvironmentInfo",
+      {},
+      { latitude: 25.05, longitude: 121.55, accuracy: 8 },
+      "u",
+    ));
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
   });
 });
 

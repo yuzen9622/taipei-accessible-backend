@@ -1,6 +1,7 @@
 import { WebSocket } from "ws";
 import {
   FunctionCall,
+  FunctionDeclaration,
   FunctionResponse,
   LiveConnectConfig,
   LiveServerMessage,
@@ -13,11 +14,28 @@ import { buildGeminiTools } from "../agent/tool-catalog";
 import { executeLocalTool } from "../ai/agent-tools";
 import { buildVoiceSystemPrompt } from "./voice-prompt";
 import { normalizeVoiceTranscript } from "./transcript-normalizer";
+import { correctUserTranscript } from "./transcript-corrector";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
+import { getRouteByToken } from "../accessible-route/route-token.service";
+import { NavigationSession, type NavEffect } from "./navigation-session";
+import type { NavPosition } from "./navigation.schema";
 
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const ERROR_SUMMARY_MAX_CHARS = 200;
 const INPUT_AUDIO_MIME_TYPE = "audio/pcm;rate=16000";
+const POSITION_MIN_INTERVAL_MS = 500;
+const TURN_TIMEOUT_MS = 15_000;
+const TURN_TIMEOUT_STRIKES = 2;
+export const LIVE_TURN_TIMEOUT_CLOSE_CODE = 4410;
+
+type LiveTurnState = "IDLE" | "USER_INPUT" | "TOOL_PENDING" | "AWAIT_MODEL" | "MODEL_OUTPUT";
+
+const NAV_FUNCTIONS: FunctionDeclaration[] = [
+  { name: "startNavigation", description: "開始已由使用者在畫面選定的無障礙路線導航", parametersJsonSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "stopNavigation", description: "停止目前的逐步導航", parametersJsonSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "repeatNavStep", description: "重播目前導航步驟", parametersJsonSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "getActiveNavigationContext", description: "取得目前導航的步驟、目的地，以及目前或下一段大眾運輸資料；解析『那班公車』『下一段』『目的地』等指涉時使用", parametersJsonSchema: { type: "object", properties: {}, additionalProperties: false } },
+];
 
 /**
  * Resolves the Live session sampling temperature. Defaults to the shared
@@ -58,6 +76,9 @@ export interface LiveBridgeOptions {
 
 export interface LiveBridge {
   sendAudio(data: Buffer): void;
+  armRouteToken(routeToken: string): Promise<void>;
+  updatePosition(position: NavPosition): void;
+  cancelNav(): void;
   close(): void;
 }
 
@@ -140,10 +161,65 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
   const { ws, userId, userLocation } = options;
   let session: Session | null = null;
   let closedByGateway = false;
+  let disposed = false;
   let cumulativeTokens = 0;
+  let liveState: LiveTurnState = "IDLE";
+  let navSpeaking = false;
+  let turnTimeout: ReturnType<typeof setTimeout> | null = null;
+  let turnTimeoutStrikes = 0;
+  let positionTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastPositionProcessedAt = 0;
+  let latestPosition: NavPosition | null = userLocation ?? null;
+  let userTranscriptBuffer = "";
+  let armGen = 0;
+  let messageQueue = Promise.resolve();
+  let pendingToolMessages = 0;
+  const navSession = new NavigationSession();
 
   const sendJson = (payload: Record<string, unknown>): void => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+    if (!disposed && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+  };
+
+  const applyEffect = (effect: NavEffect): void => {
+    for (const event of effect.events) sendJson(event as unknown as Record<string, unknown>);
+  };
+
+  const clearTurnTimeout = (): void => {
+    if (turnTimeout) clearTimeout(turnTimeout);
+    turnTimeout = null;
+  };
+
+  const closeForTurnTimeout = (): void => {
+    if (disposed || ws.readyState !== WebSocket.OPEN) return;
+    ws.close(LIVE_TURN_TIMEOUT_CLOSE_CODE, "live-turn-timeout");
+  };
+
+  const startTurnTimeout = (): void => {
+    clearTurnTimeout();
+    turnTimeout = setTimeout(() => {
+      if (disposed || !navSpeaking || liveState === "IDLE") return;
+      turnTimeoutStrikes++;
+      console.warn("[voice] navigation turn timed out", JSON.stringify({ strikes: turnTimeoutStrikes }));
+      if (turnTimeoutStrikes >= TURN_TIMEOUT_STRIKES) {
+        closeForTurnTimeout();
+        return;
+      }
+      startTurnTimeout();
+    }, TURN_TIMEOUT_MS);
+  };
+
+  const driveNavigationSpeech = (): void => {
+    if (disposed || !session || ws.readyState !== WebSocket.OPEN) return;
+    if (liveState !== "IDLE" || navSpeaking || pendingToolMessages > 0) return;
+    const text = navSession.takeNextSpeech();
+    if (!text) return;
+    session.sendClientContent({
+      turns: `請逐字唸出以下導航指引，不得增減內容：${text}`,
+      turnComplete: true,
+    });
+    navSpeaking = true;
+    liveState = "AWAIT_MODEL";
+    startTurnTimeout();
   };
 
   const forwardAudio = (base64Data: string): void => {
@@ -162,18 +238,41 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
     const functionResponses: FunctionResponse[] = [];
     for (const call of functionCalls) {
       const name = call.name ?? "";
+      if (navSpeaking) {
+        functionResponses.push({ id: call.id, name, response: { error: "navigation speech turn cannot execute tools" } });
+        continue;
+      }
       sendJson({ type: "tool_call", name });
       const startedAt = Date.now();
       let ok = true;
       let response: Record<string, unknown>;
       let toolResult: unknown;
       try {
-        const result = await executeLocalTool(
-          name,
-          (call.args ?? {}) as Record<string, unknown>,
-          userLocation,
-          userId,
-        );
+        let result: string;
+        if (name === "startNavigation") {
+          if (positionTimer) {
+            clearTimeout(positionTimer);
+            positionTimer = null;
+          }
+          const effect = navSession.start(latestPosition ?? undefined);
+          applyEffect(effect);
+          result = JSON.stringify({ ok: effect.ok, message: effect.ok ? "已開始導航" : "尚未選擇路線" });
+        } else if (name === "stopNavigation") {
+          applyEffect(navSession.stop("user_voice"));
+          result = JSON.stringify({ ok: true, message: "已停止導航" });
+        } else if (name === "repeatNavStep") {
+          applyEffect(navSession.repeatCurrent());
+          result = JSON.stringify({ ok: true, message: "將重播目前步驟" });
+        } else if (name === "getActiveNavigationContext") {
+          result = JSON.stringify(navSession.getConversationContext());
+        } else {
+          result = await executeLocalTool(
+            name,
+            (call.args ?? {}) as Record<string, unknown>,
+            latestPosition ?? userLocation,
+            userId,
+          );
+        }
         response = { output: result };
         try {
           toolResult = JSON.parse(result);
@@ -195,21 +294,37 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
       sendJson({ type: "tool_result", name, ok, durationMs, result: toolResult, args: call.args ?? {} });
       functionResponses.push({ id: call.id, name, response });
     }
-    session?.sendToolResponse({ functionResponses });
+    if (!disposed && session) session.sendToolResponse({ functionResponses });
+  };
+
+  const finalizeUserTranscript = async (): Promise<void> => {
+    const raw = userTranscriptBuffer.trim();
+    userTranscriptBuffer = "";
+    if (!raw) return;
+    const corrected = await correctUserTranscript(raw);
+    if (disposed) return;
+    sendJson({ type: "transcript", role: "user", text: corrected, final: true });
   };
 
   const handleServerMessage = async (message: LiveServerMessage): Promise<void> => {
+    if (disposed) return;
     const content = message.serverContent;
     if (content) {
+      if (content.modelTurn?.parts?.length) {
+        liveState = "MODEL_OUTPUT";
+        if (userTranscriptBuffer.trim()) void finalizeUserTranscript();
+      }
       for (const part of content.modelTurn?.parts ?? []) {
         if (part.inlineData?.data) forwardAudio(part.inlineData.data);
       }
-      if (content.inputTranscription?.text) {
-        sendJson({
-          type: "transcript",
-          role: "user",
-          text: normalizeVoiceTranscript(content.inputTranscription.text),
-        });
+      if (content.inputTranscription) {
+        if (content.inputTranscription.text) {
+          liveState = "USER_INPUT";
+          const piece = normalizeVoiceTranscript(content.inputTranscription.text);
+          userTranscriptBuffer += piece;
+          sendJson({ type: "transcript", role: "user", text: piece, final: false });
+        }
+        if (content.inputTranscription.finished) void finalizeUserTranscript();
       }
       if (content.outputTranscription?.text) {
         sendJson({
@@ -218,11 +333,29 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
           text: normalizeVoiceTranscript(content.outputTranscription.text),
         });
       }
-      if (content.interrupted) sendJson({ type: "interrupted" });
-      if (content.turnComplete) sendJson({ type: "turn.complete" });
+      if (content.interrupted) {
+        if (userTranscriptBuffer.trim()) void finalizeUserTranscript();
+        navSession.onInterrupted();
+        navSpeaking = false;
+        clearTurnTimeout();
+        liveState = "USER_INPUT";
+        sendJson({ type: "interrupted" });
+      }
     }
     if (message.toolCall?.functionCalls?.length) {
+      if (content?.interrupted) return;
+      liveState = "TOOL_PENDING";
       await handleToolCalls(message.toolCall.functionCalls);
+      if (!disposed) liveState = "AWAIT_MODEL";
+    } else if (content?.turnComplete && !content.interrupted) {
+      if (userTranscriptBuffer.trim()) void finalizeUserTranscript();
+      if (navSpeaking) navSession.onTurnComplete();
+      navSpeaking = false;
+      turnTimeoutStrikes = 0;
+      clearTurnTimeout();
+      liveState = "IDLE";
+      sendJson({ type: "turn.complete" });
+      driveNavigationSpeech();
     }
     if (message.usageMetadata?.totalTokenCount != null) {
       cumulativeTokens += message.usageMetadata.totalTokenCount;
@@ -235,7 +368,10 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
     inputAudioTranscription: {},
     outputAudioTranscription: {},
     systemInstruction: withCurrentDate(buildVoiceSystemPrompt(userLocation)),
-    tools: buildGeminiTools(userId, false),
+    tools: [
+      ...buildGeminiTools(userId, false),
+      { functionDeclarations: NAV_FUNCTIONS },
+    ],
     temperature: parseLiveTemperature(),
   };
   const languageCode = parseLiveLanguageCode();
@@ -246,12 +382,19 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
     config: liveConfig,
     callbacks: {
       onmessage: (message: LiveServerMessage) => {
-        handleServerMessage(message).catch((err) => {
-          console.error(
-            "[voice] server message handling failed:",
-            summarizeError(err instanceof Error ? err.message : String(err)),
-          );
-        });
+        const hasToolCalls = Boolean(message.toolCall?.functionCalls?.length);
+        if (hasToolCalls) pendingToolMessages++;
+        messageQueue = messageQueue
+          .then(() => handleServerMessage(message))
+          .catch((err) => {
+            console.error(
+              "[voice] server message handling failed:",
+              summarizeError(err instanceof Error ? err.message : String(err)),
+            );
+          })
+          .finally(() => {
+            if (hasToolCalls) pendingToolMessages = Math.max(0, pendingToolMessages - 1);
+          });
       },
       onerror: (e) => {
         console.error("[voice] live session error:", summarizeError(e?.message));
@@ -266,12 +409,61 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
 
   return {
     sendAudio(data: Buffer): void {
+      if (disposed || !session) return;
+      liveState = "USER_INPUT";
       session?.sendRealtimeInput({
         audio: { data: data.toString("base64"), mimeType: INPUT_AUDIO_MIME_TYPE },
       });
     },
+    async armRouteToken(routeToken: string): Promise<void> {
+      const generation = ++armGen;
+      const route = await getRouteByToken(routeToken);
+      if (disposed || generation !== armGen) return;
+      if (!route) {
+        applyEffect({
+          ok: false,
+          events: [{ type: "nav.error", code: "NAV_ROUTE_INVALID", message: "路線已過期，請重新規劃" }],
+        });
+        return;
+      }
+      applyEffect(navSession.armRoute(route));
+    },
+    updatePosition(position: NavPosition): void {
+      if (disposed) return;
+      latestPosition = position;
+      const now = Date.now();
+      const elapsed = now - lastPositionProcessedAt;
+      const processLatest = () => {
+        positionTimer = null;
+        if (disposed || !latestPosition) return;
+        lastPositionProcessedAt = Date.now();
+        applyEffect(navSession.onPosition(latestPosition));
+        driveNavigationSpeech();
+      };
+      if (lastPositionProcessedAt === 0 || elapsed >= POSITION_MIN_INTERVAL_MS) {
+        if (positionTimer) clearTimeout(positionTimer);
+        processLatest();
+        return;
+      }
+      if (!positionTimer) {
+        positionTimer = setTimeout(processLatest, POSITION_MIN_INTERVAL_MS - elapsed);
+      }
+    },
+    cancelNav(): void {
+      if (positionTimer) clearTimeout(positionTimer);
+      positionTimer = null;
+      applyEffect(navSession.cancel());
+    },
     close(): void {
+      if (disposed) return;
       closedByGateway = true;
+      disposed = true;
+      pendingToolMessages = 0;
+      armGen++;
+      if (positionTimer) clearTimeout(positionTimer);
+      positionTimer = null;
+      clearTurnTimeout();
+      navSession.dispose();
       try {
         session?.close();
       } catch (err) {
@@ -280,6 +472,7 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
           summarizeError(err instanceof Error ? err.message : String(err)),
         );
       }
+      session = null;
     },
   };
 }

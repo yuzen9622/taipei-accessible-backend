@@ -2,11 +2,24 @@ import http from "http";
 import { WebSocketServer, WebSocket, RawData } from "ws";
 import { verifyAccessToken } from "../../config/jwt";
 import { createLiveBridge, LiveBridge } from "./live-bridge";
+import { NavPositionSchema, NavSetRouteSchema, type NavPosition } from "./navigation.schema";
 
 const VOICE_WS_PATH = "/api/v1/voice/ws";
 const DEFAULT_AUTH_TIMEOUT_MS = 5000;
 const HEARTBEAT_INTERVAL_MS = 30000;
 const MAX_MISSED_PONGS = 2;
+export const CONTROL_FRAME_MAX_BYTES = 8 * 1024;
+const SESSION_END_BYPASS_MAX_BYTES = 1024;
+const CONTROL_FRAMES_PER_SEC = 40;
+const CONTROL_FRAMES_BURST = 80;
+const CONTROL_BYTES_PER_SEC = 320 * 1024;
+const CONTROL_BYTES_BURST = 640 * 1024;
+const CONTROL_MSGS_PER_SEC = 20;
+const CONTROL_MSGS_BURST = 40;
+const POSITION_MSGS_PER_SEC = 15;
+const POSITION_MSGS_BURST = 30;
+const CONTROL_RATE_CLOSE_CODE = 4408;
+const VOICE_MAX_PAYLOAD_BYTES = 64 * 1024;
 
 interface VoiceConnection {
   ws: WebSocket;
@@ -18,6 +31,27 @@ export interface AttachVoiceWebSocketOptions {
 }
 
 const connections = new Map<string, VoiceConnection>();
+
+class TokenBucket {
+  private tokens: number;
+  private updatedAt = Date.now();
+
+  constructor(private readonly refillPerSec: number, private readonly capacity: number) {
+    this.tokens = capacity;
+  }
+
+  take(cost = 1): boolean {
+    const now = Date.now();
+    this.tokens = Math.min(
+      this.capacity,
+      this.tokens + ((now - this.updatedAt) / 1000) * this.refillPerSec,
+    );
+    this.updatedAt = now;
+    if (this.tokens < cost) return false;
+    this.tokens -= cost;
+    return true;
+  }
+}
 
 /**
  * Converts a ws RawData payload into a Buffer.
@@ -63,6 +97,14 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
   let userId: string | null = null;
   let bridge: LiveBridge | null = null;
   let missedPongs = 0;
+  let disposed = false;
+  let connGen = 0;
+  let pendingRouteToken: string | null = null;
+  let pendingPosition: NavPosition | null = null;
+  const frameBucket = new TokenBucket(CONTROL_FRAMES_PER_SEC, CONTROL_FRAMES_BURST);
+  const byteBucket = new TokenBucket(CONTROL_BYTES_PER_SEC, CONTROL_BYTES_BURST);
+  const controlBucket = new TokenBucket(CONTROL_MSGS_PER_SEC, CONTROL_MSGS_BURST);
+  const positionBucket = new TokenBucket(POSITION_MSGS_PER_SEC, POSITION_MSGS_BURST);
 
   const sendJson = (payload: Record<string, unknown>): void => {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
@@ -86,9 +128,14 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       ws.close(4401, "unauthorized");
       return;
     }
+    const buffer = rawDataToBuffer(data);
+    if (buffer.byteLength > CONTROL_FRAME_MAX_BYTES) {
+      ws.close(4401, "unauthorized");
+      return;
+    }
     let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(rawDataToBuffer(data).toString("utf8"));
+      parsed = JSON.parse(buffer.toString("utf8"));
     } catch {
       ws.close(4401, "unauthorized");
       return;
@@ -106,6 +153,7 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       return;
     }
     authenticated = true;
+    const generation = ++connGen;
     clearTimeout(authTimer);
     userId = id;
     const userLocation = parseUserLocation(parsed.userLocation);
@@ -114,8 +162,16 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     const connection: VoiceConnection = { ws, bridge: null };
     connections.set(id, connection);
     try {
-      bridge = await createLiveBridge({ ws, userId: id, userLocation });
-      connection.bridge = bridge;
+      const createdBridge = await createLiveBridge({ ws, userId: id, userLocation });
+      if (disposed
+        || generation !== connGen
+        || ws.readyState !== WebSocket.OPEN
+        || connections.get(id) !== connection) {
+        createdBridge.close();
+        return;
+      }
+      bridge = createdBridge;
+      connection.bridge = createdBridge;
     } catch (err) {
       console.error(
         "[voice] live connect failed:",
@@ -126,18 +182,73 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       return;
     }
     sendJson({ type: "session.ready" });
+    if (pendingRouteToken) void bridge.armRouteToken(pendingRouteToken);
+    if (pendingPosition) bridge.updatePosition(pendingPosition);
+    pendingRouteToken = null;
+    pendingPosition = null;
   };
 
   const handleControlMessage = (data: RawData): void => {
+    const buffer = rawDataToBuffer(data);
+    const frameAllowed = frameBucket.take();
+    const bytesAllowed = byteBucket.take(buffer.byteLength);
+    const bypassCandidate = buffer.byteLength <= SESSION_END_BYPASS_MAX_BYTES;
+    if ((!frameAllowed || !bytesAllowed) && !bypassCandidate) {
+      ws.close(CONTROL_RATE_CLOSE_CODE, "control-rate-limit");
+      return;
+    }
+    if (buffer.byteLength > CONTROL_FRAME_MAX_BYTES) {
+      console.warn("[voice] ignoring oversized control frame");
+      return;
+    }
     let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(rawDataToBuffer(data).toString("utf8"));
+      parsed = JSON.parse(buffer.toString("utf8"));
     } catch {
       console.warn("[voice] ignoring unparseable text message");
       return;
     }
     if (parsed?.type === "session.end") {
+      disposed = true;
+      connGen++;
+      pendingRouteToken = null;
+      pendingPosition = null;
       ws.close(1000, "client-end");
+      return;
+    }
+    if (!frameAllowed || !bytesAllowed) {
+      ws.close(CONTROL_RATE_CLOSE_CODE, "control-rate-limit");
+      return;
+    }
+    if (parsed?.type === "nav.setRoute") {
+      if (!controlBucket.take()) return;
+      const result = NavSetRouteSchema.safeParse({ routeToken: parsed.routeToken });
+      if (!result.success) {
+        sendJson({ type: "nav.error", code: "NAV_ROUTE_INVALID", message: "路線憑證格式無效" });
+        return;
+      }
+      if (bridge) void bridge.armRouteToken(result.data.routeToken);
+      else pendingRouteToken = result.data.routeToken;
+      return;
+    }
+    if (parsed?.type === "nav.position") {
+      if (!positionBucket.take()) return;
+      const result = NavPositionSchema.safeParse({
+        latitude: parsed.latitude,
+        longitude: parsed.longitude,
+        ...(parsed.heading === undefined ? {} : { heading: parsed.heading }),
+        ...(parsed.accuracy === undefined ? {} : { accuracy: parsed.accuracy }),
+      });
+      if (!result.success) return;
+      if (bridge) bridge.updatePosition(result.data);
+      else pendingPosition = result.data;
+      return;
+    }
+    if (parsed?.type === "nav.cancel") {
+      if (!controlBucket.take()) return;
+      pendingRouteToken = null;
+      pendingPosition = null;
+      bridge?.cancelNav();
       return;
     }
     console.warn(`[voice] ignoring unexpected message type: ${String(parsed?.type)}`);
@@ -160,6 +271,10 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
   });
 
   ws.on("close", () => {
+    disposed = true;
+    connGen++;
+    pendingRouteToken = null;
+    pendingPosition = null;
     clearTimeout(authTimer);
     clearInterval(heartbeatTimer);
     bridge?.close();
@@ -169,6 +284,8 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
   });
 
   ws.on("error", (err) => {
+    disposed = true;
+    connGen++;
     console.error("[voice] socket error:", err.message);
   });
 }
@@ -186,7 +303,7 @@ export function attachVoiceWebSocket(
   options: AttachVoiceWebSocketOptions = {},
 ): void {
   const authTimeoutMs = options.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: VOICE_MAX_PAYLOAD_BYTES });
 
   server.on("upgrade", (request, socket, head) => {
     const pathname = new URL(request.url ?? "", "http://localhost").pathname;

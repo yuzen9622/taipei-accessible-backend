@@ -42,3 +42,16 @@ describe("buildVoiceSystemPrompt multi-tool chaining guidance", () => {
     expect(prompt).not.toContain("一次只講重點");
   });
 });
+
+describe("buildVoiceSystemPrompt active-navigation context", () => {
+  it("resolves transit and weather references before asking the user again", () => {
+    const prompt = buildVoiceSystemPrompt();
+
+    expect(prompt).toContain("先呼叫 getActiveNavigationContext");
+    expect(prompt).toContain("transit.routeName、transit.from、transit.direction");
+    expect(prompt).toContain("呼叫 getBusArrival");
+    expect(prompt).toContain("後端會使用導航最新位置");
+    expect(prompt).toContain("只有 active=false 或必要欄位確實不存在時才追問");
+    expect(prompt).toContain("不得把其他運具冒充公車即時資料");
+  });
+});

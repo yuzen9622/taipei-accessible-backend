@@ -5,7 +5,13 @@ import WebSocket from "ws";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("./live-bridge", () => ({
-  createLiveBridge: vi.fn(async () => ({ sendAudio: vi.fn(), close: vi.fn() })),
+  createLiveBridge: vi.fn(async () => ({
+    sendAudio: vi.fn(),
+    armRouteToken: vi.fn(),
+    updatePosition: vi.fn(),
+    cancelNav: vi.fn(),
+    close: vi.fn(),
+  })),
 }));
 
 import app from "../../app";
@@ -109,6 +115,7 @@ afterEach(() => {
     ws.removeAllListeners();
     ws.terminate();
   }
+  vi.clearAllMocks();
 });
 
 afterAll(async () => {
@@ -137,6 +144,15 @@ describe("voice gateway", () => {
     ws.send(Buffer.from([0x01, 0x02, 0x03]));
     const { code } = await waitForClose(ws);
     expect(code).toBe(4401);
+  });
+
+  it("closes 4401 on an oversized unauthenticated frame before creating Live", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const closed = waitForClose(ws);
+    ws.send(JSON.stringify({ type: "session.start", token: "x".repeat(9_000) }));
+    expect((await closed).code).toBe(4401);
+    expect(mockCreateLiveBridge).not.toHaveBeenCalled();
   });
 
   it("replies session.ready and keeps the connection alive for a valid token", async () => {
@@ -171,6 +187,135 @@ describe("voice gateway", () => {
     expect(mockCreateLiveBridge).toHaveBeenCalledWith(expect.objectContaining({
       userLocation: undefined,
     }));
+  });
+
+  it("routes nav.setRoute, nav.position, and nav.cancel to the bridge", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-nav");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1).value;
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "capability" }));
+    ws.send(JSON.stringify({ type: "nav.position", latitude: 25, longitude: 121, accuracy: 5 }));
+    ws.send(JSON.stringify({ type: "nav.cancel" }));
+    await vi.waitFor(() => expect(bridge.armRouteToken).toHaveBeenCalledWith("capability"));
+    expect(bridge.updatePosition).toHaveBeenCalledWith({ latitude: 25, longitude: 121, accuracy: 5 });
+    expect(bridge.cancelNav).toHaveBeenCalledOnce();
+  });
+
+  it("emits nav.error for a parsed nav.setRoute with an invalid token", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-invalid-cap");
+    await ready;
+    const message = waitForJson(ws);
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "" }));
+    await expect(message).resolves.toMatchObject({ type: "nav.error", code: "NAV_ROUTE_INVALID" });
+  });
+
+  it("ignores an oversized authenticated control frame before JSON parsing", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-oversized");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1).value;
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "x".repeat(9_000) }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(bridge.armRouteToken).not.toHaveBeenCalled();
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("keeps latest route and position while Live bridge creation is pending", async () => {
+    let resolveBridge!: (bridge: any) => void;
+    const pending = new Promise<any>((resolve) => { resolveBridge = resolve; });
+    mockCreateLiveBridge.mockImplementationOnce(() => pending);
+    const ws = connect();
+    await waitForOpen(ws);
+    sendSessionStart(ws, "voice-user-pending");
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "first" }));
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "latest" }));
+    ws.send(JSON.stringify({ type: "nav.position", latitude: 25, longitude: 121 }));
+    const bridge = {
+      sendAudio: vi.fn(), armRouteToken: vi.fn(), updatePosition: vi.fn(), cancelNav: vi.fn(), close: vi.fn(),
+    };
+    const ready = waitForJson(ws);
+    resolveBridge(bridge);
+    await expect(ready).resolves.toEqual({ type: "session.ready" });
+    await vi.waitFor(() => expect(bridge.armRouteToken).toHaveBeenCalledWith("latest"));
+    expect(bridge.armRouteToken).toHaveBeenCalledOnce();
+    expect(bridge.updatePosition).toHaveBeenCalledWith({ latitude: 25, longitude: 121 });
+  });
+
+  it("closes a bridge that resolves after its WebSocket was already closed", async () => {
+    let resolveBridge!: (bridge: any) => void;
+    const pending = new Promise<any>((resolve) => { resolveBridge = resolve; });
+    mockCreateLiveBridge.mockImplementationOnce(() => pending);
+    const ws = connect();
+    await waitForOpen(ws);
+    sendSessionStart(ws, "voice-user-close-race");
+    const closed = waitForClose(ws);
+    ws.close(1000, "test-close");
+    await closed;
+    const bridge = {
+      sendAudio: vi.fn(), armRouteToken: vi.fn(), updatePosition: vi.fn(), cancelNav: vi.fn(), close: vi.fn(),
+    };
+    resolveBridge(bridge);
+    await vi.waitFor(() => expect(bridge.close).toHaveBeenCalledOnce());
+    expect(bridge.armRouteToken).not.toHaveBeenCalled();
+  });
+
+  it("rate-limits high-frequency positions before bridge processing", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-position-flood");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1).value;
+    for (let i = 0; i < 50; i++) {
+      ws.send(JSON.stringify({ type: "nav.position", latitude: 25, longitude: 121 + i / 100_000 }));
+    }
+    await vi.waitFor(() => expect(bridge.updatePosition).toHaveBeenCalled());
+    expect(bridge.updatePosition.mock.calls.length).toBeLessThanOrEqual(30);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("closes the connection when the pre-parse per-connection frame budget is exhausted", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-frame-flood");
+    await ready;
+    const closed = waitForClose(ws);
+    for (let i = 0; i < 90; i++) ws.send(JSON.stringify({ type: `unknown.${i}`, pad: "x".repeat(1100) }));
+    const result = await closed;
+    expect(result.code).toBe(4408);
+    expect(result.reason).toBe("control-rate-limit");
+  });
+
+  it("uses WebSocket close as the session.end termination path", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-end");
+    await ready;
+    const closed = waitForClose(ws);
+    ws.send(JSON.stringify({ type: "session.end" }));
+    expect(await closed).toEqual({ code: 1000, reason: "client-end" });
+  });
+
+  it("still accepts session.end after the parsed-control budget is exhausted", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-end-after-budget");
+    await ready;
+    for (let i = 0; i < 45; i++) ws.send(JSON.stringify({ type: "nav.cancel" }));
+    const closed = waitForClose(ws);
+    ws.send(JSON.stringify({ type: "session.end" }));
+    expect(await closed).toEqual({ code: 1000, reason: "client-end" });
   });
 
   it("closes the first connection with 4409 when the same user reconnects", async () => {

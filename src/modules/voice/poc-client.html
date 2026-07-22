@@ -145,6 +145,7 @@
       let playHead = 0;
       let lastSpeechEndAt = null;
       let awaitingFirstAudio = false;
+      let userLineEl = null;
 
       function log(el, text, cls) {
         const div = document.createElement("div");
@@ -163,20 +164,13 @@
           constructor() {
             super();
             this._buf = [];
-            this._target = Math.round(sampleRate / ${IN_RATE});
-            this._count = 0;
+            this._frame = ${IN_RATE / 10};
           }
           process(inputs) {
             const ch = inputs[0][0];
             if (!ch) return true;
-            for (let i = 0; i < ch.length; i++) {
-              this._count++;
-              if (this._count >= this._target) {
-                this._count = 0;
-                this._buf.push(ch[i]);
-              }
-            }
-            if (this._buf.length >= ${IN_RATE / 10}) {
+            for (let i = 0; i < ch.length; i++) this._buf.push(ch[i]);
+            if (this._buf.length >= this._frame) {
               const out = new Int16Array(this._buf.length);
               for (let i = 0; i < this._buf.length; i++) {
                 const s = Math.max(-1, Math.min(1, this._buf[i]));
@@ -195,7 +189,14 @@
         micStream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
-        audioCtx = new AudioContext();
+        audioCtx = new AudioContext({ sampleRate: IN_RATE });
+        if (audioCtx.sampleRate !== IN_RATE) {
+          console.warn(
+            "[voice] 瀏覽器未套用 16kHz 擷取取樣率，實得 " +
+              audioCtx.sampleRate +
+              "Hz；上行音訊 rate 可能與後端宣告的 16000 不符",
+          );
+        }
         const blob = new Blob([captureWorklet], { type: "application/javascript" });
         const url = URL.createObjectURL(blob);
         await audioCtx.audioWorklet.addModule(url);
@@ -283,7 +284,7 @@
               await startMic();
               break;
             case "transcript":
-              log($("transcripts"), msg.text, "line " + msg.role);
+              handleTranscript(msg);
               break;
             case "tool_call":
               log($("events"), "→ 呼叫工具 " + msg.name, "evt");
@@ -316,7 +317,27 @@
         $("disconnect").disabled = false;
       }
 
+      function handleTranscript(msg) {
+        if (msg.role !== "user") {
+          log($("transcripts"), msg.text, "line model");
+          return;
+        }
+        if (!userLineEl) {
+          userLineEl = document.createElement("div");
+          userLineEl.className = "line user";
+          $("transcripts").appendChild(userLineEl);
+        }
+        if (msg.final === true) {
+          userLineEl.textContent = msg.text;
+          userLineEl = null;
+        } else {
+          userLineEl.textContent += msg.text;
+        }
+        $("transcripts").scrollTop = $("transcripts").scrollHeight;
+      }
+
       function cleanup() {
+        userLineEl = null;
         if (workletNode) workletNode.disconnect();
         if (micStream) micStream.getTracks().forEach((t) => t.stop());
         if (audioCtx) audioCtx.close();
