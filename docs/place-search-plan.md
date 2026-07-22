@@ -180,3 +180,51 @@ GET /api/v1/a11y/search/details/:placeId?sessiontoken=<uuid>&lat=<num>&lng=<num>
 待決小參數（不擋開發）：
 - **`accessibility.status` 的近鄰半徑 N**：暫定 30–50m，依實際設施密度微調。
 - **成本敏感度**：若為低預算，前端 debounce 拉大（300–400ms）＋最少字數才觸發 autocomplete。
+
+---
+
+## 7. 實作結果（2026-07-22 已完成）
+
+模組 `src/modules/place-search/`（schema / service / controller / middleware / router / index）+
+`google.adapter.ts` 新增 `autocompletePlaces` / `getPlaceDetails`（既有函式未動）+ `app.ts` 掛載。
+`npm run build`（lint:arch + tsc）綠、`npm test` 744 綠（新增 20）。跨模型審核採納 4/5（可空 location→404、
+Redis JSON try/catch、限流器分別前綴、lat/lng 有值才轉數字）；駁回 1（token 不進快取鍵——會摧毀跨使用者共用、
+且不影響計費，計費只綁真正打到 Google 的呼叫）。
+
+實作參數：近鄰半徑 `N=50m`；autocomplete 快取 TTL 120s（key=`ps:ac:<q>:<粗座標>`，不含 token）；
+限流 autocomplete 120/min、details 60/min（per IP）；details **不快取**（Google ToS）。
+
+### 前端契約（供前端 repo 鏡像，後端不改前端）
+
+兩個端點都在 `/api/v1/a11y` 下，回傳既有 envelope `{ ok, status, code, message, data }`。
+
+**`GET /a11y/search/autocomplete?q=&sessiontoken=&lat=&lng=`** → `data: AutocompleteItem[]`
+```ts
+interface AutocompleteItem { placeId: string; primaryText: string; secondaryText: string | null }
+```
+- `q` 必填（≥1 字）；`sessiontoken` 前端產生 UUID，逐字期間共用同一個；`lat`/`lng` 可選（偏好用）。
+- 此階段**不含座標與無障礙**；渲染純文字下拉清單即可。Google 失敗時 `data: []`（仍 200）。
+
+**`GET /a11y/search/details/:placeId?sessiontoken=&lat=&lng=`** → `data: PlaceResult`
+```ts
+interface PlaceResult {
+  id: string;
+  source: "google" | "osm" | "metro" | "campus" | "bathroom" | "parking" | "local";
+  name: string;
+  address: string | null;
+  location: { type: "Point"; coordinates: [number, number] };   // [lng, lat]
+  category: string | null;
+  distanceMeters: number | null;                                 // 有帶 lat/lng 才算
+  rating: number | null;
+  accessibility: {
+    status: "accessible" | "limited" | "unknown";
+    wheelchair: "yes" | "limited" | "no" | null;
+    nearbyFacilityCount: number;
+    source: "local-db" | "google" | "none";
+  };
+  attribution: string | null;                                    // "Powered by Google"
+}
+```
+- 選定某筆後帶**同一個** `sessiontoken` 呼叫；回來後該 token 作廢，下次搜尋換新的。
+- 查無地點或無座標 → **404**（envelope `ok:false`）。
+- 徽章渲染建議見 §決策3：`unknown` 顯示「尚無資料」並可導向回報。
