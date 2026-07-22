@@ -166,6 +166,7 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
       const startedAt = Date.now();
       let ok = true;
       let response: Record<string, unknown>;
+      let toolResult: unknown;
       try {
         const result = await executeLocalTool(
           name,
@@ -174,6 +175,11 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
           userId,
         );
         response = { output: result };
+        try {
+          toolResult = JSON.parse(result);
+        } catch {
+          toolResult = { result };
+        }
         traceToolCall(name, call.args ?? {}, result);
       } catch (err) {
         ok = false;
@@ -186,7 +192,7 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
         "[voice] tool",
         JSON.stringify({ tool: name, ok, durationMs, ...(ok ? {} : { error: response.error }) }),
       );
-      sendJson({ type: "tool_result", name, ok, durationMs });
+      sendJson({ type: "tool_result", name, ok, durationMs, result: toolResult, args: call.args ?? {} });
       functionResponses.push({ id: call.id, name, response });
     }
     session?.sendToolResponse({ functionResponses });
