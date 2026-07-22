@@ -222,3 +222,131 @@ export async function searchPlaces(
     return [];
   }
 }
+
+export interface AutocompleteSuggestion {
+  placeId: string;
+  primaryText: string;
+  secondaryText: string | null;
+}
+
+/**
+ * Fetches Places Autocomplete predictions for a partial query, bound to a
+ * client session token for combined-session billing. Returns an empty array on
+ * any failure or when the API key is missing.
+ *
+ * @param input Partial free-text query typed by the user.
+ * @param opts Session token and optional bias coordinates.
+ * @returns The predicted places (place predictions only; query predictions dropped).
+ */
+export async function autocompletePlaces(
+  input: string,
+  opts: { sessionToken?: string; latitude?: number; longitude?: number } = {},
+): Promise<AutocompleteSuggestion[]> {
+  const key = MAPS_KEY();
+  if (!key) return [];
+
+  const body: Record<string, unknown> = {
+    input,
+    languageCode: "zh-TW",
+    regionCode: "TW",
+  };
+  if (opts.sessionToken) body.sessionToken = opts.sessionToken;
+  if (Number.isFinite(opts.latitude) && Number.isFinite(opts.longitude)) {
+    const center = { latitude: opts.latitude, longitude: opts.longitude };
+    body.locationBias = { circle: { center, radius: 30000.0 } };
+    body.origin = center;
+  }
+
+  try {
+    const response = await axios.post(
+      "https://places.googleapis.com/v1/places:autocomplete",
+      body,
+      { headers: { "Content-Type": "application/json", "X-Goog-Api-Key": key } },
+    );
+    const suggestions = response.data?.suggestions;
+    if (!Array.isArray(suggestions)) return [];
+    return suggestions
+      .map((s: any) => s?.placePrediction)
+      .filter((p: any) => p?.placeId)
+      .map((p: any) => ({
+        placeId: p.placeId as string,
+        primaryText: (p.structuredFormat?.mainText?.text ?? p.text?.text ?? "") as string,
+        secondaryText: (p.structuredFormat?.secondaryText?.text ?? null) as string | null,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+export interface GooglePlaceDetails {
+  id: string;
+  name: string;
+  formattedAddress: string | null;
+  location: { latitude: number; longitude: number } | null;
+  rating: number | null;
+  wheelchair: "yes" | "no" | null;
+  wheelchairPartial: boolean;
+}
+
+/**
+ * Fetches Place Details for a place id, closing the autocomplete session when a
+ * session token is supplied. Returns null on any failure, missing key, or when
+ * the place has no usable coordinates.
+ *
+ * @param placeId The Google place id to resolve.
+ * @param opts Session token to bind billing to the preceding autocomplete calls.
+ * @returns The place details, or null.
+ */
+export async function getPlaceDetails(
+  placeId: string,
+  opts: { sessionToken?: string } = {},
+): Promise<GooglePlaceDetails | null> {
+  const key = MAPS_KEY();
+  if (!key) return null;
+
+  const params: Record<string, string> = {};
+  if (opts.sessionToken) params.sessionToken = opts.sessionToken;
+
+  try {
+    const response = await axios.get(
+      `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
+      {
+        params,
+        headers: {
+          "X-Goog-Api-Key": key,
+          "X-Goog-FieldMask":
+            "id,displayName,formattedAddress,location,rating,accessibilityOptions",
+        },
+      },
+    );
+    const p = response.data;
+    if (!p?.id) return null;
+
+    const rawLocation = p.location;
+    const location =
+      Number.isFinite(rawLocation?.latitude) && Number.isFinite(rawLocation?.longitude)
+        ? { latitude: rawLocation.latitude as number, longitude: rawLocation.longitude as number }
+        : null;
+
+    const a11y = p.accessibilityOptions ?? {};
+    const entrance = a11y.wheelchairAccessibleEntrance;
+    const wheelchair = entrance === true ? "yes" : entrance === false ? "no" : null;
+    const wheelchairPartial =
+      entrance !== true &&
+      (a11y.wheelchairAccessibleParking === true ||
+        a11y.wheelchairAccessibleRestroom === true ||
+        a11y.wheelchairAccessibleSeating === true);
+
+    return {
+      id: p.id as string,
+      name: (p.displayName?.text ?? "未知名稱") as string,
+      formattedAddress: (p.formattedAddress ?? null) as string | null,
+      location,
+      rating: typeof p.rating === "number" ? p.rating : null,
+      wheelchair,
+      wheelchairPartial,
+    };
+  } catch {
+    return null;
+  }
+}

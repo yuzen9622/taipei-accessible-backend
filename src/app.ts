@@ -11,6 +11,7 @@ import middleware from "./middleware/middleware";
 import { createA11yRouter } from "./modules/a11y";
 import { createAccessibleRouteRouter } from "./modules/accessible-route";
 import { createNavInstructionsRouter } from "./modules/nav-instructions";
+import { createPlaceSearchRouter } from "./modules/place-search";
 import { createTransitRouter } from "./modules/transit";
 import { createUserRouter } from "./modules/user";
 import { createAirRouter } from "./modules/air";
@@ -85,6 +86,7 @@ app.use("/api/v1/a11y", createWelfareRouter());
 app.use("/api/v1/a11y", createVisualA11yRouter());
 app.use("/api/v1/a11y", createReviewRouter());
 app.use("/api/v1/a11y", createCampusRouter());
+app.use("/api/v1/a11y", createPlaceSearchRouter());
 app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/ai", createAiRouter());
 
