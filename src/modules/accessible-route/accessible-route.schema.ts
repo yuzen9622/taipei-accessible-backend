@@ -471,6 +471,10 @@ const ScoreComponentsSchema = z
 export const AccessibleRouteSchema = z
   .object({
     routeId: z.string().openapi({ example: "route-001" }),
+    routeToken: z.string().optional().openapi({
+      example: "M2F1...short-lived-capability",
+      description: "30 分鐘內可用於語音 WS nav.setRoute 的高熵 bearer capability；Redis 不可用時省略。",
+    }),
     routeName: z.string().openapi({ example: "信義幹線" }),
     totalMinutes: z.number().openapi({ example: 18 }),
     transferCount: z

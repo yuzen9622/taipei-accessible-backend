@@ -27,6 +27,7 @@ import {
 import { buildAccessibilitySummary } from "./planners/route-a11y";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
 import { haversineMeters } from "../../utils/geo";
+import { attachRouteTokens } from "./route-token.service";
 
 import type {
   AccessibilityMode,
@@ -790,6 +791,21 @@ export async function planAccessibleRouteFromRequest(
       ...(waypoints.length ? { waypoints } : {}),
       routes,
       ...(intent ? { intent } : {}),
+    },
+  };
+}
+
+/** HTTP response variant that makes successful routes armable by voice Live. */
+export async function planAccessibleRouteForHttp(
+  body: PlanRouteRequest,
+): Promise<PlanRouteResult> {
+  const result = await planAccessibleRouteFromRequest(body);
+  if (!result.ok) return result;
+  return {
+    ...result,
+    data: {
+      ...result.data,
+      routes: await attachRouteTokens(result.data.routes),
     },
   };
 }

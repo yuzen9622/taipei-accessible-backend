@@ -6,7 +6,7 @@ import request from "supertest";
 vi.mock("./accessible-route.service", async (importActual) => {
   const actual =
     await importActual<typeof import("./accessible-route.service")>();
-  return { ...actual, planAccessibleRouteFromRequest: vi.fn() };
+  return { ...actual, planAccessibleRouteForHttp: vi.fn() };
 });
 
 import { buildTestApp } from "../../../tests/helpers/test-helpers";
@@ -14,7 +14,7 @@ import * as service from "./accessible-route.service";
 
 const app = buildTestApp();
 const URL = "/api/v1/a11y/accessible-route";
-const mockPlan = vi.mocked(service.planAccessibleRouteFromRequest);
+const mockPlan = vi.mocked(service.planAccessibleRouteForHttp);
 
 const okData = (overrides: Record<string, unknown> = {}) => ({
   origin: { lat: 25.04, lng: 121.56 },
@@ -30,6 +30,29 @@ beforeEach(() => {
 });
 
 describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
+  it("returns the additive routeToken contract when caching succeeds", async () => {
+    mockPlan.mockResolvedValue({
+      ok: true,
+      data: okData({
+        routes: [{
+          routeId: "walk-0",
+          routeToken: "high-entropy-capability",
+          routeName: "步行",
+          totalMinutes: 3,
+          transferCount: 0,
+          legs: [],
+          accessibilityHighlights: [],
+        }],
+      }),
+    } as any);
+    const res = await request(app).post(URL).send({
+      origin: { latitude: 25, longitude: 121 },
+      destination: { latitude: 25.1, longitude: 121.1 },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.data.routes[0].routeToken).toBe("high-entropy-capability");
+  });
+
   it("echoes travelMode + waypoints for a drive request", async () => {
     mockPlan.mockResolvedValue({
       ok: true,

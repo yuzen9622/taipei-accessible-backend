@@ -69,6 +69,24 @@ export async function redisSet(
 }
 
 /**
+ * Stores a string with a TTL and reports whether Redis confirmed the write.
+ * Use this for capability tokens: callers must not return a token that cannot
+ * subsequently be resolved.
+ */
+export async function redisSetChecked(
+  key: string,
+  value: string,
+  ttlSec: number,
+): Promise<boolean> {
+  if (!redisClient) return false;
+  try {
+    return (await redisClient.set(key, value, "EX", ttlSec)) === "OK";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Atomically sets a key only if it does not already exist, with a TTL in seconds.
  * Returns true when the key was newly set (caller should proceed), false when it
  * already existed (a duplicate). On unavailable / error it FAILS OPEN (returns

@@ -210,4 +210,6 @@ export interface AccessibleRoute {
   };
   accessibilitySummary?: string;
   attribution?: string;
+  /** Short-lived bearer capability for arming voice navigation. */
+  routeToken?: string;
 }
