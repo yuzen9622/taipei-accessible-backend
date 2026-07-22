@@ -256,6 +256,16 @@ describe("getEnvironmentInfo", () => {
     expect(result.error).toContain("缺少位置資訊");
   });
 
+  it("未指定地點時以注入的最新使用者位置查詢", async () => {
+    mockFetchEnvironment.mockResolvedValue(envData);
+    const raw = await getEnvironmentInfo({
+      userLocation: { latitude: 25.0478, longitude: 121.517 },
+    });
+    expect(JSON.parse(raw).ok).toBe(true);
+    expect(mockGetCoordinates).not.toHaveBeenCalled();
+    expect(mockFetchEnvironment).toHaveBeenCalledWith(25.0478, 121.517, 1000);
+  });
+
   it("自訂 radius 傳遞正確", async () => {
     mockFetchEnvironment.mockResolvedValue(envData);
     await getEnvironmentInfo({ latitude: 25, longitude: 121, radius: 2000 });
@@ -1336,4 +1346,3 @@ describe("bindLineAccountCode agent tool", () => {
     expect(result.error).toContain("找不到可用的 LINE 帳號綁定碼");
   });
 });
-

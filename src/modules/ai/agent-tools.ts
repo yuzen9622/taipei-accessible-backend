@@ -717,15 +717,15 @@ export async function getA11yFacilityDetails(args: {
 }
 
 export async function getEnvironmentInfo(args: {
-  latitude: number;
-  longitude: number;
+  latitude?: number;
+  longitude?: number;
   radius?: number;
   query?: string;
   userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
   try {
     let { latitude, longitude } = args;
-    if (args.query && (!latitude || !longitude)) {
+    if (args.query && !asCoords(latitude, longitude)) {
       const coords = await getCoordinates(
         args.query,
         args.userLocation?.latitude,
@@ -737,10 +737,15 @@ export async function getEnvironmentInfo(args: {
       latitude = coords.latitude;
       longitude = coords.longitude;
     }
-    if (!latitude || !longitude) {
+    if (!asCoords(latitude, longitude) && args.userLocation) {
+      latitude = args.userLocation.latitude;
+      longitude = args.userLocation.longitude;
+    }
+    const location = asCoords(latitude, longitude);
+    if (!location) {
       return JSON.stringify({ ok: false, error: "缺少位置資訊（query 或 lat/lng 必填）" });
     }
-    const data = await fetchEnvironment(latitude, longitude, args.radius ?? 1000);
+    const data = await fetchEnvironment(location.latitude, location.longitude, args.radius ?? 1000);
     return JSON.stringify({ ok: true, query: args.query ?? null, ...data });
   } catch (error: any) {
     console.error("[agent-tool:getEnvironmentInfo]", error);
