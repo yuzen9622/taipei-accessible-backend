@@ -98,7 +98,7 @@ curl -X POST https://<host>/api/v1/user/login \
 | （音訊） | binary | 原始 PCM16 bytes | — | Gemini 回覆的語音，見 §3.3 |
 | `transcript` | text (JSON) | `type`, `role` (`"user"` \| `"model"`), `text` (string) | `{"type":"transcript","role":"user","text":"公車到站時間"}` | 使用者語音辨識逐字稿（`role:"user"`）或模型回覆逐字稿（`role:"model"`） |
 | `tool_call` | text (JSON) | `type`, `name` (string，工具名) | `{"type":"tool_call","name":"getBusArrivalEstimate"}` | 模型觸發工具呼叫的當下（工具開始執行前） |
-| `tool_result` | text (JSON) | `type`, `name`, `ok` (boolean), `durationMs` (number) | `{"type":"tool_result","name":"getBusArrivalEstimate","ok":true,"durationMs":812}` | 工具執行完成（成功或失敗都會送），不含實際回傳內容 |
+| `tool_result` | text (JSON) | `type`, `name`, `ok` (boolean), `durationMs` (number), `result` (optional，工具回傳資料，任意 JSON 值：物件／陣列／`null`；與文字模式 SSE 的 `tool_result` 內容一致；`ok:false` 執行失敗時省略), `args` (optional，物件，模型呼叫工具時的參數) | `{"type":"tool_result","name":"findA11yPlaces","ok":true,"durationMs":812,"result":{"places":[{"id":"a11y_123","name":"台北車站無障礙電梯","latitude":25.0478,"longitude":121.517,"category":"elevator"}]},"args":{"latitude":25.033,"longitude":121.5654,"radius":500}}` | 工具執行完成（成功或失敗都會送）。`result` 為工具回傳的實際內容，前端可據此在地圖上撒點／畫路線；`result`、`args` 皆為 optional 且向後相容（未帶 = 行為與舊版相同） |
 | `interrupted` | text (JSON) | `type` | `{"type":"interrupted"}` | 使用者開口打斷模型正在說話時（barge-in） |
 | `turn.complete` | text (JSON) | `type` | `{"type":"turn.complete"}` | 這一輪模型回覆全部結束 |
 | `error` | text (JSON) | `type`, `code` (`"LIVE_CONNECT_FAILED"` \| `"LIVE_SESSION_ENDED"`) | `{"type":"error","code":"LIVE_SESSION_ENDED"}` | 見下方說明 |
