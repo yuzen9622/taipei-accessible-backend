@@ -4,6 +4,7 @@ import {
   calcRelativeDirection,
   degToCompassWord,
   generateNavInstructions,
+  generateNavStepsWithLegIndex,
   WARN_STEPS_UNAVAILABLE,
   WARN_WALK_STEPS_UNAVAILABLE,
   WARN_ROAD_STEPS_UNAVAILABLE,
@@ -153,6 +154,20 @@ const roadLeg = (
 });
 
 describe("generateNavInstructions", () => {
+  it("voice helper preserves source legIndex while public output stays identical", () => {
+    const route = { legs: [walkWithSteps(), metroLeg(), walkWithSteps()] };
+    const before = generateNavInstructions(route);
+    const voice = generateNavStepsWithLegIndex(route);
+    const after = generateNavInstructions(route);
+    expect(after).toEqual(before);
+    expect(voice.ok).toBe(true);
+    if (!voice.ok) return;
+    expect(voice.steps.filter((step) => step.instruction.legType === "WALK").map((step) => step.legIndex))
+      .toEqual([0, 0, 2, 2, 2]);
+    expect(voice.steps.filter((step) => step.instruction.legType === "METRO").map((step) => step.legIndex))
+      .toEqual([1, 1]);
+  });
+
   it("純步行（含 steps）回傳 depart + turn + arrive", () => {
     const result = generateNavInstructions({ legs: [walkWithSteps()] });
     expect(result.ok).toBe(true);

@@ -411,6 +411,51 @@ export function generateNavInstructions(
   route: NavRouteInput,
   userHeading?: number,
 ): GenerateNavResult {
+  const voiceResult = generateNavStepsWithLegIndex(route);
+  if (!voiceResult.ok) return voiceResult;
+  const instructions = voiceResult.steps.map(({ instruction }) => ({ ...instruction }));
+
+  if (typeof userHeading === "number") {
+    for (const instruction of instructions) {
+      if (instruction.bearing !== null) {
+        instruction.relativeDirection = calcRelativeDirection(
+          userHeading,
+          instruction.bearing,
+        );
+      }
+    }
+  }
+
+  const initialBearing =
+    instructions.find((i) => i.bearing !== null)?.bearing ?? 0;
+
+  return {
+    ok: true,
+    data: {
+      instructions,
+      initialBearing,
+      totalSteps: instructions.length,
+      warnings: voiceResult.warnings,
+    },
+  };
+}
+
+export interface VoiceNavStep {
+  instruction: NavInstruction;
+  legIndex: number;
+}
+
+export type GenerateVoiceNavStepsResult =
+  | { ok: true; steps: VoiceNavStep[]; warnings: NavWarningCode[] }
+  | Extract<GenerateNavResult, { ok: false }>;
+
+/**
+ * Voice-only internal mapping that preserves each flattened instruction's
+ * source leg without changing the public NavInstruction/OpenAPI contract.
+ */
+export function generateNavStepsWithLegIndex(
+  route: NavRouteInput,
+): GenerateVoiceNavStepsResult {
   const legs = route?.legs;
   if (!Array.isArray(legs) || legs.length === 0) {
     return {
@@ -434,9 +479,9 @@ export function generateNavInstructions(
   }
 
   const warnings: NavWarningCode[] = [];
-  const instructions: NavInstruction[] = [];
+  const steps: VoiceNavStep[] = [];
 
-  legs.forEach((rawLeg) => {
+  legs.forEach((rawLeg, legIndex) => {
     const leg = rawLeg as
       | WalkLeg
       | DriveLeg
@@ -446,63 +491,41 @@ export function generateNavInstructions(
       | TraLeg;
     switch (leg.type) {
       case "WALK":
-        instructions.push(
-          ...walkLegToInstructions(leg, instructions.length === 0, warnings),
-        );
+        steps.push(...walkLegToInstructions(leg, steps.length === 0, warnings)
+          .map((instruction) => ({ instruction, legIndex })));
         break;
       case "DRIVE":
       case "MOTORCYCLE":
-        instructions.push(
-          ...roadLegToInstructions(leg, instructions.length === 0, warnings),
-        );
+        steps.push(...roadLegToInstructions(leg, steps.length === 0, warnings)
+          .map((instruction) => ({ instruction, legIndex })));
         break;
       case "BUS":
-        instructions.push(...busInstructions(leg));
+        steps.push(...busInstructions(leg).map((instruction) => ({ instruction, legIndex })));
         break;
       case "METRO":
-        instructions.push(...metroInstructions(leg));
+        steps.push(...metroInstructions(leg).map((instruction) => ({ instruction, legIndex })));
         break;
       case "THSR":
-        instructions.push(...thsrInstructions(leg));
+        steps.push(...thsrInstructions(leg).map((instruction) => ({ instruction, legIndex })));
         break;
       case "TRA":
-        instructions.push(...traInstructions(leg));
+        steps.push(...traInstructions(leg).map((instruction) => ({ instruction, legIndex })));
         break;
     }
   });
 
-  instructions.push({
-    text: "您已抵達目的地",
-    type: "arrive",
-    bearing: null,
-    relativeDirection: null,
-    distanceM: null,
-    streetName: null,
-    legType: (legs[legs.length - 1] as { type: NavLegType }).type,
-    polylineIndex: null,
-  });
-
-  if (typeof userHeading === "number") {
-    for (const instruction of instructions) {
-      if (instruction.bearing !== null) {
-        instruction.relativeDirection = calcRelativeDirection(
-          userHeading,
-          instruction.bearing,
-        );
-      }
-    }
-  }
-
-  const initialBearing =
-    instructions.find((i) => i.bearing !== null)?.bearing ?? 0;
-
-  return {
-    ok: true,
-    data: {
-      instructions,
-      initialBearing,
-      totalSteps: instructions.length,
-      warnings,
+  steps.push({
+    legIndex: legs.length - 1,
+    instruction: {
+      text: "您已抵達目的地",
+      type: "arrive",
+      bearing: null,
+      relativeDirection: null,
+      distanceM: null,
+      streetName: null,
+      legType: (legs[legs.length - 1] as { type: NavLegType }).type,
+      polylineIndex: null,
     },
-  };
+  });
+  return { ok: true, steps, warnings };
 }
